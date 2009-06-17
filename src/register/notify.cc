@@ -360,6 +360,7 @@ namespace Register
                    (i->emails == 1 ? getDomainAdminEmails(i->obj_id) :
                     getDomainTechEmails(i->obj_id));
                }
+               break;
              case 4: // keyset
               fillSimpleObjectParams(i->obj_id,params);
               emails = getKeySetTechEmails(i->obj_id);
@@ -458,7 +459,7 @@ namespace Register
               << "AND doh.historyid=d.historyid AND tnl.state_id=s.id "
               << "AND d.exdate::date='" << exDates[j] << "' AND doh.clid=r.id "
               << " ORDER BY CASE WHEN c.country='CZ' THEN 0 ELSE 1 END ASC, "
-              << "          c.country";
+              << "          c.country, c.organization, c.name ";
           if (!db->ExecSelect(sql.str().c_str())) throw SQL_ERROR();
           out << "<messages>";
           for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++)

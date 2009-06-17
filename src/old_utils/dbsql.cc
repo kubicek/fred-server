@@ -486,7 +486,7 @@ int DB::SaveXMLout(
   int actionID;
 
   actionID = GetNumericFromTable("action", "id", "serverTRID", svTRID);
-  throw std::bad_alloc();
+
   if (actionID > 0) {
 
     if (strlen(xml) ) {
