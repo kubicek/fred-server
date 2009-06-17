@@ -4,7 +4,7 @@
 #include "types.h"
 #include "exceptions.h"
 #include "model/model_filters.h"
-#include "db/manager.h"
+#include "db_settings.h"
 
 namespace Register {
 

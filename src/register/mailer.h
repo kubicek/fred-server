@@ -24,10 +24,11 @@ namespace Register
         const std::string& to,
         const std::string& subject,
         const std::string& mailTemplate,
-        Parameters params,
-        Handles handles,
-        Attachments attach
-      ) throw (NOT_SEND)= 0;
+        const Parameters &params,
+        const Handles &handles,
+        const Attachments &attach
+      ) throw (NOT_SEND) = 0;
+      virtual bool checkEmailList(std::string &_email_list) const = 0;
     }; // Manager
   }; // Mailer
 }; // Register

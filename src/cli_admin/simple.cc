@@ -355,6 +355,10 @@ main(int argc, char **argv)
         invoice.list_filters();
     } else if (conf.hasOpt(INVOICE_SHOW_OPTS_NAME)) {
         invoice.show_opts();
+    } else if (conf.hasOpt(INVOICE_ADD_PREFIX_NAME)) {
+        invoice.add_invoice_prefix();
+    } else if (conf.hasOpt(INVOICE_ADD_PREFIX_HELP_NAME)) {
+        invoice.add_invoice_prefix_help();
     }
 
     if (conf.hasOpt(AUTHINFO_PDF_NAME)) {
@@ -391,16 +395,28 @@ main(int argc, char **argv)
     
     if (conf.hasOpt(REGISTRAR_ZONE_ADD_NAME)) {
         registrar.zone_add();
+    } else if (conf.hasOpt(REGISTRAR_ZONE_NS_ADD_NAME)) {
+        registrar.zone_ns_add();
     } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ADD_NAME)) {
         registrar.registrar_add();
     } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ADD_ZONE_NAME)) {
         registrar.registrar_add_zone();
+    } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ACL_ADD_NAME)) {
+        registrar.registrar_acl_add();
+    } else if (conf.hasOpt(REGISTRAR_PRICE_ADD_NAME)) {
+        registrar.price_add();
     } else if (conf.hasOpt(REGISTRAR_ZONE_ADD_HELP_NAME)) {
         registrar.zone_add_help();
+    } else if (conf.hasOpt(REGISTRAR_ZONE_NS_ADD_HELP_NAME)) {
+        registrar.zone_ns_add_help();
     } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ADD_HELP_NAME)) {
         registrar.registrar_add_help();
     } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ADD_ZONE_HELP_NAME)) {
         registrar.registrar_add_zone_help();
+    } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ACL_ADD_HELP_NAME)) {
+        registrar.registrar_acl_add_help();
+    } else if (conf.hasOpt(REGISTRAR_PRICE_ADD_HELP_NAME)) {
+        registrar.price_add_help();
     } else if (conf.hasOpt(REGISTRAR_LIST_NAME)) {
         registrar.list();
     } else if (conf.hasOpt(REGISTRAR_SHOW_OPTS_NAME)) {

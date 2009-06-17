@@ -2,6 +2,7 @@
 #define ZONE_H_
 
 #include <string>
+#include "types/data_types.h"
 #include "types.h" 
 #include "exceptions.h"
 
@@ -12,6 +13,11 @@ namespace Register
 {
   namespace Zone
   {
+      enum Operation {
+          CREATE, 
+          RENEW
+      };
+
     /// exception thrown when string is not a domain name
     class INVALID_DOMAIN_NAME {};
     /// exception thrown when string is not a phone number
@@ -65,8 +71,31 @@ namespace Register
       /// check fqdn agains list of toplevel domain (true=found) 
       virtual bool checkTLD(const DomainName& domain) const = 0;
       /// add zone
-      virtual void addZone(const std::string& fqdn) 
+      virtual void addZone(
+              const std::string& fqdn,
+              int ex_period_min=12,
+              int ex_period_max=120,
+              int ttl=18000,
+              const std::string &hostmaster="hostmaster@localhost",
+              int refresh=10600,
+              int update_retr=3600,
+              int expiry=1209600,
+              int minimum=7200,
+              const std::string &ns_fqdn="localhost")
         throw (SQL_ERROR, ALREADY_EXISTS) = 0;
+      virtual void addZoneNs(
+              const std::string &zone,
+              const std::string &fqdn="localhost",
+              const std::string &addr="")
+          throw (SQL_ERROR) = 0;
+      virtual void addPrice(
+              const std::string &zone,
+              Operation operation,
+              const Database::DateTime &validFrom,
+              const Database::DateTime &validTo,
+              const Database::Money &price,
+              int period)
+          throw (SQL_ERROR) = 0;
       /// create manager object
       static Manager *create(DB *db);
     };

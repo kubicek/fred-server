@@ -1,9 +1,8 @@
 #include <boost/tokenizer.hpp>
 #include <boost/utility.hpp>
-#include "query.h"
+#include "query_old.h"
 #include "log/logger.h"
 
-#include "util.h"
 
 namespace Database {
 
@@ -12,21 +11,26 @@ Query::Query(const std::string& _str_query) {
   m_initialized = true;
 }
 
+
 Query::Query(const char* _str_query) {
   sql_buffer << _str_query;
   m_initialized = true;
 }
 
+
 Query::Query(const Query& _q) {
   sql_buffer << _q.sql_buffer;
 }
+
 
 std::ostream& operator<<(std::ostream &_os, const Query& _q) {
   return _os << _q.sql_buffer.str();
 }
 
+
 Query::~Query() {
 }
+
 
 SelectQuery::SelectQuery(const std::string& _cols, const std::string& _table) :
   Query() {
@@ -35,9 +39,11 @@ SelectQuery::SelectQuery(const std::string& _cols, const std::string& _table) :
   limit_r = 0;
 }
 
+
 SelectQuery::~SelectQuery() {
   std::for_each(select_v.begin(), select_v.end(), boost::checked_deleter<Column>());
 }
+
 
 void SelectQuery::finalize() {
   if (limit_r> 0) {
@@ -46,7 +52,8 @@ void SelectQuery::finalize() {
   m_initialized = false;
 }
 
-void SelectQuery::make() {
+
+void SelectQuery::make(escape_function_type _esc_func) {
   TRACE("[CALL] SelectQuery::make()");
   if (m_initialized)
   return;
@@ -63,9 +70,10 @@ void SelectQuery::make() {
   if (m_where_prepared_values.size() > 0) {
     boost::format where_prepared_format(m_where_prepared_string.str());
 
-    for (std::vector<std::string>::iterator it = m_where_prepared_values.begin();
-    it != m_where_prepared_values.end(); ++it) {
-      where_prepared_format % Util::escape(*it);
+    for (std::vector<Database::Value>::iterator it = m_where_prepared_values.begin();
+         it != m_where_prepared_values.end();
+         ++it) {
+      where_prepared_format % (*it).toSql(_esc_func);
     }
     where_s.clear();
     where_s.str("");
@@ -86,6 +94,7 @@ void SelectQuery::make() {
   LOGGER(PACKAGE).debug(boost::format("generated select SQL = %1%") % sql_buffer.str());
 }
 
+
 void SelectQuery::join(const std::string& _cols, const std::string& _tables,
 const std::string _cond) {
   select_s << (select_s.str().empty() ? " " : ", ") << _cols;
@@ -93,6 +102,7 @@ const std::string _cond) {
   where_s << " AND " << _cond;
   m_initialized = false;
 }
+
 
 void SelectQuery::addSelect(const std::string& _cols, Table& _table) {
   boost::char_separator<char> sep(" ");
@@ -104,10 +114,12 @@ void SelectQuery::addSelect(const std::string& _cols, Table& _table) {
   m_initialized = false;
 }
 
+
 void SelectQuery::addSelect(Column* _c) {
   select_v.push_back(_c);
   m_initialized = false;
 }
+
 
 void SelectQuery::clear() {
   Query::clear();
@@ -131,48 +143,58 @@ void SelectQuery::clear() {
   m_initialized = false;
 }
 
-InsertQuery::InsertQuery(const std::string& _table, const SelectQuery& _sq){
-  sql_buffer << "INSERT INTO " << _table << " " << _sq.str();
-  m_initialized = true;
+
+// InsertQuery::InsertQuery(const std::string& _table, const SelectQuery& _sq){
+//   sql_buffer << "INSERT INTO " << _table << " " << _sq.str();
+//   m_initialized = true;
+// }
+// 
+// 
+// InsertQuery::InsertQuery(const std::string& _table) : table_(_table) {
+//   m_initialized = false;
+// }
+// 
+// 
+// void InsertQuery::add(const std::string& _column, const Value& _value) {
+//   values_.push_back(std::make_pair<std::string, Value>(_column, _value));
+// }
+// 
+// 
+// void InsertQuery::make() {
+//   if (m_initialized) 
+//     return;
+//   
+//   if (table_.empty()) {
+//     m_initialized = true;
+//     return;
+//   }
+//   else {
+//     if (values_.empty()) {
+//       return;
+//     }
+//     sql_buffer << "INSERT INTO " << table_;
+//     
+//     ValueContainer::const_iterator it = values_.begin();
+//     std::stringstream columns_part;
+//     std::stringstream values_part;
+//     
+//     columns_part << "(" << it->first;
+//     values_part << "VALUES (" << it->second;
+//     for (++it; it != values_.end(); ++it) {
+//       std::stringstream value;
+//       value << it->second;
+// 
+//       columns_part << ", " << it->first;
+//       values_part  << ", " << (it->second.quoted() ? "E'" : "") 
+//                    << (it->second.quoted() ? Util::escape(value.str()) : value.str())
+//                    << (it->second.quoted() ? "'" : "");
+//     }
+//     columns_part << ")";
+//     values_part  << ")";
+//     
+//     sql_buffer << " " << columns_part.str() << " " << values_part.str();
+//   }
+// }
+
 }
 
-InsertQuery::InsertQuery(const std::string& _table) : table_(_table) {
-  m_initialized = false;
-}
-
-void InsertQuery::add(const std::string& _column, const Value& _value) {
-  values_.push_back(std::make_pair<std::string, Value>(_column, _value));
-}
-
-void InsertQuery::make() {
-  if (m_initialized) 
-    return;
-  
-  if (table_.empty()) {
-    m_initialized = true;
-    return;
-  }
-  else {
-    if (values_.empty()) {
-      return;
-    }
-    sql_buffer << "INSERT INTO " << table_;
-    
-    ValueContainer::const_iterator it = values_.begin();
-    std::stringstream columns_part;
-    std::stringstream values_part;
-    
-    columns_part << "(" << it->first;
-    values_part << "VALUES (" << it->second;
-    for (++it; it != values_.end(); ++it) {
-      columns_part << ", " << it->first;
-      values_part  << ", " << (it->second.quoted() ? "'" : "") << it->second << (it->second.quoted() ? "'" : "");
-    }
-    columns_part << ")";
-    values_part  << ")";
-    
-    sql_buffer << " " << columns_part.str() << " " << values_part.str();
-  }
-}
-
-}

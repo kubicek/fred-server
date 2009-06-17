@@ -5,24 +5,40 @@
 #include "log/logger.h"
 #include "log/context.h"
 
-#include "manager.h"
+#include "database.h"
 #include "types/datetime.h"
 
 #include <boost/thread/thread.hpp>
 #include <boost/bind.hpp>
 
+namespace Database {
+  typedef Factory::Simple<PSQLConnection> ConnectionFactory;
+  typedef Manager_<ConnectionFactory>     Manager;
+
+  typedef Manager::connection_type        Connection;
+  typedef Manager::transaction_type       Transaction;
+  typedef Manager::result_type            Result;
+  typedef Manager::sequence_type          Sequence;
+  typedef Manager::row_type               Row;
+}
+
+
 struct TestPooler {
 public:
-  TestPooler(Database::ConnectionPool *p, int i) : pool_(p), id_(i) { }
+  TestPooler(Database::Manager *p, int i) : pool_(p), id_(i) { }
   void operator()() {
     Logging::Context ctx(str(boost::format("threadid-%1%") % id_));
 
-    Database::Connection *c = pool_->acquire();
+    try {
+    std::auto_ptr<Database::Connection> c(pool_->acquire());
     c->exec("SELECT * FROM object_registry");
-    pool_->release(c);
+    }
+    catch(...) {
+      LOGGER(PACKAGE).error("no free connection");
+    }
   }
 
-  Database::ConnectionPool *pool_;
+  Database::Manager *pool_;
   int id_;
 };
 
@@ -30,85 +46,60 @@ public:
 int main() {
   using namespace Database;
 
-  Logging::Manager::instance_ref().get(PACKAGE).addHandler(Logging::Log::LT_CONSOLE); 
-  Logging::Manager::instance_ref().get(PACKAGE).setLevel(Logging::Log::LL_DEBUG);
 
-  Database::ConnectionPool pool("host=localhost dbname=fred user=fred", 5, 20);
+  Value v("231");
+  unsigned int t = v;
+
+  std::cout << t << std::endl;
+
+  return 1;
+
+  Logging::Manager::instance_ref().get(PACKAGE).addHandler(Logging::Log::LT_CONSOLE); 
+  Logging::Manager::instance_ref().get(PACKAGE).setLevel(Logging::Log::LL_TRACE);
+
+  Database::Manager *pool = new Database::Manager(new ConnectionFactory("host=localhost dbname=fred user=fred"));
 
   boost::thread_group tg;
-  for (unsigned i = 0; i < 200; ++i) {
-    TestPooler tp(&pool, i);
+  for (unsigned i = 0; i < 50; ++i) {
+    TestPooler tp(pool, i);
     tg.create_thread(tp);    
   }
   tg.join_all();
+
+  delete pool;
 
   return 0;
 
 
 
-  try {
-    Connection *c = pool.acquire();
-    Result r = c->exec("SELECT roid, name, crdate FROM object_registry");
-
-    Connection *c2 = pool.acquire();
-    Result r2 = c2->exec("SELECT * FROM domain");
-    pool.release(c2);
-
-    
-    {
-      Transaction t(*c);
-      c->exec("SELECT * FROM files");
-      pool.release(c);
-      c->exec("SELECT * FROM contact");
-    }
-
-    pool.release(c);
-
-    std::string str = r[0][0];
-    std::cout << r[0][0] << "  " << str << std::endl;
-  
-    Result::Iterator it1 = r.begin();
-    Result::Iterator it2 = r.end();
-
-    for (; it1 != it2; ++it1) {
-      for (Row::size_type i = 0; i < (*it1).size(); ++i) {
-        std::cout << (*it1)[i] << "   ";
-      }
-      std::cout << std::endl;
-    }
-  
-  //  it1 = r.begin();
-  //  for (; it1 != it2; ++it1) {
-  //    for (Row::Iterator it3 = (*it1).begin(); it3 != (*it1).end(); ++it3) {
-  //      std::cout << *it3 << "   ";
-  //    }
-  //    std::cout << std::endl;
-  //  }
-  
-    it1 = r.begin();
-    for (; it1 != it2; ++it1) {
-      Row::Iterator col = (*it1).begin();
-
-      std::string roid = *col;
-      std::string name = *(++col);
-      DateTime crdate  = *(++col);
-      // std::string roid = row["roid"];
-      // std::string name = row["name"];
-      // DateTime crdate  = row["crdate"];
-  
-      std::cout << Value(roid) << std::endl;
-      // << "     " << name << "     " << crdate << std::endl;
-    }
-
-    //t.commit();
-    
-  }
-  catch (Database::Exception& ex) {
-    std::cout << ex.what() << std::endl;
-  }
-  catch (...) {
-    std::cout << "ERROR" << std::endl;
-  }
+//  try {
+//    Connection *c = pool.acquire();
+//    {
+//      Transaction t(*c);
+//      Result r = c->exec("SELECT roid, name, crdate FROM object_registry");
+//  
+//      Connection *c2 = pool.acquire();
+//      Result r2 = c2->exec("SELECT * FROM domain");
+//      delete c2; 
+//      
+//      {
+//        Transaction t(*c);
+//        c->exec("SELECT * FROM files");
+//        c->exec("SELECT * FROM contact");
+//      }
+//  
+//      
+//      std::string str = r[0][0];
+//      std::cout << r[0][0] << "  " << str << std::endl;
+//    }
+//    delete c;
+//  }
+//  catch (Database::Exception& ex) {
+//    std::cout << ex.what() << std::endl;
+//  }
+//  catch (...) {
+//    std::cout << "ERROR" << std::endl;
+//  }
  
 //  for (; it1 != r.end(); ++it1) {
 //    Value o_roid = (*it1)["roid"];

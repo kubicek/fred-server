@@ -12,7 +12,6 @@ ccReg::Filters::Compound_ptr ccReg_Domains_i::add() {
   Logging::Context ctx(base_context_);
 
   TRACE("[CALL] ccReg_Domains_i::add()");
-  it.clearF();
   Database::Filters::Domain *f = new Database::Filters::DomainHistoryImpl();
   uf.addFilter(f);
   return it.addE(f);
@@ -56,21 +55,21 @@ Registry::TableRow* ccReg_Domains_i::getRow(CORBA::Short row)
   Registry::TableRow *tr = new Registry::TableRow;
   tr->length(11);
   
-  MAKE_OID(oid_fqdn, d->getId(), DUPSTRFUN(d->getFQDN), FT_DOMAIN)
-  MAKE_OID(oid_registrant, d->getRegistrantId(), DUPSTRFUN(d->getRegistrantHandle), FT_CONTACT)
-  MAKE_OID(oid_registrar, d->getRegistrarId(), DUPSTRFUN(d->getRegistrarHandle), FT_REGISTRAR)
+  MAKE_OID(oid_fqdn, d->getId(), C_STR(d->getFQDN()), FT_DOMAIN)
+  MAKE_OID(oid_registrant, d->getRegistrantId(), C_STR(d->getRegistrantHandle()), FT_CONTACT)
+  MAKE_OID(oid_registrar, d->getRegistrarId(), C_STR(d->getRegistrarHandle()), FT_REGISTRAR)
 
   (*tr)[0]  <<= oid_fqdn;                                       // fqdn
   (*tr)[1]  <<= oid_registrant;                                 // registrant handle
-  (*tr)[2]  <<= DUPSTRFUN(d->getRegistrantName);                // registrant name
-  (*tr)[3]  <<= DUPSTRFUN(d->getRegistrantOrganization);        // registrant organization
+  (*tr)[2]  <<= C_STR(d->getRegistrantName());                  // registrant name
+  (*tr)[3]  <<= C_STR(d->getRegistrantOrganization());          // registrant organization
   (*tr)[4]  <<= oid_registrar;                                  // registrar handle 
-  (*tr)[5]  <<= DUPSTR(d->getZoneStatus() == 1 ? "IN" : "OUT"); // zone generation 
-  (*tr)[6]  <<= DUPSTRDATE(d->getCreateDate);                   // crdate
-  (*tr)[7]  <<= DUPSTRDATED(d->getExpirationDate);              // expiration date
-  (*tr)[8]  <<= DUPSTRDATE(d->getOutZoneDate);                  // vyrazeni z dns
-  (*tr)[9]  <<= DUPSTRDATE(d->getCancelDate);                   // delete from register
-  (*tr)[10] <<= DUPSTRDATED(d->getValExDate);                   // validace
+  (*tr)[5]  <<= C_STR(d->getZoneStatus() == 1 ? "IN" : "OUT");  // zone generation 
+  (*tr)[6]  <<= C_STR(d->getCreateDate());                      // crdate
+  (*tr)[7]  <<= C_STR(d->getExpirationDate());                  // expiration date
+  (*tr)[8]  <<= C_STR(d->getOutZoneDate());                     // out from zone file
+  (*tr)[9]  <<= C_STR(d->getCancelDate());                      // delete from register
+  (*tr)[10] <<= C_STR(d->getValExDate());                       // validation
   return tr;
 }
 

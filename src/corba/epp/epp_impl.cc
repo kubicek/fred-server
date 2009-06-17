@@ -33,16 +33,16 @@
 #include "epp_impl.h"
 
 #include "config.h"
+
 // database functions
 #include "old_utils/dbsql.h"
-#include "db/manager.h"
 
 // support function
 #include "old_utils/util.h"
 
 #include "action.h"    // code of the EPP operations
 #include "response.h"  // errors code
-#include "reason.h"  // reason messages code
+#include "reason.h"    // reason messages code
 
 // logger
 #include "old_utils/log.h"
@@ -51,7 +51,6 @@
 #include "old_utils/conf.h"
 
 // MailerManager is connected in constructor
-#include "register/auth_info.h"
 #include "register/domain.h"
 #include "register/contact.h"
 #include "register/nsset.h"
@@ -94,13 +93,39 @@ static bool testObjectHasState(
   DB *db, Register::TID object_id, unsigned state_id)
     throw (Register::SQL_ERROR)
 {
+  bool returnState;
   std::stringstream sql;
   sql << "SELECT COUNT(*) FROM object_state " << "WHERE object_id="
       << object_id << " AND state_id=" << state_id << " AND valid_to ISNULL";
   if (!db->ExecSelect(sql.str().c_str()))
     throw Register::SQL_ERROR();
-  return atoi(db->GetFieldValue(0, 0));
+  returnState = atoi(db->GetFieldValue(0, 0));
+  db->FreeSelect();
+  return returnState;
 }
+
+
+/* HACK - for disable notification when delete commands called through cli_admin 
+ * Ticket #1622
+ */
+static bool disableNotification(DB *db, int _reg_id, const char* _cltrid)
+{
+  LOGGER(PACKAGE).debug(boost::format("disable delete command notification check (registrator=%1% cltrid=%2%)")
+                                      % _reg_id % _cltrid);
+
+  if (std::strcmp(_cltrid, "delete_contact")       != 0 && 
+      std::strcmp(_cltrid, "delete_nsset")         != 0 &&
+      std::strcmp(_cltrid, "delete_keyset")        != 0 &&
+      std::strcmp(_cltrid, "delete_unpaid_zone_0") != 0 &&
+      std::strcmp(_cltrid, "delete_unpaid_zone_1") != 0 &&
+      std::strcmp(_cltrid, "delete_unpaid_zone_2") != 0 &&
+      std::strcmp(_cltrid, "delete_unpaid_zone_3") != 0) 
+    return false;
+
+  return db->GetRegistrarSystem(_reg_id);
+}
+/* HACK END */
+
 
 class EPPAction
 {
@@ -182,13 +207,30 @@ public:
   void failed(
     int _code) throw (ccReg::EPP::EppError)
   {
+      TRACE(">> failed");
     code = ret->code = _code;
     ccReg::Response_var& r(getRet());
     epp->EppError(r->code, r->msg, r->svTRID, errors);
   }
+  // replacement of ccReg_EPP_i::SetErrorReason(...)
+  short int setErrorReason(short int errCode, ccReg::ParamError paramCode,
+          short position, int reasonMsg)
+  {
+      unsigned int seq;
+      seq = errors->length();
+      errors->length(seq + 1);
+      setCode(errCode);
+
+      errors[seq].code = paramCode;
+      errors[seq].position = position;
+      errors[seq].reason = CORBA::string_dup(
+              epp->GetReasonMessage(reasonMsg, getLang()));
+      return errCode;
+  }
   void failedInternal(
     const char *msg) throw (ccReg::EPP::EppError)
   {
+      TRACE(">> failed internal");
     code = ret->code = COMMAND_FAILED;
     epp->ServerInternalError(msg, db.GetsvTRID());
   }
@@ -321,9 +363,9 @@ ccReg_EPP_i::ccReg_EPP_i(
                                 mm(_mm),
                                 ns(_ns),
                                 conf(_conf),
-                                zone(NULL),
                                 testInfo(false)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
 
   // objects are shared between threads!!!
@@ -338,12 +380,12 @@ ccReg_EPP_i::ccReg_EPP_i(
 }
 ccReg_EPP_i::~ccReg_EPP_i()
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
 
   delete CC;
   delete ReasonMsg;
   delete ErrorMsg;
-  delete zone;
   delete [] session;
 
   db.Disconnect();
@@ -451,7 +493,7 @@ bool ccReg_EPP_i::LogoutSession(
     }
   }
 
-  LOG( ERROR_LOG , "SESSION LOGOUT UNKNOWN loginID %d" , loginID );
+  LOG( DEBUG_LOG , "SESSION LOGOUT UNKNOWN loginID %d" , loginID );
 
   return false;
 }
@@ -546,6 +588,7 @@ bool ccReg_EPP_i::TestDatabaseConnect(
 
 int ccReg_EPP_i::LoadReasonMessages()
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
 
   DB DBsql;
@@ -571,6 +614,7 @@ int ccReg_EPP_i::LoadReasonMessages()
 
 int ccReg_EPP_i::LoadErrorMessages()
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
 
   DB DBsql;
@@ -799,41 +843,24 @@ short ccReg_EPP_i::SetReasonNSSetTechREM(
 }
 
 short int
-ccReg_EPP_i::SetReasonKeySetTech(
-        ccReg::Errors_var &err,
-        const char *handle,
-        int techID,
-        int lang,
-        short int position)
+ccReg_EPP_i::SetReasonKeySetTech( ccReg::Errors_var &err, const char *handle, int techID, int lang, short int position)
 {
-    return SetReasonContactMap(err, ccReg::keyset_tech, handle, techID,
-            lang, position, true);
+    return SetReasonContactMap(err, ccReg::keyset_tech, handle, techID, lang, position, true);
 }
 
 short int
-ccReg_EPP_i::SetReasonKeySetTechADD(
-        ccReg::Errors_var &err,
-        const char *handle,
-        int techID,
-        int lang,
-        short int position)
+ccReg_EPP_i::SetReasonKeySetTechADD( ccReg::Errors_var &err, const char *handle, int techID,
+        int lang, short int position)
 {
-    return SetReasonContactMap(err, ccReg::keyset_tech_add, handle, techID,
-            lang, position, true);
+    return SetReasonContactMap(err, ccReg::keyset_tech_add, handle, techID, lang, position, true);
 }
 
 short int
-ccReg_EPP_i::SetReasonKeySetTechREM(
-        ccReg::Errors_var &err,
-        const char *handle,
-        int techID,
-        int lang,
-        short int position)
+ccReg_EPP_i::SetReasonKeySetTechREM( ccReg::Errors_var &err, const char *handle, int techID,
+        int lang, short int position)
 {
-    return SetReasonContactMap(err, ccReg::keyset_tech_rem, handle, techID,
-            lang, position, true);
+    return SetReasonContactMap(err, ccReg::keyset_tech_rem, handle, techID, lang, position, true);
 }
-
 
 short ccReg_EPP_i::SetReasonDomainAdmin(
   ccReg::Errors_var& err, const char * handle, int adminID, int lang,
@@ -951,6 +978,7 @@ ccReg_EPP_i::SetReasonWrongRegistrar(
 // load country code table  enum_country from database
 int ccReg_EPP_i::LoadCountryCode()
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
 
   DB DBsql;
@@ -996,6 +1024,7 @@ bool ccReg_EPP_i::TestCountryCode(
 char* ccReg_EPP_i::version(
   ccReg::timestamp_out datetime)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
 
   time_t t;
@@ -1008,8 +1037,7 @@ char* ccReg_EPP_i::version(
   get_rfc3339_timestamp(t, dateStr, false);
   datetime = CORBA::string_dup(dateStr);
 
-  // XXX there was memory leak in server.cc (main:277): free() added there
-  return strdup("DSDng");
+  return CORBA::string_dup("DSDng");
 }
 
 // parse extension fom domain.ValExDate
@@ -1157,202 +1185,146 @@ bool ccReg_EPP_i::setvalue_DISCLOSE(
   return false;
 }
 
-// ZONE manager to load zones into memory
-
-int ccReg_EPP_i::loadZones() // load zones
+std::vector<int>
+ccReg_EPP_i::GetAllZonesIDs()
 {
-  Logging::Context ctx("rifd");
-
-  int rows=0, i;
-  DB DBsql;
-
-  LOG( NOTICE_LOG, "LOAD zones" );
-  zone = new ccReg::Zones;
-
-  if (DBsql.OpenDatabase(database) ) {
-
-    if (DBsql.ExecSelect("select * from zone order by length(fqdn) desc") ) {
-      rows = DBsql.GetSelectRows();
-      max_zone = rows;
-
-      LOG( NOTICE_LOG, "Max zone  -> %d " , max_zone );
-
-      zone->length(rows);
-
-      for (i = 0; i < rows; i ++) {
-        (*zone)[i].id=atoi(DBsql.GetFieldValueName("id", i));
-        (*zone)[i].fqdn
-            =CORBA::string_dup(DBsql.GetFieldValueName("fqdn", i) );
-        (*zone)[i].ex_period_min= atoi(DBsql.GetFieldValueName(
-            "ex_period_min", i));
-        (*zone)[i].ex_period_max= atoi(DBsql.GetFieldValueName(
-            "ex_period_max", i));
-        (*zone)[i].val_period
-            = atoi(DBsql.GetFieldValueName("val_period", i));
-        (*zone)[i].dots_max= atoi(DBsql.GetFieldValueName("dots_max", i) );
-        (*zone)[i].enum_zone
-            = DBsql.GetFieldBooleanValueName("enum_zone", i);
-        LOG( NOTICE_LOG, "Get ZONE %d fqdn [%s] ex_period_min %d ex_period_max %d val_period %d dots_max %d  enum_zone %d" , i+1 ,
-            ( char *) (*zone)[i].fqdn , (*zone)[i].ex_period_min , (*zone)[i].ex_period_max , (*zone)[i].val_period , (*zone)[i].dots_max , (*zone)[i].enum_zone );
-      }
-
-      DBsql.FreeSelect();
+    std::vector<int> ret;
+    std::string query("SELECT id FROM zone;");
+    if (!db.ExecSelect(query.c_str())) {
+        LOGGER(PACKAGE).error("cannot retrieve zones ids from the database");
+        return ret;
+    }
+    for (int i = 0; i < db.GetSelectRows(); i++) {
+        ret.push_back(atoi(db.GetFieldValue(i, 0)));
     }
 
-    DBsql.Disconnect();
-  }
-
-  if (rows == 0)
-    zone->length(rows);
-
-  return rows;
-}
-
-unsigned int ccReg_EPP_i::GetZoneLength()
-{
-  return zone->length() ;
-}
-unsigned int ccReg_EPP_i::GetZoneID(
-  unsigned int z)
-{
-  if (z < zone->length() )
-    return (*zone)[z].id;
-  else
-    return 0;
+    return ret;
 }
 
 // ZONE parameters
 int ccReg_EPP_i::GetZoneExPeriodMin(
   int id)
 {
-  unsigned int z;
-
-  for (z = 0; z < zone->length() ; z ++) {
-    if ((*zone)[z].id == id)
-      return (*zone)[z].ex_period_min;
-  }
-
-  return 0;
+    std::stringstream query;
+    query << "SELECT ex_period_min FROM zone WHERE id=" << id << ";";
+    if (!db.ExecSelect(query.str().c_str())) {
+        LOGGER(PACKAGE).error("Cannot retrieve ``ex_period_min'' from the database");
+        return 0;
+    }
+    return atoi(db.GetFieldValue(0, 0));
 }
 
 int ccReg_EPP_i::GetZoneExPeriodMax(
   int id)
 {
-  unsigned int z;
-
-  for (z = 0; z < zone->length() ; z ++) {
-    if ((*zone)[z].id == id)
-      return (*zone)[z].ex_period_max;
-  }
-
-  return 0;
+    std::stringstream query;
+    query << "SELECT ex_period_max FROM zone WHERE id=" << id << ";";
+    if (!db.ExecSelect(query.str().c_str())) {
+        LOGGER(PACKAGE).error("Cannot retrieve ``ex_period_max'' from the database");
+        return 0;
+    }
+    return atoi(db.GetFieldValue(0, 0));
 }
 
 int ccReg_EPP_i::GetZoneValPeriod(
   int id)
 {
-  unsigned int z;
-
-  for (z = 0; z < zone->length() ; z ++) {
-    if ((*zone)[z].id == id)
-      return (*zone)[z].val_period;
-  }
-
-  return 0;
+    std::stringstream query;
+    query << "SELECT val_period FROM zone WHERE id=" << id << ";";
+    if (!db.ExecSelect(query.str().c_str())) {
+        LOGGER(PACKAGE).error("Cannot retrieve ``val_period'' from the database");
+        return 0;
+    }
+    return atoi(db.GetFieldValue(0, 0));
 }
 
 bool ccReg_EPP_i::GetZoneEnum(
   int id)
 {
-  unsigned int z;
-
-  for (z = 0; z < zone->length() ; z ++) {
-    if ((*zone)[z].id == id)
-      return (*zone)[z].enum_zone;
-  }
-
-  return false;
+    std::stringstream query;
+    query << "SELECT enum_zone FROM zone WHERE id=" << id << ";";
+    if (!db.ExecSelect(query.str().c_str())) {
+        LOGGER(PACKAGE).error("cannot retrieve ``enum_zone'' from the database");
+        return false;
+    }
+    if (strcmp("t", db.GetFieldValue(0, 0)) == 0) {
+        return true;
+    }
+    return false;
 }
 
 int ccReg_EPP_i::GetZoneDotsMax(
   int id)
 {
-  unsigned int z;
-
-  for (z = 0; z < zone->length() ; z ++) {
-    if ((*zone)[z].id == id)
-      return (*zone)[z].dots_max;
-  }
-
-  return 0;
+    std::stringstream query;
+    query << "SELECT dots_max FROM zone WHERE id=" << id << ";";
+    if (!db.ExecSelect(query.str().c_str())) {
+        LOGGER(PACKAGE).error("cannot retrieve ``dots_max'' from the database");
+        return 0;
+    }
+    return atoi(db.GetFieldValue(0, 0));
 }
 
 const char * ccReg_EPP_i::GetZoneFQDN(
   int id)
 {
-  unsigned int z;
-  for (z = 0; z < zone->length() ; z ++) {
-    if ((*zone)[z].id == id)
-      return (char *) (*zone)[z].fqdn ;
-  }
-
-  return "";
+    std::stringstream query;
+    query << "SELECT fqdn FROM zone WHERE id=" << id << ";";
+    if (!db.ExecSelect(query.str().c_str())) {
+        LOGGER(PACKAGE).error("cannot retrieve ``fqdn'' from the database");
+        return "";
+    }
+    return db.GetFieldValue(0, 0);
 }
 
 int ccReg_EPP_i::getZone(
   const char *fqdn)
 {
-  return getZZ(fqdn, true);
+    std::stringstream zoneQuery;
+    std::string domain_fqdn(fqdn);
+    zoneQuery
+        << "SELECT id FROM zone WHERE lower(fqdn)=lower('"
+        << domain_fqdn.substr(getZoneMax(fqdn) + 1, std::string::npos)
+        << "');";
+    if (!db.ExecSelect(zoneQuery.str().c_str())) {
+        LOGGER(PACKAGE).error("cannot retrieve zone id from the database");
+        return 0;
+    } else {
+        return atoi(db.GetFieldValue(0, 0));
+    }
+    return 0;
 }
 
 int ccReg_EPP_i::getZoneMax(
   const char *fqdn)
 {
-  return getZZ(fqdn, false);
-}
-
-int ccReg_EPP_i::getZZ(
-  const char *fqdn, bool compare)
-{
-  int max, i;
-  int len, slen, l;
-
-  max = (int ) zone->length();
-
-  len = strlen(fqdn);
-
-  for (i = 0; i < max; i ++) {
-
-    slen = strlen( (char *) (*zone)[i].fqdn );
-    l = len - slen;
-
-    if (l > 0) {
-      if (fqdn[l-1] == '.') // case less compare
-      {
-        if (compare) {
-          if (strncasecmp(fqdn+l, (char *) (*zone)[i].fqdn , slen) == 0)
-            return (*zone)[i].id; // place into zone, return ID
-        } else
-          return l -1; // return end of name
-      }
+    std::string query("SELECT fqdn FROM zone;");
+    if (!db.ExecSelect(query.c_str())) {
+        LOGGER(PACKAGE).error("cannot retrieve list of fqdn from the database");
+        return 0;
     }
-
-  }
-
-  // v return end of domain without dot
-  if (compare == false) {
-    for (l = len-1; l > 0; l --) {
-      if (fqdn[l] == '.')
-        return l-1; //  return end of name
+    int len = strlen(fqdn);
+    for (int i = 0; i < db.GetSelectRows(); i++) {
+        int slen = strlen(db.GetFieldValue(i, 0));
+        int l = len - slen;
+        if (l > 0) {
+            if (fqdn[l - 1] == '.') {
+                return l - 1;
+            }
+        }
     }
-  }
-
-  return 0;
+    for (int l = len - 1; l > 0; l--) {
+        if (fqdn[l] == '.') {
+            return l - 1;
+        }
+    }
+    return 0;
 }
 
 bool ccReg_EPP_i::testFQDN(
   const char *fqdn)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
 
   char FQDN[164];
@@ -1470,6 +1442,7 @@ int ccReg_EPP_i::getFQDN(
 void ccReg_EPP_i::sessionClosed(
   CORBA::Long clientID)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -1494,6 +1467,7 @@ void ccReg_EPP_i::sessionClosed(
 CORBA::Boolean ccReg_EPP_i::SaveOutXML(
   const char* svTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("%1%") % svTRID));
 
@@ -1538,6 +1512,7 @@ ccReg::Response* ccReg_EPP_i::GetTransaction(
   CORBA::Short errCode, CORBA::Long clientID, const char* clTRID,
   const ccReg::XmlErrors& errorCodes, ccReg::ErrorStrings_out errStrings)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -1628,6 +1603,7 @@ ccReg::Response* ccReg_EPP_i::PollAcknowledgement(
   const char* msgID, CORBA::Short& count, CORBA::String_out newmsgID,
   CORBA::Long clientID, const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -1690,6 +1666,7 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
   ccReg::PollType& type, CORBA::Any_OUT_arg msg, CORBA::Long clientID,
   const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -1699,7 +1676,7 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
   );
   // start EPP action - this will handle all init stuff
   EPPAction a(this, clientID, EPP_PollResponse, clTRID, XML);
-  Register::Poll::Message *m= NULL;
+  std::auto_ptr<Register::Poll::Message> m;
   try {
     std::auto_ptr<Register::Poll::Manager> pollMan(
         Register::Poll::Manager::create(a.getDB())
@@ -1707,11 +1684,11 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
     // fill count
     count = pollMan->getMessageCount(a.getRegistrar());
     if (!count) a.NoMessage(); // throw exception NoMessage
-    m = pollMan->getNextMessage(a.getRegistrar());
+    m.reset(pollMan->getNextMessage(a.getRegistrar()));
   }
   catch (ccReg::EPP::NoMessages) {throw;}
   catch (...) {a.failedInternal("Connection problems");}
-  if (!m)
+  if (!m.get())
     a.failedInternal("Cannot get message"); // throw internal exception
   a.setCode(COMMAND_ACK_MESG);
   msg = new CORBA::Any;
@@ -1727,7 +1704,7 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
   // check MessageEventReg before MessageEvent because
   // MessageEvent is ancestor of MessageEventReg
   Register::Poll::MessageEventReg *mer =
-      dynamic_cast<Register::Poll::MessageEventReg *>(m);
+      dynamic_cast<Register::Poll::MessageEventReg *>(m.get());
   if (mer) {
     switch (m->getType()) {
       case Register::Poll::MT_TRANSFER_CONTACT:
@@ -1753,7 +1730,7 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
     return a.getRet()._retn();
   }
   Register::Poll::MessageEvent *me =
-      dynamic_cast<Register::Poll::MessageEvent *>(m);
+      dynamic_cast<Register::Poll::MessageEvent *>(m.get());
   if (me) {
     switch (m->getType()) {
       case Register::Poll::MT_DELETE_CONTACT:
@@ -1793,7 +1770,7 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
     return a.getRet()._retn();
   }
   Register::Poll::MessageLowCredit *mlc =
-      dynamic_cast<Register::Poll::MessageLowCredit *>(m);
+      dynamic_cast<Register::Poll::MessageLowCredit *>(m.get());
   if (mlc) {
     type = ccReg::polltype_lowcredit;
     ccReg::PollMsg_LowCredit *hdm = new ccReg::PollMsg_LowCredit;
@@ -1804,7 +1781,7 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
     return a.getRet()._retn();
   }
   Register::Poll::MessageTechCheck *mtc =
-      dynamic_cast<Register::Poll::MessageTechCheck *>(m);
+      dynamic_cast<Register::Poll::MessageTechCheck *>(m.get());
   if (mtc) {
     type = ccReg::polltype_techcheck;
     ccReg::PollMsg_Techcheck *hdm = new ccReg::PollMsg_Techcheck;
@@ -1841,62 +1818,56 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
  *
  ***********************************************************************/
 
-ccReg::Response* ccReg_EPP_i::ClientCredit(
-  ccReg::ZoneCredit_out credit, CORBA::Long clientID, const char* clTRID,
-  const char* XML)
+ccReg::Response *
+ccReg_EPP_i::ClientCredit(ccReg::ZoneCredit_out credit, CORBA::Long clientID,
+        const char* clTRID, const char* XML)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  DB DBsql;
-  ccReg::Response_var ret;
-  int regID;
-  long price;
-  unsigned int z, seq, zoneID;
+    long price;
+    unsigned int z, seq, zoneID;
+    short int code = 0;
 
-  ret = new ccReg::Response;
-  ret->code = 0;
+    credit = new ccReg::ZoneCredit;
+    credit->length(0);
+    seq=0;
 
-  credit = new ccReg::ZoneCredit;
-  credit->length(0);
-  seq=0;
+    LOG( NOTICE_LOG, "ClientCredit: clientID -> %d clTRID [%s]", (int ) clientID, clTRID );
 
-  LOG( NOTICE_LOG, "ClientCredit: clientID -> %d clTRID [%s]", (int ) clientID, clTRID );
+    EPPAction action(this, clientID, EPP_ClientCredit, clTRID, XML);
 
-  if ( (regID = GetRegistrarID(clientID) ))
-    if (DBsql.OpenDatabase(database) ) {
-      if ( (DBsql.BeginAction(clientID, EPP_ClientCredit, clTRID, XML) )) {
-
-        for (z = 0; z < GetZoneLength() ; z ++) {
-          zoneID = GetZoneID(z);
-          // credit of the registrar
-          price = DBsql.GetRegistrarCredit(regID, zoneID);
-
-          //  return all not depend on            if( price >  0)
-          {
-            credit->length(seq+1);
-            credit[seq].price = price;
-            credit[seq].zone_fqdn = CORBA::string_dup(GetZoneFQDN(zoneID) );
-            seq++;
-          }
-
+    try {
+        std::vector<int> zones = GetAllZonesIDs();
+        for (z = 0; z < zones.size(); z++) {
+            zoneID = zones[z];
+            // credit of the registrar
+            price = action.getDB()->GetRegistrarCredit(action.getRegistrar(), zoneID);
+    
+            //  return all not depend on            if( price >  0)
+            {
+                credit->length(seq+1);
+                credit[seq].price = price;
+                credit[seq].zone_fqdn = CORBA::string_dup(GetZoneFQDN(zoneID) );
+                seq++;
+            }
         }
-
-        ret->code = COMMAND_OK;
-
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
-      }
-
-      ret->msg =CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-
-      DBsql.Disconnect();
+        code = COMMAND_OK;
+    }
+    catch (...) {
+        code = COMMAND_FAILED;
     }
 
-  if (ret->code == 0)
-    ServerInternalError("ClientCredit");
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
 
-  return ret._retn();
+    if (code == 0) {
+        action.failedInternal("ClientCredit");
+    }
+
+    return action.getRet()._retn();
 }
 
 /***********************************************************************
@@ -1912,50 +1883,37 @@ ccReg::Response* ccReg_EPP_i::ClientCredit(
  *
  ***********************************************************************/
 
-ccReg::Response * ccReg_EPP_i::ClientLogout(
-  CORBA::Long clientID, const char *clTRID, const char* XML)
+ccReg::Response *
+ccReg_EPP_i::ClientLogout(CORBA::Long clientID, const char *clTRID, const char* XML)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  DB DBsql;
-  ccReg::Response_var ret;
-  int lang=0; // default
+    int lang=0; // default
+    short int code = 0;
 
+    LOG( NOTICE_LOG, "ClientLogout: clientID -> %d clTRID [%s]", (int ) clientID, clTRID );
+    EPPAction action(this, clientID, EPP_ClientLogout, clTRID, XML);
 
-  ret = new ccReg::Response;
-  ret->code = 0;
+    action.getDB()->UPDATE("Login");
+    action.getDB()->SET("logoutdate", "now");
+    action.getDB()->SET("logouttrid", clTRID);
+    action.getDB()->WHEREID(clientID);
 
-  LOG( NOTICE_LOG, "ClientLogout: clientID -> %d clTRID [%s]", (int ) clientID, clTRID );
-
-  if (DBsql.OpenDatabase(database) ) {
-    if (DBsql.BeginAction(clientID, EPP_ClientLogout, clTRID, XML) ) {
-
-      DBsql.UPDATE("Login");
-      DBsql.SET("logoutdate", "now");
-      DBsql.SET("logouttrid", clTRID);
-      DBsql.WHEREID(clientID);
-
-      if (DBsql.EXEC() ) {
-        lang = GetRegistrarLang(clientID); // remember lang of the client before logout
+    if (action.getDB()->EXEC() ) {
+        lang = action.getLang(); // remember lang of the client before logout
 
         LogoutSession(clientID); // logout session
-        ret->code = COMMAND_LOGOUT; // succesfully logout
-      }
-
-      ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
+        code = COMMAND_LOGOUT; // succesfully logout
+        action.setCode(code);
     }
 
-    // return messages
-    ret->msg =CORBA::string_dup(GetErrorMessage(ret->code, lang) );
+    if (code == 0) {
+        action.failedInternal("ClientLogout");
+    }
 
-    DBsql.Disconnect();
-  }
-
-  if (ret->code == 0)
-    ServerInternalError("ClientLogout");
-
-  return ret._retn();
+    return action.getRet()._retn();
 }
 
 /***********************************************************************
@@ -1982,6 +1940,7 @@ ccReg::Response * ccReg_EPP_i::ClientLogin(
   const char *clTRID, const char* XML, CORBA::Long & clientID,
   const char *certID, ccReg::Languages lang)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
 
   DB DBsql;
@@ -2110,273 +2069,263 @@ ccReg::Response * ccReg_EPP_i::ClientLogin(
  *
  ***********************************************************************/
 
-ccReg::Response* ccReg_EPP_i::ObjectCheck(
-  short act, const char * table, const char *fname, const ccReg::Check& chck,
-  ccReg::CheckResp_out a, CORBA::Long clientID, const char* clTRID,
-  const char* XML)
+ccReg::Response *
+ccReg_EPP_i::ObjectCheck(short act, const char * table, const char *fname, 
+        const ccReg::Check& chck, ccReg::CheckResp_out a, CORBA::Long clientID, 
+        const char* clTRID, const char* XML)
 {
-  DB DBsql;
-  ccReg::Response_var ret;
-  unsigned long i, len;
+    unsigned long i, len;
 
-  Register::NameIdPair caConflict;
-  Register::Domain::CheckAvailType caType;
-  Register::Contact::Manager::CheckAvailType cType;
-  Register::NSSet::Manager::CheckAvailType nType;
-  Register::KeySet::Manager::CheckAvailType kType;
+    Register::NameIdPair caConflict;
+    Register::Domain::CheckAvailType caType;
+    Register::Contact::Manager::CheckAvailType cType;
+    Register::NSSet::Manager::CheckAvailType nType;
+    Register::KeySet::Manager::CheckAvailType kType;
+    short int code = 0;
 
-  ret = new ccReg::Response;
+    a = new ccReg::CheckResp;
 
-  a = new ccReg::CheckResp;
+    len = chck.length();
+    a->length(len);
 
-  ret->code=0;
-
-  len = chck.length();
-  a->length(len);
-
-  ParsedAction paction;
-  for (unsigned i=0; i<len; i++)
-    paction.add((unsigned)1,(const char *)chck[i]);
-
-  LOG( NOTICE_LOG , "OBJECT %d  Check: clientID -> %d clTRID [%s] " , act , (int ) clientID , clTRID );
-
-  if (DBsql.OpenDatabase(database) ) {
-
-    if (DBsql.BeginAction(clientID, act, clTRID, XML, &paction) ) {
-
-      for (i = 0; i < len; i ++) {
-        switch (act) {
-          case EPP_ContactCheck:
-            try {
-              std::auto_ptr<Register::Contact::Manager> cman( Register::Contact::Manager::create(&DBsql,conf.get<bool>("registry.restricted_handles")) );
-
-              LOG( NOTICE_LOG , "contact checkAvail handle [%s]" , (const char * ) chck[i] );
-
-              cType = cman->checkAvail( ( const char * ) chck[i] , caConflict );
-              LOG( NOTICE_LOG , "contact type %d" , cType );
-              switch (cType) {
-                case Register::Contact::Manager::CA_INVALID_HANDLE:
-                  a[i].avail = ccReg::BadFormat;
-                  a[i].reason
-                      = CORBA::string_dup(GetReasonMessage( REASON_MSG_INVALID_FORMAT , GetRegistrarLang( clientID )));
-                  LOG( NOTICE_LOG , "bad format %s of contact handle" , (const char * ) chck[i] );
-                  break;
-                case Register::Contact::Manager::CA_REGISTRED:
-                  a[i].avail = ccReg::Exist;
-                  a[i].reason
-                      = CORBA::string_dup(GetReasonMessage( REASON_MSG_REGISTRED , GetRegistrarLang( clientID )) );
-                  LOG( NOTICE_LOG , "contact %s exist not Avail" , (const char * ) chck[i] );
-                  break;
-
-                case Register::Contact::Manager::CA_PROTECTED:
-                  a[i].avail = ccReg::DelPeriod;
-                  a[i].reason
-                      = CORBA::string_dup(GetReasonMessage( REASON_MSG_PROTECTED_PERIOD , GetRegistrarLang( clientID )) ); // v ochrane lhute
-                  LOG( NOTICE_LOG , "contact %s in delete period" ,(const char * ) chck[i] );
-                  break;
-                case Register::Contact::Manager::CA_FREE:
-                  a[i].avail = ccReg::NotExist;
-                  a[i].reason = CORBA::string_dup(""); // free
-                  LOG( NOTICE_LOG , "contact %s not exist  Avail" ,(const char * ) chck[i] );
-                  break;
-              }
-            }
-            catch (...) {
-              LOG( WARNING_LOG, "cannot run Register::Contact::checkAvail");
-              ret->code=COMMAND_FAILED;
-            }
-            break;
-
-          case EPP_KeySetCheck:
-            try {
-                std::auto_ptr<Register::KeySet::Manager> kman(
-                        Register::KeySet::Manager::create(
-                            &DBsql, conf.get<bool>("registry.restricted_handles")));
-                LOG(NOTICE_LOG, "keyset checkAvail handle [%s]",
-                        (const char *)chck[i]);
-
-                kType = kman->checkAvail((const char *)chck[i], caConflict);
-                LOG(NOTICE_LOG, "keyset check type %d", kType);
-                switch (kType) {
-                    case Register::KeySet::Manager::CA_INVALID_HANDLE:
-                        a[i].avail = ccReg::BadFormat;
-                        a[i].reason = CORBA::string_dup(
-                                GetReasonMessage(
-                                    REASON_MSG_INVALID_FORMAT,
-                                    GetRegistrarLang(clientID))
-                                );
-                        LOG(NOTICE_LOG, "bad format %s of keyset handle",
-                                (const char *)chck[i]);
-                        break;
-                    case Register::KeySet::Manager::CA_REGISTRED:
-                        a[i].avail = ccReg::Exist;
-                        a[i].reason = CORBA::string_dup(
-                                GetReasonMessage(
-                                    REASON_MSG_REGISTRED,
-                                    GetRegistrarLang(clientID))
-                                );
-                        LOG(NOTICE_LOG, "keyset %s exist not avail",
-                                (const char *)chck[i]);
-                        break;
-                    case Register::KeySet::Manager::CA_PROTECTED:
-                        a[i].avail = ccReg::DelPeriod;
-                        a[i].reason = CORBA::string_dup(
-                                GetReasonMessage(
-                                    REASON_MSG_PROTECTED_PERIOD,
-                                    GetRegistrarLang(clientID))
-                                );
-                        LOG(NOTICE_LOG, "keyset %s in delete period",
-                                (const char *)chck[i]);
-                        break;
-                    case Register::KeySet::Manager::CA_FREE:
-                        a[i].avail = ccReg::NotExist;
-                        a[i].reason = CORBA::string_dup(""); //free
-                        LOG(NOTICE_LOG, "keyset %s not exist Available",
-                                (const char *)chck[i]);
-                        break;
-                }
-            }
-            catch (...) {
-                LOG(WARNING_LOG, "cannot run Register::Contact::checkAvail");
-                ret->code = COMMAND_FAILED;
-            }
-            break;
-
-          case EPP_NSsetCheck:
-
-            try {
-              std::auto_ptr<Register::Zone::Manager> zman( Register::Zone::Manager::create(&DBsql) );
-              std::auto_ptr<Register::NSSet::Manager> nman( Register::NSSet::Manager::create(&DBsql,zman.get(),conf.get<bool>("registry.restricted_handles")) );
-
-              LOG( NOTICE_LOG , "nsset checkAvail handle [%s]" , (const char * ) chck[i] );
-
-              nType = nman->checkAvail( ( const char * ) chck[i] , caConflict );
-              LOG( NOTICE_LOG , "nsset check type %d" , nType );
-              switch (nType) {
-                case Register::NSSet::Manager::CA_INVALID_HANDLE:
-                  a[i].avail = ccReg::BadFormat;
-                  a[i].reason
-                      = CORBA::string_dup(GetReasonMessage( REASON_MSG_INVALID_FORMAT , GetRegistrarLang( clientID )));
-                  LOG( NOTICE_LOG , "bad format %s of nsset handle" , (const char * ) chck[i] );
-                  break;
-                case Register::NSSet::Manager::CA_REGISTRED:
-                  a[i].avail = ccReg::Exist;
-                  a[i].reason
-                      = CORBA::string_dup(GetReasonMessage( REASON_MSG_REGISTRED , GetRegistrarLang( clientID )) );
-                  LOG( NOTICE_LOG , "nsset %s exist not Avail" , (const char * ) chck[i] );
-                  break;
-
-                case Register::NSSet::Manager::CA_PROTECTED:
-                  a[i].avail = ccReg::DelPeriod;
-                  a[i].reason
-                      = CORBA::string_dup(GetReasonMessage( REASON_MSG_PROTECTED_PERIOD , GetRegistrarLang( clientID )) ); // v ochrane lhute
-                  LOG( NOTICE_LOG , "nsset %s in delete period" ,(const char * ) chck[i] );
-                  break;
-                case Register::NSSet::Manager::CA_FREE:
-                  a[i].avail = ccReg::NotExist;
-                  a[i].reason = CORBA::string_dup("");
-                  LOG( NOTICE_LOG , "nsset %s not exist  Avail" ,(const char * ) chck[i] );
-                  break;
-              }
-            }
-            catch (...) {
-              LOG( WARNING_LOG, "cannot run Register::NSSet::checkAvail");
-              ret->code=COMMAND_FAILED;
-            }
-
-
-            break;
-
-          case EPP_DomainCheck:
-
-            try {
-              std::auto_ptr<Register::Zone::Manager> zm( Register::Zone::Manager::create(&DBsql) );
-              std::auto_ptr<Register::Domain::Manager> dman( Register::Domain::Manager::create(&DBsql,zm.get()) );
-
-              LOG( NOTICE_LOG , "domain checkAvail fqdn [%s]" , (const char * ) chck[i] );
-
-              caType = dman->checkAvail( ( const char * ) chck[i] , caConflict);
-              LOG( NOTICE_LOG , "domain type %d" , caType );
-              switch (caType) {
-                case Register::Domain::CA_INVALID_HANDLE:
-                case Register::Domain::CA_BAD_LENGHT:
-                  a[i].avail = ccReg::BadFormat;
-                  a[i].reason
-                      = CORBA::string_dup(GetReasonMessage(REASON_MSG_INVALID_FORMAT , GetRegistrarLang( clientID )) );
-                  LOG( NOTICE_LOG , "bad format %s of fqdn" , (const char * ) chck[i] );
-                  break;
-                case Register::Domain::CA_REGISTRED:
-                case Register::Domain::CA_CHILD_REGISTRED:
-                case Register::Domain::CA_PARENT_REGISTRED:
-                  a[i].avail = ccReg::Exist;
-                  a[i].reason
-                      = CORBA::string_dup(GetReasonMessage( REASON_MSG_REGISTRED , GetRegistrarLang( clientID )) );
-                  LOG( NOTICE_LOG , "domain %s exist not Avail" , (const char * ) chck[i] );
-                  break;
-                case Register::Domain::CA_BLACKLIST:
-                  a[i].avail = ccReg::BlackList;
-                  a[i].reason
-                      = CORBA::string_dup(GetReasonMessage( REASON_MSG_BLACKLISTED_DOMAIN , GetRegistrarLang( clientID )) );
-                  LOG( NOTICE_LOG , "blacklisted  %s" , (const char * ) chck[i] );
-                  break;
-                case Register::Domain::CA_AVAILABLE:
-                  a[i].avail = ccReg::NotExist;
-                  a[i].reason = CORBA::string_dup(""); // free
-                  LOG( NOTICE_LOG , "domain %s not exist  Avail" ,(const char * ) chck[i] );
-                  break;
-                case Register::Domain::CA_BAD_ZONE:
-                  a[i].avail = ccReg::NotApplicable; // unusable domain isn't in zone
-                  a[i].reason
-                      = CORBA::string_dup(GetReasonMessage(REASON_MSG_NOT_APPLICABLE_DOMAIN , GetRegistrarLang( clientID )) );
-                  LOG( NOTICE_LOG , "not applicable %s" , (const char * ) chck[i] );
-                  break;
-              }
-
-              /*
-               #      CA_INVALID_HANDLE, ///< bad formed handle
-               #      CA_BAD_ZONE, ///< domain outside of register
-               #      CA_BAD_LENGHT, ///< domain longer then acceptable
-               #      CA_PROTECTED, ///< domain temporary protected for registration
-               #      CA_BLACKLIST, ///< registration blocked in blacklist
-               #      CA_REGISTRED, ///< domain registred
-               #      CA_PARENT_REGISTRED, ///< parent already registred
-               #      CA_CHILD_REGISTRED, ///< child already registred
-               #      CA_AVAILABLE ///< domain is available
-               */
-            }
-            catch (...) {
-              LOG( WARNING_LOG, "cannot run Register::Domain::checkAvail");
-              ret->code=COMMAND_FAILED;
-            }
-            break;
-
-        }
-      }
-
-      // command OK
-      if (ret->code == 0)
-        ret->code=COMMAND_OK; // OK not errors
-
-
-      ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) ) ;
+    ParsedAction paction;
+    for (unsigned i=0; i<len; i++) {
+        paction.add((unsigned)1,(const char *)chck[i]);
     }
 
-    ret->msg = CORBA::string_dup(GetErrorMessage(ret->code,
-        GetRegistrarLang(clientID) ) ) ;
+    EPPAction action(this, clientID, act, clTRID, XML, &paction);
 
-    DBsql.Disconnect();
-  }
 
-  if (ret->code == 0)
-    ServerInternalError("ObjectCheck");
 
-  return ret._retn();
+    LOG( NOTICE_LOG , "OBJECT %d  Check: clientID -> %d clTRID [%s] " , act , (int ) clientID , clTRID );
+
+    for (i = 0; i < len; i ++) {
+        switch (act) {
+            case EPP_ContactCheck:
+                try {
+                    std::auto_ptr<Register::Contact::Manager> cman( Register::Contact::Manager::create(action.getDB(),conf.get<bool>("registry.restricted_handles")) );
+
+                    LOG( NOTICE_LOG , "contact checkAvail handle [%s]" , (const char * ) chck[i] );
+
+                    cType = cman->checkAvail( ( const char * ) chck[i] , caConflict );
+                    LOG( NOTICE_LOG , "contact type %d" , cType );
+                    switch (cType) {
+                        case Register::Contact::Manager::CA_INVALID_HANDLE:
+                            a[i].avail = ccReg::BadFormat;
+                            a[i].reason
+                                = CORBA::string_dup(GetReasonMessage( REASON_MSG_INVALID_FORMAT , action.getLang()));
+                            LOG( NOTICE_LOG , "bad format %s of contact handle" , (const char * ) chck[i] );
+                            break;
+                        case Register::Contact::Manager::CA_REGISTRED:
+                            a[i].avail = ccReg::Exist;
+                            a[i].reason
+                                = CORBA::string_dup(GetReasonMessage( REASON_MSG_REGISTRED , action.getLang()) );
+                            LOG( NOTICE_LOG , "contact %s exist not Avail" , (const char * ) chck[i] );
+                            break;
+
+                        case Register::Contact::Manager::CA_PROTECTED:
+                            a[i].avail = ccReg::DelPeriod;
+                            a[i].reason
+                                = CORBA::string_dup(GetReasonMessage( REASON_MSG_PROTECTED_PERIOD , action.getLang()) ); // v ochrane lhute
+                            LOG( NOTICE_LOG , "contact %s in delete period" ,(const char * ) chck[i] );
+                            break;
+                        case Register::Contact::Manager::CA_FREE:
+                            a[i].avail = ccReg::NotExist;
+                            a[i].reason = CORBA::string_dup(""); // free
+                            LOG( NOTICE_LOG , "contact %s not exist  Avail" ,(const char * ) chck[i] );
+                            break;
+                    }
+                }
+                catch (...) {
+                    LOG( WARNING_LOG, "cannot run Register::Contact::checkAvail");
+                    code=COMMAND_FAILED;
+                }
+                break;
+
+            case EPP_KeySetCheck:
+                try {
+                    std::auto_ptr<Register::KeySet::Manager> kman(
+                            Register::KeySet::Manager::create(
+                                action.getDB(), conf.get<bool>("registry.restricted_handles")));
+                    LOG(NOTICE_LOG, "keyset checkAvail handle [%s]",
+                            (const char *)chck[i]);
+
+                    kType = kman->checkAvail((const char *)chck[i], caConflict);
+                    LOG(NOTICE_LOG, "keyset check type %d", kType);
+                    switch (kType) {
+                        case Register::KeySet::Manager::CA_INVALID_HANDLE:
+                            a[i].avail = ccReg::BadFormat;
+                            a[i].reason = CORBA::string_dup(
+                                    GetReasonMessage(
+                                        REASON_MSG_INVALID_FORMAT,
+                                        action.getLang())
+                                    );
+                            LOG(NOTICE_LOG, "bad format %s of keyset handle",
+                                    (const char *)chck[i]);
+                            break;
+                        case Register::KeySet::Manager::CA_REGISTRED:
+                            a[i].avail = ccReg::Exist;
+                            a[i].reason = CORBA::string_dup(
+                                    GetReasonMessage(
+                                        REASON_MSG_REGISTRED,
+                                        action.getLang())
+                                    );
+                            LOG(NOTICE_LOG, "keyset %s exist not avail",
+                                    (const char *)chck[i]);
+                            break;
+                        case Register::KeySet::Manager::CA_PROTECTED:
+                            a[i].avail = ccReg::DelPeriod;
+                            a[i].reason = CORBA::string_dup(
+                                    GetReasonMessage(
+                                        REASON_MSG_PROTECTED_PERIOD,
+                                        action.getLang())
+                                    );
+                            LOG(NOTICE_LOG, "keyset %s in delete period",
+                                    (const char *)chck[i]);
+                            break;
+                        case Register::KeySet::Manager::CA_FREE:
+                            a[i].avail = ccReg::NotExist;
+                            a[i].reason = CORBA::string_dup(""); //free
+                            LOG(NOTICE_LOG, "keyset %s not exist Available",
+                                    (const char *)chck[i]);
+                            break;
+                    }
+                }
+                catch (...) {
+                    LOG(WARNING_LOG, "cannot run Register::Contact::checkAvail");
+                    code = COMMAND_FAILED;
+                }
+                break;
+
+            case EPP_NSsetCheck:
+
+                try {
+                    std::auto_ptr<Register::Zone::Manager> zman( Register::Zone::Manager::create(action.getDB()) );
+                    std::auto_ptr<Register::NSSet::Manager> nman( Register::NSSet::Manager::create(action.getDB(),zman.get(),conf.get<bool>("registry.restricted_handles")) );
+
+                    LOG( NOTICE_LOG , "nsset checkAvail handle [%s]" , (const char * ) chck[i] );
+
+                    nType = nman->checkAvail( ( const char * ) chck[i] , caConflict );
+                    LOG( NOTICE_LOG , "nsset check type %d" , nType );
+                    switch (nType) {
+                        case Register::NSSet::Manager::CA_INVALID_HANDLE:
+                            a[i].avail = ccReg::BadFormat;
+                            a[i].reason
+                                = CORBA::string_dup(GetReasonMessage( REASON_MSG_INVALID_FORMAT , action.getLang()));
+                            LOG( NOTICE_LOG , "bad format %s of nsset handle" , (const char * ) chck[i] );
+                            break;
+                        case Register::NSSet::Manager::CA_REGISTRED:
+                            a[i].avail = ccReg::Exist;
+                            a[i].reason
+                                = CORBA::string_dup(GetReasonMessage( REASON_MSG_REGISTRED , action.getLang()) );
+                            LOG( NOTICE_LOG , "nsset %s exist not Avail" , (const char * ) chck[i] );
+                            break;
+
+                        case Register::NSSet::Manager::CA_PROTECTED:
+                            a[i].avail = ccReg::DelPeriod;
+                            a[i].reason
+                                = CORBA::string_dup(GetReasonMessage( REASON_MSG_PROTECTED_PERIOD , action.getLang()) ); // v ochrane lhute
+                            LOG( NOTICE_LOG , "nsset %s in delete period" ,(const char * ) chck[i] );
+                            break;
+                        case Register::NSSet::Manager::CA_FREE:
+                            a[i].avail = ccReg::NotExist;
+                            a[i].reason = CORBA::string_dup("");
+                            LOG( NOTICE_LOG , "nsset %s not exist  Avail" ,(const char * ) chck[i] );
+                            break;
+                    }
+                }
+                catch (...) {
+                    LOG( WARNING_LOG, "cannot run Register::NSSet::checkAvail");
+                    code=COMMAND_FAILED;
+                }
+
+
+                break;
+
+            case EPP_DomainCheck:
+
+                try {
+                    std::auto_ptr<Register::Zone::Manager> zm( Register::Zone::Manager::create(action.getDB()) );
+                    std::auto_ptr<Register::Domain::Manager> dman( Register::Domain::Manager::create(action.getDB(),zm.get()) );
+
+                    LOG( NOTICE_LOG , "domain checkAvail fqdn [%s]" , (const char * ) chck[i] );
+
+                    caType = dman->checkAvail( ( const char * ) chck[i] , caConflict);
+                    LOG( NOTICE_LOG , "domain type %d" , caType );
+                    switch (caType) {
+                        case Register::Domain::CA_INVALID_HANDLE:
+                        case Register::Domain::CA_BAD_LENGHT:
+                            a[i].avail = ccReg::BadFormat;
+                            a[i].reason
+                                = CORBA::string_dup(GetReasonMessage(REASON_MSG_INVALID_FORMAT , action.getLang()) );
+                            LOG( NOTICE_LOG , "bad format %s of fqdn" , (const char * ) chck[i] );
+                            break;
+                        case Register::Domain::CA_REGISTRED:
+                        case Register::Domain::CA_CHILD_REGISTRED:
+                        case Register::Domain::CA_PARENT_REGISTRED:
+                            a[i].avail = ccReg::Exist;
+                            a[i].reason
+                                = CORBA::string_dup(GetReasonMessage( REASON_MSG_REGISTRED , action.getLang()) );
+                            LOG( NOTICE_LOG , "domain %s exist not Avail" , (const char * ) chck[i] );
+                            break;
+                        case Register::Domain::CA_BLACKLIST:
+                            a[i].avail = ccReg::BlackList;
+                            a[i].reason
+                                = CORBA::string_dup(GetReasonMessage( REASON_MSG_BLACKLISTED_DOMAIN , action.getLang()) );
+                            LOG( NOTICE_LOG , "blacklisted  %s" , (const char * ) chck[i] );
+                            break;
+                        case Register::Domain::CA_AVAILABLE:
+                            a[i].avail = ccReg::NotExist;
+                            a[i].reason = CORBA::string_dup(""); // free
+                            LOG( NOTICE_LOG , "domain %s not exist  Avail" ,(const char * ) chck[i] );
+                            break;
+                        case Register::Domain::CA_BAD_ZONE:
+                            a[i].avail = ccReg::NotApplicable; // unusable domain isn't in zone
+                            a[i].reason
+                                = CORBA::string_dup(GetReasonMessage(REASON_MSG_NOT_APPLICABLE_DOMAIN , action.getLang()) );
+                            LOG( NOTICE_LOG , "not applicable %s" , (const char * ) chck[i] );
+                            break;
+                    }
+
+                    /*
+#      CA_INVALID_HANDLE, ///< bad formed handle
+#      CA_BAD_ZONE, ///< domain outside of register
+#      CA_BAD_LENGHT, ///< domain longer then acceptable
+#      CA_PROTECTED, ///< domain temporary protected for registration
+#      CA_BLACKLIST, ///< registration blocked in blacklist
+#      CA_REGISTRED, ///< domain registred
+#      CA_PARENT_REGISTRED, ///< parent already registred
+#      CA_CHILD_REGISTRED, ///< child already registred
+#      CA_AVAILABLE ///< domain is available
+*/
+                }
+                catch (...) {
+                    LOG( WARNING_LOG, "cannot run Register::Domain::checkAvail");
+                    code=COMMAND_FAILED;
+                }
+                break;
+
+        }
+    }
+
+    // command OK
+    if (code == 0) {
+        code=COMMAND_OK; // OK not errors
+    }
+
+
+    if (code == 0) {
+        action.failedInternal("ObjectCheck");
+    }
+
+    return action.getRet()._retn();
 }
 
 ccReg::Response* ccReg_EPP_i::ContactCheck(
   const ccReg::Check& handle, ccReg::CheckResp_out a, CORBA::Long clientID,
   const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -2387,6 +2336,7 @@ ccReg::Response* ccReg_EPP_i::NSSetCheck(
   const ccReg::Check& handle, ccReg::CheckResp_out a, CORBA::Long clientID,
   const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -2397,6 +2347,7 @@ ccReg::Response* ccReg_EPP_i::DomainCheck(
   const ccReg::Check& fqdn, ccReg::CheckResp_out a, CORBA::Long clientID,
   const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -2411,6 +2362,7 @@ ccReg_EPP_i::KeySetCheck(
         const char *clTRID,
         const char *XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -2438,6 +2390,7 @@ ccReg::Response* ccReg_EPP_i::ContactInfo(
   const char* handle, ccReg::Contact_out c, CORBA::Long clientID,
   const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -2590,105 +2543,87 @@ ccReg::Response* ccReg_EPP_i::ContactInfo(
 ccReg::Response* ccReg_EPP_i::ContactDelete(
   const char* handle, CORBA::Long clientID, const char* clTRID, const char* XML)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  std::auto_ptr<EPPNotifier> ntf;
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
-  DB DBsql;
-  int regID, id;
+    std::auto_ptr<EPPNotifier> ntf;
+    int id;
+    short int code = 0;
 
-  ret = new ccReg::Response;
-  errors = new ccReg::Errors;
+    ParsedAction paction;
+    paction.add(1,(const char *)handle);
 
-  ret->code=0;
-  errors->length(0);
+    EPPAction action(this, clientID, EPP_ContactDelete, clTRID, XML, &paction);
 
-  ParsedAction paction;
-  paction.add(1,(const char *)handle);
+    LOG( NOTICE_LOG , "ContactDelete: clientID -> %d clTRID [%s] handle [%s] " , (int ) clientID , clTRID , handle );
 
-  LOG( NOTICE_LOG , "ContactDelete: clientID -> %d clTRID [%s] handle [%s] " , (int ) clientID , clTRID , handle );
+    id = getIdOfContact(action.getDB(), handle, conf, true);
 
-  if ( (regID = GetRegistrarID(clientID) ))
-
-    if (DBsql.OpenDatabase(database) ) {
-      if ( (DBsql.BeginAction(clientID, EPP_ContactDelete, clTRID, XML, &paction) )) {
-        if (DBsql.BeginTransaction() ) {
-
-          // lock
-          id = getIdOfContact(&DBsql, handle, conf, true);
-
-          if (id < 0)
-            ret->code= SetReasonContactHandle(errors, handle,
-                GetRegistrarLang(clientID) );
-          else if (id ==0) {
-            LOG( WARNING_LOG, "contact handle [%s] NOT_EXIST", handle );
-            ret->code= COMMAND_OBJECT_NOT_EXIST;
-          }
-          if (!ret->code && !DBsql.TestObjectClientID(id, regID) ) //  if registrar is not client of the object
-          {
-            LOG( WARNING_LOG, "bad autorization not  creator of handle [%s]", handle );
-            ret->code = SetReasonWrongRegistrar(errors, regID, GetRegistrarLang(clientID));
-          }
-          try {
-            if (!ret->code && (
-                  testObjectHasState(&DBsql,id,FLAG_serverDeleteProhibited) ||
-                  testObjectHasState(&DBsql,id,FLAG_serverUpdateProhibited)
-               ))
-            {
-              LOG( WARNING_LOG, "delete of object %s is prohibited" , handle );
-              ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
-            }
-          } catch (...) {
-            ret->code = COMMAND_FAILED;
-          }
-          if (!ret->code) {
-
-            ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , &DBsql, regID , id )); // notifier maneger before delete
-
-            // test to  table  domain domain_contact_map and nsset_contact_map for relations
-            if (DBsql.TestContactRelations(id) ) // can not be deleted
-            {
-              LOG( WARNING_LOG, "test contact handle [%s] relations: PROHIBITS_OPERATION", handle );
-              ret->code = COMMAND_PROHIBITS_OPERATION;
-            } else {
-              if (DBsql.SaveObjectDelete(id) ) // save to delete object object_registry.ErDate
-              {
-                if (DBsql.DeleteContactObject(id) )
-                  ret->code = COMMAND_OK; // if deleted successfully
-              }
-
-            }
-
-            if (ret->code == COMMAND_OK)
-              ntf->Send(); // run notifier
-
-          }
-
-          // end of transaction  commit or  rollback
-          DBsql.QuitTransaction(ret->code);
+    if (id < 0) {
+        LOG(WARNING_LOG, "bad format of contact [%s]", handle);
+        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                ccReg::contact_handle, 1,
+                REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+    } else if (id ==0) {
+        LOG( WARNING_LOG, "contact handle [%s] NOT_EXIST", handle );
+        code= COMMAND_OBJECT_NOT_EXIST;
+    }
+    if (!code && !action.getDB()->TestObjectClientID(id, action.getRegistrar()) ) //  if registrar is not client of the object
+    {
+        LOG( WARNING_LOG, "bad autorization not  creator of handle [%s]", handle );
+        code = action.setErrorReason(COMMAND_AUTOR_ERROR,
+                ccReg::registrar_autor, 0,
+                REASON_MSG_REGISTRAR_AUTOR);
+    }
+    try {
+        if (!code && (
+                    testObjectHasState(action.getDB(),id,FLAG_serverDeleteProhibited) ||
+                    testObjectHasState(action.getDB(),id,FLAG_serverUpdateProhibited)
+                    ))
+        {
+            LOG( WARNING_LOG, "delete of object %s is prohibited" , handle );
+            code = COMMAND_STATUS_PROHIBITS_OPERATION;
+        }
+    } catch (...) {
+        code = COMMAND_FAILED;
+    }
+    if (!code) {
+        bool notify = !disableNotification(action.getDB(), action.getRegistrar(), clTRID);
+        if (notify) {
+            ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , action.getDB(), action.getRegistrar() , id )); // notifier maneger before delete
+            ntf->constructMessages(); // need to run all sql queries before delete take place (Ticket #1622)
         }
 
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
-        ParsedAction paction;
-        paction.add(1,(const char *)handle);
-      }
+        // test to  table  domain domain_contact_map and nsset_contact_map for relations
+        if (action.getDB()->TestContactRelations(id) ) // can not be deleted
+        {
+            LOG( WARNING_LOG, "test contact handle [%s] relations: PROHIBITS_OPERATION", handle );
+            code = COMMAND_PROHIBITS_OPERATION;
+        } else {
+            if (action.getDB()->SaveObjectDelete(id) ) // save to delete object object_registry.ErDate
+            {
+                if (action.getDB()->DeleteContactObject(id) )
+                    code = COMMAND_OK; // if deleted successfully
+            }
 
-      ret->msg = CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
+        }
 
-      DBsql.Disconnect();
+        if (code == COMMAND_OK && notify)
+            ntf->Send(); // run notifier
+
     }
 
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
 
-  if (ret->code == 0)
-    ServerInternalError("ContactDelete");
+    if (code == 0) {
+        action.failedInternal("ContactDelete");
+    }
 
-  return ret._retn();
+    return action.getRet()._retn();
 }
 
 /***********************************************************************
@@ -2711,190 +2646,174 @@ ccReg::Response * ccReg_EPP_i::ContactUpdate(
   const char *handle, const ccReg::ContactChange & c, CORBA::Long clientID,
   const char *clTRID, const char* XML)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
-  DB DBsql;
-  std::auto_ptr<EPPNotifier> ntf;
-  int regID, id;
-  int s, snum;
-  char streetStr[10];
+    std::auto_ptr<EPPNotifier> ntf;
+    int id;
+    int s, snum;
+    char streetStr[10];
+    short int code = 0;
 
-  ret = new ccReg::Response;
-  errors = new ccReg::Errors;
+    ParsedAction paction;
+    paction.add(1,(const char*)handle);
 
-  ret->code = 0;
-  errors->length(0);
+    EPPAction action(this, clientID, EPP_ContactUpdate, clTRID, XML, &paction);
 
-  ParsedAction paction;
-  paction.add(1,(const char*)handle);
+    LOG( NOTICE_LOG, "ContactUpdate: clientID -> %d clTRID [%s] handle [%s] ", (int ) clientID, clTRID, handle );
+    LOG( NOTICE_LOG, "Discloseflag %d: Disclose Name %d Org %d Add %d Tel %d Fax %d Email %d VAT %d Ident %d NotifyEmail %d" , c.DiscloseFlag ,
+            c.DiscloseName , c.DiscloseOrganization , c.DiscloseAddress , c.DiscloseTelephone , c.DiscloseFax , c.DiscloseEmail, c.DiscloseVAT, c.DiscloseIdent, c.DiscloseNotifyEmail );
 
-  LOG( NOTICE_LOG, "ContactUpdate: clientID -> %d clTRID [%s] handle [%s] ", (int ) clientID, clTRID, handle );
-  LOG( NOTICE_LOG, "Discloseflag %d: Disclose Name %d Org %d Add %d Tel %d Fax %d Email %d VAT %d Ident %d NotifyEmail %d" , c.DiscloseFlag ,
-      c.DiscloseName , c.DiscloseOrganization , c.DiscloseAddress , c.DiscloseTelephone , c.DiscloseFax , c.DiscloseEmail, c.DiscloseVAT, c.DiscloseIdent, c.DiscloseNotifyEmail );
+    id = getIdOfContact(action.getDB(), handle, conf, true);
+    // for notification to old notify address, this address must be
+    // discovered before change happen
+    std::string oldNotifyEmail;
+    if (strlen(c.NotifyEmail) && !conf.get<bool>("registry.disable_epp_notifier"))
+        oldNotifyEmail = action.getDB()->GetValueFromTable(
+                "contact", "notifyemail", "id", id
+                );
+    if (id < 0) {
+        LOG(WARNING_LOG, "bad format of contact [%s]", handle);
+        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                ccReg::contact_handle, 1,
+                REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+    } else if (id ==0) {
+        LOG( WARNING_LOG, "contact handle [%s] NOT_EXIST", handle );
+        code= COMMAND_OBJECT_NOT_EXIST;
+    }
+    if (!code && !action.getDB()->TestObjectClientID(id, action.getRegistrar()) ) {
+        LOG( WARNING_LOG, "bad autorization not  client of contact [%s]", handle );
+        code = action.setErrorReason(COMMAND_AUTOR_ERROR,
+                ccReg::registrar_autor, 0, REASON_MSG_REGISTRAR_AUTOR);
+    }
+    try {
+        if (!code && testObjectHasState(action.getDB(),id,FLAG_serverUpdateProhibited))
+        {
+            LOG( WARNING_LOG, "update of object %s is prohibited" , handle );
+            code = COMMAND_STATUS_PROHIBITS_OPERATION;
+        }
+    } catch (...) {
+        code = COMMAND_FAILED;
+    }
+    if (!code) {
+        if ( !TestCountryCode(c.CC) ) {
+            LOG(WARNING_LOG, "Reason: unknown country code: %s", (const char *)c.CC);
+            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                    ccReg::contact_cc, 1, 
+                    REASON_MSG_COUNTRY_NOTEXIST);
+        } else if (action.getDB()->ObjectUpdate(id, action.getRegistrar(), c.AuthInfoPw) ) // update OBJECT table
+        {
 
-  if ( (regID = GetRegistrarID(clientID) ))
+            // begin update
+            action.getDB()->UPDATE("Contact");
 
-    if (DBsql.OpenDatabase(database) ) {
-
-      if ( (DBsql.BeginAction(clientID, EPP_ContactUpdate, clTRID, XML, &paction) )) {
-
-        if (DBsql.BeginTransaction() ) {
-          // get ID with locking record
-          id = getIdOfContact(&DBsql, handle, conf, true);
-          // for notification to old notify address, this address must be
-          // discovered before change happen
-          std::string oldNotifyEmail;
-          if (strlen(c.NotifyEmail) && !conf.get<bool>("registry.disable_epp_notifier"))
-            oldNotifyEmail = DBsql.GetValueFromTable(
-              "contact", "notifyemail", "id", id
-            );
-          if (id < 0)
-            ret->code= SetReasonContactHandle(errors, handle,
-                GetRegistrarLang(clientID) );
-          else if (id ==0) {
-            LOG( WARNING_LOG, "contact handle [%s] NOT_EXIST", handle );
-            ret->code= COMMAND_OBJECT_NOT_EXIST;
-          }
-          if (!ret->code && !DBsql.TestObjectClientID(id, regID) ) {
-            LOG( WARNING_LOG, "bad autorization not  client of contact [%s]", handle );
-            ret->code = SetReasonWrongRegistrar(errors, regID, GetRegistrarLang(clientID));
-          }
-          try {
-            if (!ret->code && testObjectHasState(&DBsql,id,FLAG_serverUpdateProhibited))
-            {
-              LOG( WARNING_LOG, "update of object %s is prohibited" , handle );
-              ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
-            }
-          } catch (...) {
-            ret->code = COMMAND_FAILED;
-          }
-          if (!ret->code) {
-            if ( !TestCountryCode(c.CC) )
-              ret->code = SetReasonUnknowCC(errors, c.CC,
-                  GetRegistrarLang(clientID) );
-            else if (DBsql.ObjectUpdate(id, regID, c.AuthInfoPw) ) // update OBJECT table
-            {
-
-              // begin update
-              DBsql.UPDATE("Contact");
-
-              DBsql.SET("Name", c.Name);
-              DBsql.SET("Organization", c.Organization);
-              // whole adrress must be updated at once
-              // it's not allowed to update only part of it
-              if (strlen(c.City) || strlen(c.CC)) {
+            action.getDB()->SET("Name", c.Name);
+            action.getDB()->SET("Organization", c.Organization);
+            // whole adrress must be updated at once
+            // it's not allowed to update only part of it
+            if (strlen(c.City) || strlen(c.CC)) {
                 snum = c.Streets.length();
 
                 for (s = 0; s < 3; s ++) {
-                  sprintf(streetStr, "Street%d", s +1);
-                  if (s < snum)
-                    DBsql.SET(streetStr, c.Streets[s]);
-                  else
-                    DBsql.SETNULL(streetStr);
+                    sprintf(streetStr, "Street%d", s +1);
+                    if (s < snum)
+                        action.getDB()->SET(streetStr, c.Streets[s]);
+                    else
+                        action.getDB()->SETNULL(streetStr);
                 }
 
-                DBsql.SET("City", c.City);
+                action.getDB()->SET("City", c.City);
                 if (strlen(c.StateOrProvince))
-                  DBsql.SET("StateOrProvince", c.StateOrProvince);
+                    action.getDB()->SET("StateOrProvince", c.StateOrProvince);
                 else
-                  DBsql.SETNULL("StateOrProvince");
+                    action.getDB()->SETNULL("StateOrProvince");
                 if (strlen(c.PostalCode))
-                  DBsql.SET("PostalCode", c.PostalCode);
+                    action.getDB()->SET("PostalCode", c.PostalCode);
                 else
-                  DBsql.SETNULL("PostalCode");
-                DBsql.SET("Country", c.CC);
-              }
-              DBsql.SET("Telephone", c.Telephone);
-              DBsql.SET("Fax", c.Fax);
-              DBsql.SET("Email", c.Email);
-              DBsql.SET("NotifyEmail", c.NotifyEmail);
-              DBsql.SET("VAT", c.VAT);
-              DBsql.SET("SSN", c.ident);
-              if (c.identtype != ccReg::EMPTY) {
+                    action.getDB()->SETNULL("PostalCode");
+                action.getDB()->SET("Country", c.CC);
+            }
+            action.getDB()->SET("Telephone", c.Telephone);
+            action.getDB()->SET("Fax", c.Fax);
+            action.getDB()->SET("Email", c.Email);
+            action.getDB()->SET("NotifyEmail", c.NotifyEmail);
+            action.getDB()->SET("VAT", c.VAT);
+            action.getDB()->SET("SSN", c.ident);
+            if (c.identtype != ccReg::EMPTY) {
                 int identtype = 0;
                 switch (c.identtype) {
-                  case ccReg::OP:
-                    identtype = 2;
-                    break;
-                  case ccReg::PASS:
-                    identtype = 3;
-                    break;
-                  case ccReg::ICO:
-                    identtype = 4;
-                    break;
-                  case ccReg::MPSV:
-                    identtype = 5;
-                    break;
-                  case ccReg::BIRTHDAY:
-                    identtype = 6;
-                    break;
-                  case ccReg::EMPTY:
-                    // just to keep compiler satisfied :)
-                    break;
+                    case ccReg::OP:
+                        identtype = 2;
+                        break;
+                    case ccReg::PASS:
+                        identtype = 3;
+                        break;
+                    case ccReg::ICO:
+                        identtype = 4;
+                        break;
+                    case ccReg::MPSV:
+                        identtype = 5;
+                        break;
+                    case ccReg::BIRTHDAY:
+                        identtype = 6;
+                        break;
+                    case ccReg::EMPTY:
+                        // just to keep compiler satisfied :)
+                        break;
                 }
-                DBsql.SET("SSNtype", identtype); // type ssn
-              }
-
-              //  Disclose parameters flags translate
-              DBsql.SETBOOL("DiscloseName", update_DISCLOSE(c.DiscloseName,
-                  c.DiscloseFlag) );
-              DBsql.SETBOOL("DiscloseOrganization", update_DISCLOSE(
-                  c.DiscloseOrganization, c.DiscloseFlag) );
-              DBsql.SETBOOL("DiscloseAddress", update_DISCLOSE(
-                  c.DiscloseAddress, c.DiscloseFlag) );
-              DBsql.SETBOOL("DiscloseTelephone", update_DISCLOSE(
-                  c.DiscloseTelephone, c.DiscloseFlag) );
-              DBsql.SETBOOL("DiscloseFax", update_DISCLOSE(c.DiscloseFax,
-                  c.DiscloseFlag) );
-              DBsql.SETBOOL("DiscloseEmail", update_DISCLOSE(c.DiscloseEmail,
-                  c.DiscloseFlag) );
-              DBsql.SETBOOL("DiscloseVAT", update_DISCLOSE(c.DiscloseVAT,
-                  c.DiscloseFlag) );
-              DBsql.SETBOOL("DiscloseIdent", update_DISCLOSE(c.DiscloseIdent,
-                  c.DiscloseFlag) );
-              DBsql.SETBOOL("DiscloseNotifyEmail", update_DISCLOSE(
-                  c.DiscloseNotifyEmail, c.DiscloseFlag) );
-
-              // the end of UPDATE SQL
-              DBsql.WHEREID(id);
-
-              // make update and save to history
-              if (DBsql.EXEC() )
-                if (DBsql.SaveContactHistory(id) )
-                  ret->code = COMMAND_OK;
-
+                action.getDB()->SET("SSNtype", identtype); // type ssn
             }
-          }
-          if (ret->code == COMMAND_OK) // run notifier
-          {
-            ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , &DBsql, regID , id ));
-            ntf->addExtraEmails(oldNotifyEmail);
-            ntf->Send(); // send messages with objectID
-          }
 
-          DBsql.QuitTransaction(ret->code);
+            //  Disclose parameters flags translate
+            action.getDB()->SETBOOL("DiscloseName", update_DISCLOSE(c.DiscloseName,
+                        c.DiscloseFlag) );
+            action.getDB()->SETBOOL("DiscloseOrganization", update_DISCLOSE(
+                        c.DiscloseOrganization, c.DiscloseFlag) );
+            action.getDB()->SETBOOL("DiscloseAddress", update_DISCLOSE(
+                        c.DiscloseAddress, c.DiscloseFlag) );
+            action.getDB()->SETBOOL("DiscloseTelephone", update_DISCLOSE(
+                        c.DiscloseTelephone, c.DiscloseFlag) );
+            action.getDB()->SETBOOL("DiscloseFax", update_DISCLOSE(c.DiscloseFax,
+                        c.DiscloseFlag) );
+            action.getDB()->SETBOOL("DiscloseEmail", update_DISCLOSE(c.DiscloseEmail,
+                        c.DiscloseFlag) );
+            action.getDB()->SETBOOL("DiscloseVAT", update_DISCLOSE(c.DiscloseVAT,
+                        c.DiscloseFlag) );
+            action.getDB()->SETBOOL("DiscloseIdent", update_DISCLOSE(c.DiscloseIdent,
+                        c.DiscloseFlag) );
+            action.getDB()->SETBOOL("DiscloseNotifyEmail", update_DISCLOSE(
+                        c.DiscloseNotifyEmail, c.DiscloseFlag) );
+
+            // the end of UPDATE SQL
+            action.getDB()->WHEREID(id);
+
+            // make update and save to history
+            if (action.getDB()->EXEC() )
+                if (action.getDB()->SaveContactHistory(id) )
+                    code = COMMAND_OK;
+
         }
-
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
-      }
-
-      ret->msg = CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-
-      DBsql.Disconnect();
+    }
+    if (code == COMMAND_OK) // run notifier
+    {
+        ntf.reset(new EPPNotifier(
+                      conf.get<bool>("registry.disable_epp_notifier"),
+                      mm, action.getDB(), action.getRegistrar(), id, regMan.get()));
+        ntf->addExtraEmails(oldNotifyEmail);
+        ntf->Send(); // send messages with objectID
     }
 
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
 
-  if (ret->code == 0)
-    ServerInternalError("ContactUpdate");
+    if (code == 0) {
+        action.failedInternal("ContactUpdate");
+    }
 
-  return ret._retn();
+    return action.getRet()._retn();
 }
 
 /***********************************************************************
@@ -2918,211 +2837,198 @@ ccReg::Response * ccReg_EPP_i::ContactCreate(
   ccReg::timestamp_out crDate, CORBA::Long clientID, const char *clTRID,
   const char* XML)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  std::auto_ptr<EPPNotifier> ntf;
-  DB DBsql;
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
+    std::auto_ptr<EPPNotifier> ntf;
 
-  int regID, id;
-  int s, snum;
-  char streetStr[10];
+    int id;
+    int s, snum;
+    char streetStr[10];
+    short int code = 0;
 
-  // default
-  ret = new ccReg::Response;
-  errors = new ccReg::Errors;
+    ParsedAction paction;
+    paction.add(1,(const char*)handle);
 
-  ret->code = 0;
-  errors->length( 0);
+    crDate = CORBA::string_dup("");
 
-  ParsedAction paction;
-  paction.add(1,(const char*)handle);
+    EPPAction action(this, clientID, EPP_ContactCreate, clTRID, XML, &paction);
 
-  crDate = CORBA::string_dup("");
+    LOG( NOTICE_LOG, "ContactCreate: clientID -> %d clTRID [%s] handle [%s]", (int ) clientID, clTRID, handle );
+    LOG( NOTICE_LOG, "Discloseflag %d: Disclose Name %d Org %d Add %d Tel %d Fax %d Email %d VAT %d Ident %d NotifyEmail %d" , c.DiscloseFlag ,
+            c.DiscloseName , c.DiscloseOrganization , c.DiscloseAddress , c.DiscloseTelephone , c.DiscloseFax , c.DiscloseEmail, c.DiscloseVAT, c.DiscloseIdent, c.DiscloseNotifyEmail);
 
-  LOG( NOTICE_LOG, "ContactCreate: clientID -> %d clTRID [%s] handle [%s]", (int ) clientID, clTRID, handle );
-  LOG( NOTICE_LOG, "Discloseflag %d: Disclose Name %d Org %d Add %d Tel %d Fax %d Email %d VAT %d Ident %d NotifyEmail %d" , c.DiscloseFlag ,
-      c.DiscloseName , c.DiscloseOrganization , c.DiscloseAddress , c.DiscloseTelephone , c.DiscloseFax , c.DiscloseEmail, c.DiscloseVAT, c.DiscloseIdent, c.DiscloseNotifyEmail);
-
-  if ( (regID = GetRegistrarID(clientID) ))
-
-    if (DBsql.OpenDatabase(database) ) {
-      if ( (DBsql.BeginAction(clientID, EPP_ContactCreate, clTRID, XML, &paction) )) {
-        Register::Contact::Manager::CheckAvailType caType;
-        try {
-          std::auto_ptr<Register::Contact::Manager> cman(
-              Register::Contact::Manager::create(&DBsql,conf.get<bool>("registry.restricted_handles"))
-          );
-          Register::NameIdPair nameId;
-          caType = cman->checkAvail(handle,nameId);
-          id = nameId.id;
-        }
-        catch (...) {
-          id = -1;
-          caType = Register::Contact::Manager::CA_INVALID_HANDLE;
-        }
-        if (id<0 || caType == Register::Contact::Manager::CA_INVALID_HANDLE)
-          ret->code= SetReasonContactHandle(errors, handle,
-              GetRegistrarLang(clientID) );
-        else if (caType == Register::Contact::Manager::CA_REGISTRED) {
-          LOG( WARNING_LOG, "contact handle [%s] EXIST", handle );
-          ret->code= COMMAND_OBJECT_EXIST;
-        } else if (caType == Register::Contact::Manager::CA_PROTECTED)
-          ret->code= SetReasonProtectedPeriod(errors, handle,
-              GetRegistrarLang(clientID) );
-        else if (DBsql.BeginTransaction() ) {
-          // test  if country code  is valid
-          if ( !TestCountryCode(c.CC) )
-            ret->code=SetReasonUnknowCC(errors, c.CC,
-                GetRegistrarLang(clientID) );
-          else {
-            // create object generate ROID
-            id= DBsql.CreateObject("C", regID, handle, c.AuthInfoPw);
-            if (id<=0) {
-              if (id == 0) {
+    Register::Contact::Manager::CheckAvailType caType;
+    try {
+        std::auto_ptr<Register::Contact::Manager> cman(
+                Register::Contact::Manager::create(action.getDB(),conf.get<bool>("registry.restricted_handles"))
+                );
+        Register::NameIdPair nameId;
+        caType = cman->checkAvail(handle,nameId);
+        id = nameId.id;
+    }
+    catch (...) {
+        id = -1;
+        caType = Register::Contact::Manager::CA_INVALID_HANDLE;
+    }
+    if (id<0 || caType == Register::Contact::Manager::CA_INVALID_HANDLE) {
+        LOG(WARNING_LOG, "bad format of contact [%s]", handle);
+        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                ccReg::contact_handle, 1, REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+    } else if (caType == Register::Contact::Manager::CA_REGISTRED) {
+        LOG( WARNING_LOG, "contact handle [%s] EXIST", handle );
+        code= COMMAND_OBJECT_EXIST;
+    } else if (caType == Register::Contact::Manager::CA_PROTECTED) {
+        LOG(WARNING_LOG, "object [%s] in history period", handle);
+        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                ccReg::contact_handle, 1, REASON_MSG_PROTECTED_PERIOD);
+    }
+    // test  if country code  is valid
+    if ( !TestCountryCode(c.CC) ) {
+        LOG(WARNING_LOG, "Reason: unknown country code: %s", (const char *)c.CC);
+        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                ccReg::contact_cc, 1, REASON_MSG_COUNTRY_NOTEXIST);
+    } else if (code == 0) {
+        // create object generate ROID
+        id= action.getDB()->CreateObject("C", action.getRegistrar(), handle, c.AuthInfoPw);
+        if (id<=0) {
+            if (id == 0) {
                 LOG( WARNING_LOG, "contact handle [%s] EXIST", handle );
-                ret->code= COMMAND_OBJECT_EXIST;
-              } else {
-                LOG( WARNING_LOG, "Cannot insert [%s] into object_registry", handle );
-                ret->code= COMMAND_FAILED;
-              }
-
+                code= COMMAND_OBJECT_EXIST;
             } else {
+                LOG( WARNING_LOG, "Cannot insert [%s] into object_registry", handle );
+                code= COMMAND_FAILED;
+            }
 
-              DBsql.INSERT("CONTACT");
-              DBsql.INTO("id");
+        } else {
 
-              DBsql.INTOVAL("Name", c.Name);
-              DBsql.INTOVAL("Organization", c.Organization);
+            action.getDB()->INSERT("CONTACT");
+            action.getDB()->INTO("id");
 
-              // insert streets
-              snum = c.Streets.length();
-              for (s = 0; s < snum; s ++) {
+            action.getDB()->INTOVAL("Name", c.Name);
+            action.getDB()->INTOVAL("Organization", c.Organization);
+
+            // insert streets
+            snum = c.Streets.length();
+            for (s = 0; s < snum; s ++) {
                 sprintf(streetStr, "Street%d", s +1);
-                DBsql.INTOVAL(streetStr, c.Streets[s]);
-              }
+                action.getDB()->INTOVAL(streetStr, c.Streets[s]);
+            }
 
-              DBsql.INTOVAL("City", c.City);
-              DBsql.INTOVAL("StateOrProvince", c.StateOrProvince);
-              DBsql.INTOVAL("PostalCode", c.PostalCode);
-              DBsql.INTOVAL("Country", c.CC);
-              DBsql.INTOVAL("Telephone", c.Telephone);
-              DBsql.INTOVAL("Fax", c.Fax);
-              DBsql.INTOVAL("Email", c.Email);
-              DBsql.INTOVAL("NotifyEmail", c.NotifyEmail);
-              DBsql.INTOVAL("VAT", c.VAT);
-              DBsql.INTOVAL("SSN", c.ident);
-              if (c.identtype != ccReg::EMPTY)
-                DBsql.INTO("SSNtype");
+            action.getDB()->INTOVAL("City", c.City);
+            action.getDB()->INTOVAL("StateOrProvince", c.StateOrProvince);
+            action.getDB()->INTOVAL("PostalCode", c.PostalCode);
+            action.getDB()->INTOVAL("Country", c.CC);
+            action.getDB()->INTOVAL("Telephone", c.Telephone);
+            action.getDB()->INTOVAL("Fax", c.Fax);
+            action.getDB()->INTOVAL("Email", c.Email);
+            action.getDB()->INTOVAL("NotifyEmail", c.NotifyEmail);
+            action.getDB()->INTOVAL("VAT", c.VAT);
+            action.getDB()->INTOVAL("SSN", c.ident);
+            if (c.identtype != ccReg::EMPTY)
+                action.getDB()->INTO("SSNtype");
 
-              // disclose are write true or false
-              DBsql.INTO("DiscloseName");
-              DBsql.INTO("DiscloseOrganization");
-              DBsql.INTO("DiscloseAddress");
-              DBsql.INTO("DiscloseTelephone");
-              DBsql.INTO("DiscloseFax");
-              DBsql.INTO("DiscloseEmail");
-              DBsql.INTO("DiscloseVAT");
-              DBsql.INTO("DiscloseIdent");
-              DBsql.INTO("DiscloseNotifyEmail");
+            // disclose are write true or false
+            action.getDB()->INTO("DiscloseName");
+            action.getDB()->INTO("DiscloseOrganization");
+            action.getDB()->INTO("DiscloseAddress");
+            action.getDB()->INTO("DiscloseTelephone");
+            action.getDB()->INTO("DiscloseFax");
+            action.getDB()->INTO("DiscloseEmail");
+            action.getDB()->INTO("DiscloseVAT");
+            action.getDB()->INTO("DiscloseIdent");
+            action.getDB()->INTO("DiscloseNotifyEmail");
 
-              DBsql.VALUE(id);
+            action.getDB()->VALUE(id);
 
-              DBsql.VAL(c.Name);
-              DBsql.VAL(c.Organization);
-              snum = c.Streets.length();
-              for (s = 0; s < snum; s ++) {
+            action.getDB()->VAL(c.Name);
+            action.getDB()->VAL(c.Organization);
+            snum = c.Streets.length();
+            for (s = 0; s < snum; s ++) {
                 sprintf(streetStr, "Street%d", s +1);
-                DBsql.VAL(c.Streets[s]);
-              }
+                action.getDB()->VAL(c.Streets[s]);
+            }
 
-              DBsql.VAL(c.City);
-              DBsql.VAL(c.StateOrProvince);
-              DBsql.VAL(c.PostalCode);
-              DBsql.VAL(c.CC);
-              DBsql.VAL(c.Telephone);
-              DBsql.VAL(c.Fax);
-              DBsql.VAL(c.Email);
-              DBsql.VAL(c.NotifyEmail);
-              DBsql.VAL(c.VAT);
-              DBsql.VAL(c.ident);
-              if (c.identtype != ccReg::EMPTY) {
+            action.getDB()->VAL(c.City);
+            action.getDB()->VAL(c.StateOrProvince);
+            action.getDB()->VAL(c.PostalCode);
+            action.getDB()->VAL(c.CC);
+            action.getDB()->VAL(c.Telephone);
+            action.getDB()->VAL(c.Fax);
+            action.getDB()->VAL(c.Email);
+            action.getDB()->VAL(c.NotifyEmail);
+            action.getDB()->VAL(c.VAT);
+            action.getDB()->VAL(c.ident);
+            if (c.identtype != ccReg::EMPTY) {
                 int identtype = 0;
                 switch (c.identtype) {
-                  case ccReg::OP:
-                    identtype = 2;
-                    break;
-                  case ccReg::PASS:
-                    identtype = 3;
-                    break;
-                  case ccReg::ICO:
-                    identtype = 4;
-                    break;
-                  case ccReg::MPSV:
-                    identtype = 5;
-                    break;
-                  case ccReg::BIRTHDAY:
-                    identtype = 6;
-                    break;
-                  case ccReg::EMPTY:
-                    // just to keep compiler satisfied
-                    break;
+                    case ccReg::OP:
+                        identtype = 2;
+                        break;
+                    case ccReg::PASS:
+                        identtype = 3;
+                        break;
+                    case ccReg::ICO:
+                        identtype = 4;
+                        break;
+                    case ccReg::MPSV:
+                        identtype = 5;
+                        break;
+                    case ccReg::BIRTHDAY:
+                        identtype = 6;
+                        break;
+                    case ccReg::EMPTY:
+                        // just to keep compiler satisfied
+                        break;
                 }
-                DBsql.VALUE(identtype);
-              }
+                action.getDB()->VALUE(identtype);
+            }
 
-              // insert DiscloseFlag by a  DefaultPolicy of server
-              DBsql.VALUE(setvalue_DISCLOSE(c.DiscloseName, c.DiscloseFlag) );
-              DBsql.VALUE(setvalue_DISCLOSE(c.DiscloseOrganization,
-                  c.DiscloseFlag) );
-              DBsql.VALUE(setvalue_DISCLOSE(c.DiscloseAddress, c.DiscloseFlag) );
-              DBsql.VALUE(setvalue_DISCLOSE(c.DiscloseTelephone, c.DiscloseFlag) );
-              DBsql.VALUE(setvalue_DISCLOSE(c.DiscloseFax, c.DiscloseFlag) );
-              DBsql.VALUE(setvalue_DISCLOSE(c.DiscloseEmail, c.DiscloseFlag) );
-              DBsql.VALUE(setvalue_DISCLOSE(c.DiscloseVAT, c.DiscloseFlag) );
-              DBsql.VALUE(setvalue_DISCLOSE(c.DiscloseIdent, c.DiscloseFlag) );
-              DBsql.VALUE(setvalue_DISCLOSE(c.DiscloseNotifyEmail,
-                  c.DiscloseFlag) );
+            // insert DiscloseFlag by a  DefaultPolicy of server
+            action.getDB()->VALUE(setvalue_DISCLOSE(c.DiscloseName, c.DiscloseFlag) );
+            action.getDB()->VALUE(setvalue_DISCLOSE(c.DiscloseOrganization,
+                        c.DiscloseFlag) );
+            action.getDB()->VALUE(setvalue_DISCLOSE(c.DiscloseAddress, c.DiscloseFlag) );
+            action.getDB()->VALUE(setvalue_DISCLOSE(c.DiscloseTelephone, c.DiscloseFlag) );
+            action.getDB()->VALUE(setvalue_DISCLOSE(c.DiscloseFax, c.DiscloseFlag) );
+            action.getDB()->VALUE(setvalue_DISCLOSE(c.DiscloseEmail, c.DiscloseFlag) );
+            action.getDB()->VALUE(setvalue_DISCLOSE(c.DiscloseVAT, c.DiscloseFlag) );
+            action.getDB()->VALUE(setvalue_DISCLOSE(c.DiscloseIdent, c.DiscloseFlag) );
+            action.getDB()->VALUE(setvalue_DISCLOSE(c.DiscloseNotifyEmail,
+                        c.DiscloseFlag) );
 
-              // if is inserted
-              if (DBsql.EXEC() ) {
+            // if is inserted
+            if (action.getDB()->EXEC() ) {
                 // get local timestamp of created  object
                 CORBA::string_free(crDate);
-                crDate= CORBA::string_dup(DBsql.GetObjectCrDateTime(id) );
-                if (DBsql.SaveContactHistory(id) ) // save history
-                  if (DBsql.SaveObjectCreate(id) )
-                    ret->code = COMMAND_OK; // if saved
-              }
+                crDate= CORBA::string_dup(action.getDB()->GetObjectCrDateTime(id) );
+                if (action.getDB()->SaveContactHistory(id) ) // save history
+                    if (action.getDB()->SaveObjectCreate(id) )
+                        code = COMMAND_OK; // if saved
             }
-          }
-
-          if (ret->code == COMMAND_OK) // run notifier
-          {
-            ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , &DBsql, regID , id ));
-            ntf->Send(); // send message with  objectID
-          }
-
-          DBsql.QuitTransaction(ret->code);
-
         }
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
-      }
-
-      ret->msg = CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-      DBsql.Disconnect();
     }
 
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
+    if (code == COMMAND_OK) // run notifier
+    {
+        ntf.reset(new EPPNotifier(
+                    conf.get<bool>("registry.disable_epp_notifier"),mm ,
+                    action.getDB(), action.getRegistrar() , id ));
+        ntf->Send(); // send message with  objectID
+    }
 
-  if (ret->code == 0)
-    ServerInternalError("ContactCreate");
 
-  return ret._retn();
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
+
+    if (code == 0) {
+        action.failedInternal("ContactCreate");
+    }
+
+    return action.getRet()._retn();
 }
 
 /***********************************************************************
@@ -3145,235 +3051,217 @@ ccReg::Response* ccReg_EPP_i::ObjectTransfer(
   const char* authInfo, CORBA::Long clientID, const char* clTRID,
   const char* XML)
 {
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
-  DB DBsql;
-  std::auto_ptr<EPPNotifier> ntf;
-  char pass[PASS_LEN+1];
-  int regID, oldregID;
-  int type = 0;
-  int id = 0;
+    std::auto_ptr<EPPNotifier> ntf;
+    char pass[PASS_LEN+1];
+    int oldregID;
+    int type = 0;
+    int id = 0;
+    short int code = 0;
 
-  ret = new ccReg::Response;
-  errors = new ccReg::Errors;
+    ParsedAction paction;
+    paction.add(1,(const char*)name);
 
-  ret->code=0;
-  errors->length(0);
+    EPPAction action(this, clientID, (int)act, clTRID, XML, &paction);
 
-  ParsedAction paction;
-  paction.add(1,(const char*)name);
-
-  LOG( NOTICE_LOG , "ObjectContact: act %d  clientID -> %d clTRID [%s] object [%s] authInfo [%s] " , act , (int ) clientID , clTRID , name , authInfo );
-  if ( (regID = GetRegistrarID(clientID) ))
-    if (DBsql.OpenDatabase(database) ) {
-
-      if ( (DBsql.BeginAction(clientID, act, clTRID, XML, &paction) )) {
-
-        if (DBsql.BeginTransaction()) {
-
-          int zone = 0; // for domain zone check
-          switch (act) {
-            case EPP_ContactTransfer:
-              if ( (id = getIdOfContact(&DBsql, name, conf, true)) < 0)
-                ret->code= SetReasonContactHandle(errors, name,
-                    GetRegistrarLang(clientID) );
-              else if (id == 0)
-                ret->code=COMMAND_OBJECT_NOT_EXIST;
-              break;
-
-            case EPP_NSsetTransfer:
-              if ( (id = getIdOfNSSet(&DBsql, name, conf, true) ) < 0)
-                ret->code=SetReasonNSSetHandle(errors, name,
-                    GetRegistrarLang(clientID) );
-              else if (id == 0)
-                ret->code=COMMAND_OBJECT_NOT_EXIST;
-              break;
-
-            case EPP_KeySetTransfer:
-              if ((id = getIdOfKeySet(&DBsql, name, conf, true)) < 0)
-                  ret->code = SetReasonKeySetHandle(
-                          errors, name, GetRegistrarLang(clientID));
-              else if (id == 0)
-                  ret->code = COMMAND_OBJECT_NOT_EXIST;
-              break;
-
-            case EPP_DomainTransfer:
-              if ( (id = getIdOfDomain(&DBsql, name, conf, true, &zone) ) < 0)
-                ret->code=SetReasonDomainFQDN(errors, name, id == -1,
-                    GetRegistrarLang(clientID) );
-              else if (id == 0)
-                ret->code=COMMAND_OBJECT_NOT_EXIST;
-              if (DBsql.TestRegistrarZone(regID, zone) == false) {
-                 LOG( WARNING_LOG, "Authentication error to zone: %d " , zone );
-                 ret->code = COMMAND_AUTHENTICATION_ERROR;
-               }
-               break;
-            default:
-              ret->code = COMMAND_PARAMETR_ERROR;
-          }
-
-          if (!ret->code) {
-
-
-            // transfer can not be run by existing client
-            if (DBsql.TestObjectClientID(id, regID)
-                && !DBsql.GetRegistrarSystem(regID) ) {
-              LOG( WARNING_LOG, "client can not transfer  object %s" , name
-              );
-              ret->code = COMMAND_NOT_ELIGIBLE_FOR_TRANSFER;
+    LOG( NOTICE_LOG , "ObjectContact: act %d  clientID -> %d clTRID [%s] object [%s] authInfo [%s] " , act , (int ) clientID , clTRID , name , authInfo );
+    int zone = 0; // for domain zone check
+    switch (act) {
+        case EPP_ContactTransfer:
+            if ( (id = getIdOfContact(action.getDB(), name, conf, true)) < 0) {
+                LOG(WARNING_LOG, "bad format of contact [%s]", name);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::contact_handle, 1, REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+            } else if (id == 0) {
+                code=COMMAND_OBJECT_NOT_EXIST;
             }
+            break;
 
-            try {
-              if (!ret->code && testObjectHasState(&DBsql,id,FLAG_serverTransferProhibited))
-              {
+        case EPP_NSsetTransfer:
+            if ( (id = getIdOfNSSet(action.getDB(), name, conf, true) ) < 0) {
+                LOG(WARNING_LOG, "bad format of nsset [%s]", name);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::nsset_handle, 1, REASON_MSG_BAD_FORMAT_NSSET_HANDLE);
+            } else if (id == 0) {
+                code=COMMAND_OBJECT_NOT_EXIST;
+            }
+            break;
+
+        case EPP_KeySetTransfer:
+            if ((id = getIdOfKeySet(action.getDB(), name, conf, true)) < 0) {
+                LOG(WARNING_LOG, "bad format of keyset [%s]", name);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_handle, 1, REASON_MSG_BAD_FORMAT_KEYSET_HANDLE);
+            } else if (id == 0) {
+                code = COMMAND_OBJECT_NOT_EXIST;
+            }
+            break;
+
+        case EPP_DomainTransfer:
+            if ( (id = getIdOfDomain(action.getDB(), name, conf, true, &zone) ) <= 0) {
+                code=COMMAND_OBJECT_NOT_EXIST;
+            }
+            if (action.getDB()->TestRegistrarZone(action.getRegistrar(), zone) == false) {
+                LOG( WARNING_LOG, "Authentication error to zone: %d " , zone );
+                code = COMMAND_AUTHENTICATION_ERROR;
+            }
+            break;
+        default:
+            code = COMMAND_PARAMETR_ERROR;
+            break;
+    }
+
+    if (!code) {
+        // transfer can not be run by existing client
+        if (action.getDB()->TestObjectClientID(id, action.getRegistrar())
+                && !action.getDB()->GetRegistrarSystem(action.getRegistrar()) ) {
+            LOG( WARNING_LOG, "client can not transfer  object %s" , name
+               );
+            code = COMMAND_NOT_ELIGIBLE_FOR_TRANSFER;
+        }
+
+        try {
+            if (!code && testObjectHasState(action.getDB(),id,FLAG_serverTransferProhibited)) {
                 LOG( WARNING_LOG, "transfer of object %s is prohibited" , name );
-                ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
-              }
-            } catch (...) {
-              ret->code = COMMAND_FAILED;
+                code = COMMAND_STATUS_PROHIBITS_OPERATION;
             }
-            if (!ret->code) {
+        } catch (...) {
+            code = COMMAND_FAILED;
+        }
+        if (!code) {
 
-              // if  authInfo is ok
-              std::stringstream sql;
-              switch (act) {
+            // if  authInfo is ok
+            std::stringstream sql;
+            switch (act) {
                 case EPP_ContactTransfer:
-                  sql << "SELECT authinfopw FROM object c " << "WHERE c.id="
-                      << id;
-                  break;
-                case EPP_NSsetTransfer:
-                  sql << "SELECT n.authinfopw FROM object n " << "WHERE n.id="
-                      << id << " UNION "
-                      << "SELECT c.authinfopw FROM nsset_contact_map ncm, object c "
-                      << "WHERE ncm.nssetid=" << id
-                      << " AND ncm.contactid=c.id ";
-                  break;
-                case EPP_DomainTransfer:
-                  sql << "SELECT d.authinfopw FROM object d " << "WHERE d.id="
-                      << id << " UNION "
-                      << "SELECT r.authinfopw FROM domain d, object r "
-                      << "WHERE d.registrant=r.id AND d.id=" << id << " UNION "
-                      << "SELECT c.authinfopw FROM domain_contact_map dcm, object c "
-                      << "WHERE dcm.domainid=" << id
-                      << " AND dcm.contactid=c.id " << "AND dcm.role=1";
-                  break;
-                case EPP_KeySetTransfer:
-                  sql << "SELECT k.authinfopw FROM object k WHERE k.id="
-                      << id
-                      << " UNION SELECT c.authinfopw FROM keyset_contact_map kcm, object c"
-                      << " WHERE kcm.keysetid="
-                      << id
-                      << " AND kcm.contactid=c.id ";
-                  break;
-              }
-              ret->code = COMMAND_AUTOR_ERROR;
-              if (!DBsql.ExecSelect(sql.str().c_str())) {
-                LOG( WARNING_LOG , "autorization failed - sql error");
-              } else {
-                for (unsigned i=0; i < (unsigned)DBsql.GetSelectRows(); i++) {
-                  if (!strcmp(DBsql.GetFieldValue(i, 0), (char *)authInfo)) {
-                    ret->code = 0;
+                    sql << "SELECT authinfopw FROM object c " << "WHERE c.id="
+                        << id;
                     break;
-                  }
+                case EPP_NSsetTransfer:
+                    sql << "SELECT n.authinfopw FROM object n " << "WHERE n.id="
+                        << id << " UNION "
+                        << "SELECT c.authinfopw FROM nsset_contact_map ncm, object c "
+                        << "WHERE ncm.nssetid=" << id
+                        << " AND ncm.contactid=c.id ";
+                    break;
+                case EPP_DomainTransfer:
+                    sql << "SELECT d.authinfopw FROM object d " << "WHERE d.id="
+                        << id << " UNION "
+                        << "SELECT r.authinfopw FROM domain d, object r "
+                        << "WHERE d.registrant=r.id AND d.id=" << id << " UNION "
+                        << "SELECT c.authinfopw FROM domain_contact_map dcm, object c "
+                        << "WHERE dcm.domainid=" << id
+                        << " AND dcm.contactid=c.id " << "AND dcm.role=1";
+                    break;
+                case EPP_KeySetTransfer:
+                    sql << "SELECT k.authinfopw FROM object k WHERE k.id="
+                        << id
+                        << " UNION SELECT c.authinfopw FROM keyset_contact_map kcm, object c"
+                        << " WHERE kcm.keysetid="
+                        << id
+                        << " AND kcm.contactid=c.id ";
+                    break;
+            }
+            code = COMMAND_AUTOR_ERROR;
+            if (!action.getDB()->ExecSelect(sql.str().c_str())) {
+                LOG( WARNING_LOG , "autorization failed - sql error");
+            } else {
+                for (unsigned i=0; i < (unsigned)action.getDB()->GetSelectRows(); i++) {
+                    if (!strcmp(action.getDB()->GetFieldValue(i, 0), (char *)authInfo)) {
+                        code = 0;
+                        break;
+                    }
                 }
-                DBsql.FreeSelect();
-              }
-              if (ret->code) {
+                action.getDB()->FreeSelect();
+            }
+            if (code) {
                 LOG( WARNING_LOG , "autorization failed");
-              } else {
+            } else {
 
                 //  get ID of old registrant
+                // oldaction.getRegistrar()
                 oldregID
-                    = DBsql.GetNumericFromTable("object", "clid", "id", id);
+                    = action.getDB()->GetNumericFromTable("object", "clid", "id", id);
 
                 // after transfer generete new  authinfo
                 random_pass(pass);
 
                 // change registrant
-                DBsql.UPDATE("OBJECT");
-                DBsql.SSET("TrDate", "now"); // tr timestamp now
-                DBsql.SSET("AuthInfoPw", pass);
-                DBsql.SET("ClID", regID);
-                DBsql.WHEREID(id);
+                action.getDB()->UPDATE("OBJECT");
+                action.getDB()->SSET("TrDate", "now"); // tr timestamp now
+                action.getDB()->SSET("AuthInfoPw", pass);
+                action.getDB()->SET("ClID", action.getRegistrar());
+                action.getDB()->WHEREID(id);
 
                 // IF ok save to history
-                if (DBsql.EXEC() ) {
-                  switch (act) {
-                    case EPP_ContactTransfer:
-                      type=1;
-                      if (DBsql.SaveContactHistory(id) )
-                        ret->code = COMMAND_OK;
-                      break;
-                    case EPP_NSsetTransfer:
-                      type=2;
-                      if (DBsql.SaveNSSetHistory(id) )
-                        ret->code = COMMAND_OK;
-                      break;
-                    case EPP_DomainTransfer:
-                      type =3;
-                      if (DBsql.SaveDomainHistory(id) )
-                        ret->code = COMMAND_OK;
-                      break;
-                    case EPP_KeySetTransfer:
-                      type = 4;
-                      if (DBsql.SaveKeySetHistory(id))
-                          ret->code = COMMAND_OK;
-                      break;
-                  }
+                if (action.getDB()->EXEC() ) {
+                    switch (act) {
+                        case EPP_ContactTransfer:
+                            type=1;
+                            if (action.getDB()->SaveContactHistory(id) )
+                                code = COMMAND_OK;
+                            break;
+                        case EPP_NSsetTransfer:
+                            type=2;
+                            if (action.getDB()->SaveNSSetHistory(id) )
+                                code = COMMAND_OK;
+                            break;
+                        case EPP_DomainTransfer:
+                            type =3;
+                            if (action.getDB()->SaveDomainHistory(id) )
+                                code = COMMAND_OK;
+                            break;
+                        case EPP_KeySetTransfer:
+                            type = 4;
+                            if (action.getDB()->SaveKeySetHistory(id))
+                                code = COMMAND_OK;
+                            break;
+                    }
 
-                  if (ret->code == COMMAND_OK) {
-                    try {
-                      std::auto_ptr<Register::Poll::Manager> pollMan(
-                          Register::Poll::Manager::create(&DBsql)
-                      );
-                      pollMan->createActionMessage(
-                          oldregID,
-                          type == 1 ? Register::Poll::MT_TRANSFER_CONTACT :
-                          type == 2 ? Register::Poll::MT_TRANSFER_NSSET :
-                          type == 3 ? Register::Poll::MT_TRANSFER_DOMAIN :
-                          Register::Poll::MT_TRANSFER_KEYSET,
-                          id
-                      );
-                    } catch (...) {ret->code = COMMAND_FAILED;}
-                  }
+                    if (code == COMMAND_OK) {
+                        try {
+                            std::auto_ptr<Register::Poll::Manager> pollMan(
+                                    Register::Poll::Manager::create(action.getDB())
+                                    );
+                            pollMan->createActionMessage(
+                                    // oldaction.getRegistrar(),
+                                    oldregID,
+                                    type == 1 ? Register::Poll::MT_TRANSFER_CONTACT :
+                                    type == 2 ? Register::Poll::MT_TRANSFER_NSSET :
+                                    type == 3 ? Register::Poll::MT_TRANSFER_DOMAIN :
+                                    Register::Poll::MT_TRANSFER_KEYSET,
+                                    id
+                                    );
+                        } catch (...) {code = COMMAND_FAILED;}
+                    }
                 }
-
-              }
             }
+        }
 
-            if (ret->code == COMMAND_OK) // run notifier
-            {
-              ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , &DBsql, regID , id ));
-              ntf->Send();
-            }
+        if (code == COMMAND_OK) // run notifier
+        {
+            ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),
+                        mm , action.getDB(), action.getRegistrar() , id ));
+            ntf->Send();
+        }
 
-          }
-          DBsql.QuitTransaction(ret->code);
-        } //test code before begin tr
-
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) ) ;
-      }
-
-      ret->msg =CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-
-      DBsql.Disconnect();
+    }
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
     }
 
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
+    if (code == 0) {
+        action.failedInternal("ObjectTransfer");
+    }
 
-  if (ret->code == 0)
-    ServerInternalError("ObjectTransfer");
-
-  return ret._retn();
+    return action.getRet()._retn();
 }
 
 ccReg::Response* ccReg_EPP_i::ContactTransfer(
   const char* handle, const char* authInfo, CORBA::Long clientID,
   const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -3384,6 +3272,7 @@ ccReg::Response* ccReg_EPP_i::NSSetTransfer(
   const char* handle, const char* authInfo, CORBA::Long clientID,
   const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -3394,6 +3283,7 @@ ccReg::Response* ccReg_EPP_i::DomainTransfer(
   const char* fqdn, const char* authInfo, CORBA::Long clientID,
   const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -3408,6 +3298,7 @@ ccReg_EPP_i::KeySetTransfer(
         const char *clTRID,
         const char *XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -3436,6 +3327,7 @@ ccReg::Response* ccReg_EPP_i::NSSetInfo(
   const char* handle, ccReg::NSSet_out n, CORBA::Long clientID,
   const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -3540,100 +3432,83 @@ ccReg::Response* ccReg_EPP_i::NSSetInfo(
 ccReg::Response* ccReg_EPP_i::NSSetDelete(
   const char* handle, CORBA::Long clientID, const char* clTRID, const char* XML)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
-  DB DBsql;
-  std::auto_ptr<EPPNotifier> ntf;
-  int regID, id;
+    std::auto_ptr<EPPNotifier> ntf;
+    int id;
+    short int code = 0;
 
-  ret = new ccReg::Response;
-  errors = new ccReg::Errors;
+    ParsedAction paction;
+    paction.add(1,(const char*)handle);
 
-  ret->code=0;
-  errors->length(0);
+    EPPAction action(this, clientID, EPP_NSsetDelete, clTRID, XML, &paction);
 
-  ParsedAction paction;
-  paction.add(1,(const char*)handle);
+    LOG( NOTICE_LOG , "NSSetDelete: clientID -> %d clTRID [%s] handle [%s] " , (int ) clientID , clTRID , handle );
 
-  LOG( NOTICE_LOG , "NSSetDelete: clientID -> %d clTRID [%s] handle [%s] " , (int ) clientID , clTRID , handle );
+    // lock row
+    id = getIdOfNSSet(action.getDB(), handle, conf, true);
+    if (id < 0) {
+        LOG(WARNING_LOG, "bad format of nsset [%s]", handle);
+        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                ccReg::nsset_handle, 1,
+                REASON_MSG_BAD_FORMAT_NSSET_HANDLE);
+    } else if (id == 0) {
+        LOG( WARNING_LOG, "nsset handle [%s] NOT_EXIST", handle );
+        code = COMMAND_OBJECT_NOT_EXIST;
+    }
+    if (!code &&  !action.getDB()->TestObjectClientID(id, action.getRegistrar()) ) // if not client od the object
+    {
+        LOG( WARNING_LOG, "bad autorization not client of nsset [%s]", handle );
+        code = action.setErrorReason(COMMAND_AUTOR_ERROR,
+                ccReg::registrar_autor, 0, REASON_MSG_REGISTRAR_AUTOR);
+    }
+    try {
+        if (!code && (
+                    testObjectHasState(action.getDB(),id,FLAG_serverDeleteProhibited) ||
+                    testObjectHasState(action.getDB(),id,FLAG_serverUpdateProhibited)
+                    ))
+        {
+            LOG( WARNING_LOG, "delete of object %s is prohibited" , handle );
+            code = COMMAND_STATUS_PROHIBITS_OPERATION;
+        }
+    } catch (...) {
+        code = COMMAND_FAILED;
+    }
+    if (!code) {
+        // create notifier
+        bool notify = !disableNotification(action.getDB(), action.getRegistrar(), clTRID);
+        if (notify) 
+            ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , action.getDB(), action.getRegistrar() , id ));
 
-  if ( (regID = GetRegistrarID(clientID) ))
-
-    if (DBsql.OpenDatabase(database) ) {
-
-      if ( (DBsql.BeginAction(clientID, EPP_NSsetDelete, clTRID, XML, &paction) )) {
-
-        if (DBsql.BeginTransaction() ) {
-          // lock row
-          id = getIdOfNSSet(&DBsql, handle, conf, true);
-          if (id < 0)
-            ret->code = SetReasonNSSetHandle(errors, handle,
-              GetRegistrarLang(clientID) );
-          else if (id == 0) {
-            LOG( WARNING_LOG, "nsset handle [%s] NOT_EXIST", handle );
-            ret->code = COMMAND_OBJECT_NOT_EXIST;
-          }
-          if (!ret->code &&  !DBsql.TestObjectClientID(id, regID) ) // if not client od the object
-          {
-            LOG( WARNING_LOG, "bad autorization not client of nsset [%s]", handle );
-            ret->code = SetReasonWrongRegistrar(errors, regID, GetRegistrarLang(clientID));
-          }
-          try {
-            if (!ret->code && (
-                  testObjectHasState(&DBsql,id,FLAG_serverDeleteProhibited) ||
-                  testObjectHasState(&DBsql,id,FLAG_serverUpdateProhibited)
-                ))
+        // test to  table domain if relations to nsset
+        if (action.getDB()->TestNSSetRelations(id) ) //  can not be delete
+        {
+            LOG( WARNING_LOG, "database relations" );
+            code = COMMAND_PROHIBITS_OPERATION;
+        } else {
+            if (action.getDB()->SaveObjectDelete(id) ) // save to delete object
             {
-              LOG( WARNING_LOG, "delete of object %s is prohibited" , handle );
-              ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
+                if (action.getDB()->DeleteNSSetObject(id) )
+                    code = COMMAND_OK; // if is OK
             }
-          } catch (...) {
-            ret->code = COMMAND_FAILED;
-          }
-          if (!ret->code) {
-            // create notifier
-            ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , &DBsql, regID , id ));
-
-            // test to  table domain if relations to nsset
-            if (DBsql.TestNSSetRelations(id) ) //  can not be delete
-            {
-              LOG( WARNING_LOG, "database relations" );
-              ret->code = COMMAND_PROHIBITS_OPERATION;
-            } else {
-              if (DBsql.SaveObjectDelete(id) ) // save to delete object
-              {
-                if (DBsql.DeleteNSSetObject(id) )
-                  ret->code = COMMAND_OK; // if is OK
-              }
-            }
-
-            if (ret->code == COMMAND_OK)
-              ntf->Send(); // send messages by notifier
-          }
-
-          DBsql.QuitTransaction(ret->code);
         }
 
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
-      }
-
-      ret->msg = CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-
-      DBsql.Disconnect();
+        if (code == COMMAND_OK && notify)
+            ntf->Send(); // send messages by notifier
     }
 
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
 
-  if (ret->code == 0)
-    ServerInternalError("NSSetDelete");
+    if (code == 0) {
+        action.failedInternal("NSSetDelete");
+    }
 
-  return ret._retn();
+    return action.getRet()._retn();
 }
 
 /***********************************************************************
@@ -3660,261 +3535,248 @@ ccReg::Response * ccReg_EPP_i::NSSetCreate(
   const ccReg::DNSHost & dns, CORBA::Short level, ccReg::timestamp_out crDate,
   CORBA::Long clientID, const char *clTRID, const char* XML)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  DB DBsql;
-  std::auto_ptr<EPPNotifier> ntf;
-  char NAME[256]; // to upper case of name of DNS hosts
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
-  int regID, id, techid, hostID;
-  unsigned int i, j, l;
-  short inetNum;
-  int *tch= NULL;
+    std::auto_ptr<EPPNotifier> ntf;
+    char NAME[256]; // to upper case of name of DNS hosts
+    int id, techid, hostID;
+    unsigned int i, j, l;
+    short inetNum;
+    int *tch= NULL;
+    short int code = 0;
 
-  LOG( NOTICE_LOG, "NSSetCreate: clientID -> %d clTRID [%s] handle [%s]  authInfoPw [%s]", (int ) clientID, clTRID, handle , authInfoPw );
-  LOG( NOTICE_LOG, "NSSetCreate: tech check level %d tech num %d" , (int) level , (int) tech.length() );
+    LOG( NOTICE_LOG, "NSSetCreate: clientID -> %d clTRID [%s] handle [%s]  authInfoPw [%s]", (int ) clientID, clTRID, handle , authInfoPw );
+    LOG( NOTICE_LOG, "NSSetCreate: tech check level %d tech num %d" , (int) level , (int) tech.length() );
 
-  ret = new ccReg::Response;
-  errors = new ccReg::Errors;
+    ParsedAction paction;
+    paction.add(1,(const char*)handle);
 
-  // defaults
-  ret->code = 0;
-  errors->length( 0);
+    crDate = CORBA::string_dup("");
+    EPPAction action(this, clientID, EPP_NSsetCreate, clTRID, XML, &paction);
 
-  ParsedAction paction;
-  paction.add(1,(const char*)handle);
+    std::auto_ptr<Register::Zone::Manager> zman(
+            Register::Zone::Manager::create(action.getDB()));
+    std::auto_ptr<Register::NSSet::Manager> nman(
+            Register::NSSet::Manager::create(action.getDB(),zman.get(),conf.get<bool>("registry.restricted_handles")));
 
-  crDate = CORBA::string_dup("");
+    if (tech.length() < 1) {
+        LOG( WARNING_LOG, "NSSetCreate: not any tech Contact " );
+        code = action.setErrorReason(COMMAND_PARAMETR_MISSING,
+                ccReg::nsset_tech, 0, REASON_MSG_TECH_NOTEXIST);
+    } else if (tech.length() > 9) {
+        LOG(WARNING_LOG, "NSSetCreate: too many tech contacts (max is 9)");
+        code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                ccReg::nsset_tech, 0, REASON_MSG_TECHADMIN_LIMIT);
+    } else if (dns.length() < 2) {
+        //  minimal two dns hosts
+        if (dns.length() == 1) {
+            LOG( WARNING_LOG, "NSSetCreate: minimal two dns host create one %s" , (const char *) dns[0].fqdn );
+            code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                    ccReg::nsset_dns_name, 1, REASON_MSG_MIN_TWO_DNS_SERVER);
+        } else {
+            LOG( WARNING_LOG, "NSSetCreate: minimal two dns DNS hosts" );
+            code = action.setErrorReason(COMMAND_PARAMETR_MISSING,
+                    ccReg::nsset_dns_name, 0, REASON_MSG_MIN_TWO_DNS_SERVER);
+        }
 
-  if ((regID = GetRegistrarID(clientID))) {
+    } else if (dns.length() > 9) {
+        LOG(WARNING_LOG, "NSSetCreate: too many dns hosts (maximum is 9)");
+        code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                ccReg::nsset_dns_name, 0, REASON_MSG_NSSET_LIMIT);
+    }
+    if (code == 0) {
+        Register::NSSet::Manager::CheckAvailType caType;
 
-    if (DBsql.OpenDatabase(database) ) {
-      std::auto_ptr<Register::Zone::Manager> zman(
-        Register::Zone::Manager::create(&DBsql));
-      std::auto_ptr<Register::NSSet::Manager> nman(
-        Register::NSSet::Manager::create(&DBsql,zman.get(),conf.get<bool>("registry.restricted_handles")));
+        tch = new int[tech.length()];
 
-      if ( (DBsql.BeginAction(clientID, EPP_NSsetCreate, clTRID, XML, &paction) )) {
-        if (DBsql.BeginTransaction() ) {
-          if (tech.length() < 1) {
-            LOG( WARNING_LOG, "NSSetCreate: not any tech Contact " );
-            ret->code = SetErrorReason(errors, COMMAND_PARAMETR_MISSING,
-                ccReg::nsset_tech, 0, REASON_MSG_TECH_NOTEXIST,
-                GetRegistrarLang(clientID) );
-          } else if (tech.length() > 9) {
-              LOG(WARNING_LOG, "NSSetCreate: too many tech contacts (max is 9)");
-              ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_VALUE_POLICY_ERROR,
-                      ccReg::nsset_tech, 0,
-                      REASON_MSG_TECHADMIN_LIMIT,
-                      GetRegistrarLang(clientID));
-          } else if (dns.length() < 2) {
-            //  minimal two dns hosts
-              if (dns.length() == 1) {
-              LOG( WARNING_LOG, "NSSetCreate: minimal two dns host create one %s" , (const char *) dns[0].fqdn );
-              ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_VALUE_POLICY_ERROR, ccReg::nsset_dns_name, 1,
-                      REASON_MSG_MIN_TWO_DNS_SERVER, GetRegistrarLang(clientID) );
-            } else {
-              LOG( WARNING_LOG, "NSSetCreate: minimal two dns DNS hosts" );
-              ret->code = SetErrorReason(errors, COMMAND_PARAMETR_MISSING,
-                  ccReg::nsset_dns_name, 0, REASON_MSG_MIN_TWO_DNS_SERVER,
-                  GetRegistrarLang(clientID) );
-            }
+        try {
+            Register::NameIdPair nameId;
+            caType = nman->checkAvail(handle, nameId);
+            id = nameId.id;
+        }
+        catch (...) {
+            caType = Register::NSSet::Manager::CA_INVALID_HANDLE;
+            id = -1;
+        }
 
-          } else if (dns.length() > 9) {
-              LOG(WARNING_LOG, "NSSetCreate: too many dns hosts (maximum is 9)");
-              ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_VALUE_POLICY_ERROR,
-                      ccReg::nsset_dns_name, 0,
-                      REASON_MSG_NSSET_LIMIT,
-                      GetRegistrarLang(clientID));
-          }
-          if (ret->code == 0) {
-            Register::NSSet::Manager::CheckAvailType caType;
-
-            tch = new int[tech.length()];
-
+        if (id<0 || caType == Register::NSSet::Manager::CA_INVALID_HANDLE) {
+            LOG(WARNING_LOG, "bad format of nssset [%s]", handle);
+            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                    ccReg::nsset_handle, 1, REASON_MSG_BAD_FORMAT_NSSET_HANDLE);
+        } else if (caType == Register::NSSet::Manager::CA_REGISTRED) {
+            LOG( WARNING_LOG, "nsset handle [%s] EXIST", handle );
+            code = COMMAND_OBJECT_EXIST;
+        } else if (caType == Register::NSSet::Manager::CA_PROTECTED) {
+            LOG(WARNING_LOG, "object [%s] in history period", handle);
+            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                    ccReg::nsset_handle, 1, REASON_MSG_PROTECTED_PERIOD);
+        }
+    }
+    if (code == 0) {
+        // test tech-c
+        std::auto_ptr<Register::Contact::Manager>
+            cman(Register::Contact::Manager::create(action.getDB(),
+                        conf.get<bool>("registry.restricted_handles")) );
+        for (i = 0; i < tech.length() ; i++) {
+            Register::Contact::Manager::CheckAvailType caType;
             try {
-              Register::NameIdPair nameId;
-              caType = nman->checkAvail(handle,nameId);
-              id = nameId.id;
-            }
-            catch (...) {
-              caType = Register::NSSet::Manager::CA_INVALID_HANDLE;
-              id = -1;
-            }
-
-            if (id<0 || caType == Register::NSSet::Manager::CA_INVALID_HANDLE)
-              ret->code = SetReasonNSSetHandle(errors, handle,
-                  GetRegistrarLang(clientID) );
-            else if (caType == Register::NSSet::Manager::CA_REGISTRED) {
-              LOG( WARNING_LOG, "nsset handle [%s] EXIST", handle );
-              ret->code = COMMAND_OBJECT_EXIST;
-            } else if (caType == Register::NSSet::Manager::CA_PROTECTED)
-              ret->code = SetReasonProtectedPeriod(errors, handle,
-                  GetRegistrarLang(clientID), ccReg::nsset_handle);
-          }
-          if (ret->code == 0) {
-            // test tech-c
-            std::auto_ptr<Register::Contact::Manager>
-                cman(Register::Contact::Manager::create(&DBsql,
-                    conf.get<bool>("registry.restricted_handles")) );
-            for (i = 0; i < tech.length() ; i++) {
-              Register::Contact::Manager::CheckAvailType caType;
-              try {
                 Register::NameIdPair nameId;
                 caType = cman->checkAvail((const char *)tech[i],nameId);
                 techid = nameId.id;
-              } catch (...) {
+            } catch (...) {
                 caType = Register::Contact::Manager::CA_INVALID_HANDLE;
                 techid = 0;
-              }
+            }
 
-              if (caType != Register::Contact::Manager::CA_REGISTRED)
-                ret->code = SetReasonNSSetTech(errors, tech[i], techid,
-                    GetRegistrarLang(clientID) , i);
-              else {
+            if (caType != Register::Contact::Manager::CA_REGISTRED) {
+                if (techid < 0) {
+                    LOG(WARNING_LOG, "bad format of Contact %s", (const char *)tech[i]);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::nsset_tech, i + 1, REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+                } else if (techid == 0) {
+                    LOG(WARNING_LOG, "Contact %s not exist", (const char *)tech[i]);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::nsset_tech, i, REASON_MSG_TECH_NOTEXIST);
+                }
+            } else {
                 tch[i] = techid;
                 for (j = 0; j < i; j ++) // test duplicity
                 {
-                  LOG( DEBUG_LOG , "tech compare j %d techid %d ad %d" , j , techid , tch[j] );
-                  if (tch[j] == techid && tch[j] > 0) {
-                    tch[j]= 0;
-                    ret->code = SetReasonContactDuplicity(errors, tech[i],
-                        GetRegistrarLang(clientID) , i, ccReg::nsset_tech);
-                  }
+                    LOG( DEBUG_LOG , "tech compare j %d techid %d ad %d" , j , techid , tch[j] );
+                    if (tch[j] == techid && tch[j] > 0) {
+                        tch[j]= 0;
+                        LOG(WARNING_LOG, "Contact [%s] duplicity", (const char *)tech[i]);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::nsset_tech, i, REASON_MSG_DUPLICITY_CONTACT);
+                    }
                 }
 
-              }
             }
-          }
+        }
+    }
 
-          if (ret->code == 0) {
+    if (code == 0) {
 
-            LOG( DEBUG_LOG , "NSSetCreate:  dns.length %d" , (int ) dns.length() );
-            // test DNS host
+        LOG( DEBUG_LOG , "NSSetCreate:  dns.length %d" , (int ) dns.length() );
+        // test DNS host
 
-            // test IP address of  DNS host
+        // test IP address of  DNS host
 
-            for (i = 0, inetNum=0; i < dns.length() ; i++) {
+        for (i = 0, inetNum=0; i < dns.length() ; i++) {
 
-              LOG( DEBUG_LOG , "NSSetCreate: test host %s" , (const char *) dns[i].fqdn );
+            LOG( DEBUG_LOG , "NSSetCreate: test host %s" , (const char *) dns[i].fqdn );
 
-              //  list sequence
-              for (j = 0; j < dns[i].inet.length(); j++) {
+            //  list sequence
+            for (j = 0; j < dns[i].inet.length(); j++) {
                 LOG( DEBUG_LOG , "NSSetCreate: test inet[%d] = %s " , j , (const char *) dns[i].inet[j] );
                 if (TestInetAddress(dns[i].inet[j]) ) {
-                  for (l = 0; l < j; l ++) // test to duplicity
-                  {
-                    if (strcmp(dns[i].inet[l], dns[i].inet[j]) == 0) {
-                      LOG( WARNING_LOG, "NSSetCreate: duplicity host address %s " , (const char *) dns[i].inet[j] );
-                      ret->code =SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                          ccReg::nsset_dns_addr, inetNum+j+1,
-                          REASON_MSG_DUPLICITY_DNS_ADDRESS,
-                          GetRegistrarLang(clientID) );
+                    for (l = 0; l < j; l ++) // test to duplicity
+                    {
+                        if (strcmp(dns[i].inet[l], dns[i].inet[j]) == 0) {
+                            LOG( WARNING_LOG, "NSSetCreate: duplicity host address %s " , (const char *) dns[i].inet[j] );
+                            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                    ccReg::nsset_dns_addr, inetNum + j + 1,
+                                    REASON_MSG_DUPLICITY_DNS_ADDRESS);
+                        }
                     }
-                  }
 
                 } else {
-                  LOG( WARNING_LOG, "NSSetCreate: bad host address %s " , (const char *) dns[i].inet[j] );
-                  ret->code =SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                      ccReg::nsset_dns_addr, inetNum+j+1,
-                      REASON_MSG_BAD_IP_ADDRESS, GetRegistrarLang(clientID) );
+                    LOG( WARNING_LOG, "NSSetCreate: bad host address %s " , (const char *) dns[i].inet[j] );
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::nsset_dns_addr, inetNum + j + 1,
+                            REASON_MSG_BAD_IP_ADDRESS);
                 }
 
-              }
+            }
 
-              // test DNS hosts
-              unsigned hostnameTest = nman->checkHostname(
-                  (const char *)dns[i].fqdn, dns[i].inet.length() > 0);
-              if (hostnameTest == 1) {
+            // test DNS hosts
+            unsigned hostnameTest = nman->checkHostname(
+                    (const char *)dns[i].fqdn, dns[i].inet.length() > 0);
+            if (hostnameTest == 1) {
 
                 LOG( WARNING_LOG, "NSSetCreate: bad host name %s " , (const char *) dns[i].fqdn );
-                ret->code = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                    ccReg::nsset_dns_name, i+1, REASON_MSG_BAD_DNS_NAME,
-                    GetRegistrarLang(clientID) );
-              } else {
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::nsset_dns_name, i + 1, REASON_MSG_BAD_DNS_NAME);
+            } else {
                 LOG( NOTICE_LOG , "NSSetCreate: test DNS Host %s", (const char *) dns[i].fqdn );
                 convert_hostname(NAME, dns[i].fqdn);
 
                 // not in defined zones and exist record of ip address
                 if (hostnameTest == 2) {
 
-                  for (j = 0; j < dns[i].inet.length() ; j ++) {
+                    for (j = 0; j < dns[i].inet.length() ; j ++) {
 
-                    LOG( WARNING_LOG, "NSSetCreate:  ipaddr  glue not allowed %s " , (const char *) dns[i].inet[j] );
-                    ret->code = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                        ccReg::nsset_dns_addr, inetNum+j+1,
-                        REASON_MSG_IP_GLUE_NOT_ALLOWED,
-                        GetRegistrarLang(clientID) );
-                  }
+                        LOG( WARNING_LOG, "NSSetCreate:  ipaddr  glue not allowed %s " , (const char *) dns[i].inet[j] );
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::nsset_dns_addr, inetNum + j + 1,
+                                REASON_MSG_IP_GLUE_NOT_ALLOWED);
+                    }
 
                 }
 
                 // test to duplicity of nameservers
                 for (l = 0; l < i; l ++) {
-                  char PREV_NAME[256]; // to upper case of name of DNS hosts
-                  convert_hostname(PREV_NAME, dns[l].fqdn);
-                  if (strcmp(NAME, PREV_NAME) == 0) {
-                    LOG( WARNING_LOG, "NSSetCreate: duplicity host name %s " , (const char *) NAME );
-                    ret->code = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                        ccReg::nsset_dns_name, i+1, REASON_MSG_DNS_NAME_EXIST,
-                        GetRegistrarLang(clientID) );
-                  }
+                    char PREV_NAME[256]; // to upper case of name of DNS hosts
+                    convert_hostname(PREV_NAME, dns[l].fqdn);
+                    if (strcmp(NAME, PREV_NAME) == 0) {
+                        LOG( WARNING_LOG, "NSSetCreate: duplicity host name %s " , (const char *) NAME );
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::nsset_dns_name, i + 1,
+                                REASON_MSG_DNS_NAME_EXIST);
+                    }
                 }
 
-              }
+            }
 
-              inetNum+= dns[i].inet.length(); //  InetNum counter  for return errors
-            } // end of cycle
+            inetNum+= dns[i].inet.length(); //  InetNum counter  for return errors
+        } // end of cycle
 
-            LOG( DEBUG_LOG , "NSSetCreate: ret->code %d" , ret->code );
+        LOG( DEBUG_LOG , "NSSetCreate: code %d" , code );
 
-          }
+    }
 
-          if (ret->code == 0) {
+    if (code == 0) {
 
-            id = DBsql.CreateObject("N", regID, handle, authInfoPw);
-            if (id<=0) {
-              if (id==0) {
+        id = action.getDB()->CreateObject("N", action.getRegistrar(), handle, authInfoPw);
+        if (id<=0) {
+            if (id==0) {
                 LOG( WARNING_LOG, "nsset handle [%s] EXIST", handle );
-                ret->code= COMMAND_OBJECT_EXIST;
-              } else {
-                LOG( WARNING_LOG, "Cannot insert [%s] into object_registry", handle );
-                ret->code= COMMAND_FAILED;
-              }
+                code= COMMAND_OBJECT_EXIST;
             } else {
+                LOG( WARNING_LOG, "Cannot insert [%s] into object_registry", handle );
+                code= COMMAND_FAILED;
+            }
+        } else {
 
-              if (level<0)
+            if (level<0)
                 level = conf.get<unsigned>("registry.nsset_level");
-              // write to nsset table
-              DBsql.INSERT("NSSET");
-              DBsql.INTO("id");
-              if (level >= 0)
-                DBsql.INTO("checklevel");
-              DBsql.VALUE(id);
-              if (level >= 0)
-                DBsql.VALUE(level);
+            // write to nsset table
+            action.getDB()->INSERT("NSSET");
+            action.getDB()->INTO("id");
+            if (level >= 0)
+                action.getDB()->INTO("checklevel");
+            action.getDB()->VALUE(id);
+            if (level >= 0)
+                action.getDB()->VALUE(level);
 
-              // nsset first
-              if ( !DBsql.EXEC() )
-                ret->code = COMMAND_FAILED;
-              else {
+            // nsset first
+            if ( !action.getDB()->EXEC() )
+                code = COMMAND_FAILED;
+            else {
 
                 // get local timestamp with timezone of created object
                 CORBA::string_free(crDate);
-                crDate= CORBA::string_dup(DBsql.GetObjectCrDateTime(id) );
+                crDate= CORBA::string_dup(action.getDB()->GetObjectCrDateTime(id) );
 
                 // insert all tech-c
                 for (i = 0; i < tech.length() ; i++) {
-                  LOG( DEBUG_LOG, "NSSetCreate: add tech Contact %s id %d " , (const char *) tech[i] , tch[i]);
-                  if ( !DBsql.AddContactMap("nsset", id, tch[i]) ) {
-                    ret->code = COMMAND_FAILED;
-                    break;
-                  }
+                    LOG( DEBUG_LOG, "NSSetCreate: add tech Contact %s id %d " , (const char *) tech[i] , tch[i]);
+                    if ( !action.getDB()->AddContactMap("nsset", id, tch[i]) ) {
+                        code = COMMAND_FAILED;
+                        break;
+                    }
                 }
 
                 // insert all DNS hosts
@@ -3922,92 +3784,81 @@ ccReg::Response * ccReg_EPP_i::NSSetCreate(
 
                 for (i = 0; i < dns.length() ; i++) {
 
-                  // convert host name to lower case
-                  LOG( NOTICE_LOG , "NSSetCreate: DNS Host %s ", (const char *) dns[i].fqdn );
-                  convert_hostname(NAME, dns[i].fqdn);
+                    // convert host name to lower case
+                    LOG( NOTICE_LOG , "NSSetCreate: DNS Host %s ", (const char *) dns[i].fqdn );
+                    convert_hostname(NAME, dns[i].fqdn);
 
-                  // ID  sequence
-                  hostID = DBsql.GetSequenceID("host");
+                    // ID  sequence
+                    hostID = action.getDB()->GetSequenceID("host");
 
-                  // HOST  informations
-                  DBsql.INSERT("HOST");
-                  DBsql.INTO("ID");
-                  DBsql.INTO("NSSETID");
-                  DBsql.INTO("fqdn");
-                  DBsql.VALUE(hostID);
-                  DBsql.VALUE(id);
-                  DBsql.VVALUE(NAME);
-                  if (DBsql.EXEC() ) {
+                    // HOST  informations
+                    action.getDB()->INSERT("HOST");
+                    action.getDB()->INTO("ID");
+                    action.getDB()->INTO("NSSETID");
+                    action.getDB()->INTO("fqdn");
+                    action.getDB()->VALUE(hostID);
+                    action.getDB()->VALUE(id);
+                    action.getDB()->VVALUE(NAME);
+                    if (action.getDB()->EXEC() ) {
 
-                    // save ip address of host
-                    for (j = 0; j < dns[i].inet.length(); j++) {
-                      LOG( NOTICE_LOG , "NSSetCreate: IP address hostID  %d [%s] ", hostID , (const char *) dns[i].inet[j] );
+                        // save ip address of host
+                        for (j = 0; j < dns[i].inet.length(); j++) {
+                            LOG( NOTICE_LOG , "NSSetCreate: IP address hostID  %d [%s] ", hostID , (const char *) dns[i].inet[j] );
 
-                      // HOST_IPADDR insert IP address of DNS host
-                      DBsql.INSERT("HOST_IPADDR_map");
-                      DBsql.INTO("HOSTID");
-                      DBsql.INTO("NSSETID");
-                      DBsql.INTO("ipaddr");
-                      DBsql.VALUE(hostID);
-                      DBsql.VALUE(id); // write nssetID
-                      DBsql.VVALUE(dns[i].inet[j]);
+                            // HOST_IPADDR insert IP address of DNS host
+                            action.getDB()->INSERT("HOST_IPADDR_map");
+                            action.getDB()->INTO("HOSTID");
+                            action.getDB()->INTO("NSSETID");
+                            action.getDB()->INTO("ipaddr");
+                            action.getDB()->VALUE(hostID);
+                            action.getDB()->VALUE(id); // write nssetID
+                            action.getDB()->VVALUE(dns[i].inet[j]);
 
-                      if (DBsql.EXEC() == false) {
-                        ret->code = COMMAND_FAILED;
+                            if (action.getDB()->EXEC() == false) {
+                                code = COMMAND_FAILED;
+                                break;
+                            }
+
+                        }
+
+                    } else {
+                        code = COMMAND_FAILED;
                         break;
-                      }
-
                     }
-
-                  } else {
-                    ret->code = COMMAND_FAILED;
-                    break;
-                  }
 
                 } // end of host cycle
 
 
                 //  save to  historie if is OK
-                if (ret->code != COMMAND_FAILED)
-                  if (DBsql.SaveNSSetHistory(id) )
-                    if (DBsql.SaveObjectCreate(id) )
-                      ret->code = COMMAND_OK;
-              } //
+                if (code != COMMAND_FAILED)
+                    if (action.getDB()->SaveNSSetHistory(id) )
+                        if (action.getDB()->SaveObjectCreate(id) )
+                            code = COMMAND_OK;
+            } //
 
 
-              if (ret->code == COMMAND_OK) // run notifier
-              {
-                ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , &DBsql, regID , id ));
+            if (code == COMMAND_OK) // run notifier
+            {
+                ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , action.getDB(), action.getRegistrar() , id ));
                 ntf->Send(); //send messages
-              }
-
             }
-          }
 
-          delete[] tch;
-
-          DBsql.QuitTransaction(ret->code);
         }
-
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
-      }
-
-      ret->msg =CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-
-      DBsql.Disconnect();
     }
 
-  }
+    delete[] tch;
 
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
 
-  if (ret->code == 0)
-    ServerInternalError("NSSetCreate");
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
 
-  return ret._retn();
+    if (code == 0) {
+        action.failedInternal("NSSetCreate");
+    }
+
+    return action.getRet()._retn();
 }
 
 /***********************************************************************
@@ -4030,272 +3881,281 @@ ccReg::Response * ccReg_EPP_i::NSSetCreate(
  *
  ***********************************************************************/
 
-ccReg::Response* ccReg_EPP_i::NSSetUpdate(
-  const char* handle, const char* authInfo_chg, const ccReg::DNSHost& dns_add,
-  const ccReg::DNSHost& dns_rem, const ccReg::TechContact& tech_add,
-  const ccReg::TechContact& tech_rem, CORBA::Short level, CORBA::Long clientID,
-  const char* clTRID, const char* XML)
+ccReg::Response *
+ccReg_EPP_i::NSSetUpdate(const char* handle, const char* authInfo_chg, 
+        const ccReg::DNSHost& dns_add, const ccReg::DNSHost& dns_rem,
+        const ccReg::TechContact& tech_add, const ccReg::TechContact& tech_rem,
+        CORBA::Short level, CORBA::Long clientID, const char* clTRID, const char* XML)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
-  std::auto_ptr<EPPNotifier> ntf;
-  DB DBsql;
-  char NAME[256], REM_NAME[256];
-  int regID, nssetID, techid, hostID;
-  unsigned int i, j, k, l;
-  short inetNum;
-  int *tch_add, *tch_rem;
-  int hostNum, techNum;
-  bool findRem; // test for change DNS hosts
-  ret = new ccReg::Response;
-  errors = new ccReg::Errors;
+    std::auto_ptr<EPPNotifier> ntf;
+    char NAME[256], REM_NAME[256];
+    int nssetID, techid, hostID;
+    unsigned int i, j, k, l;
+    short inetNum;
+    int hostNum, techNum;
+    bool findRem; // test for change DNS hosts
+    short int code = 0;
 
-  tch_add = new int[ tech_add.length() ];
-  tch_rem = new int[ tech_add.length() ];
+    int *tch_add = new int[ tech_add.length() ];
+    if (tech_add.length() > 0)
+      memset((void *)tch_add, 0, sizeof(tch_add));
 
-  ret->code=0;
-  errors->length(0);
+    int *tch_rem = new int[ tech_rem.length() ];
+    if (tech_rem.length() > 0)
+      memset((void *)tch_rem, 0, sizeof(tch_rem));
 
-  ParsedAction paction;
-  paction.add(1,(const char*)handle);
+    ParsedAction paction;
+    paction.add(1,(const char*)handle);
 
-  LOG( NOTICE_LOG , "NSSetUpdate: clientID -> %d clTRID [%s] handle [%s] authInfo_chg  [%s] " , (int ) clientID , clTRID , handle , authInfo_chg);
-  LOG( NOTICE_LOG, "NSSetUpdate: tech check level %d" , (int) level );
+    EPPAction action(this, clientID, EPP_NSsetUpdate, clTRID, XML, &paction);
 
-  if ( (regID = GetRegistrarID(clientID) ))
+    LOG( NOTICE_LOG , "NSSetUpdate: clientID -> %d clTRID [%s] handle [%s] authInfo_chg  [%s] " , (int ) clientID , clTRID , handle , authInfo_chg);
+    LOG( NOTICE_LOG, "NSSetUpdate: tech check level %d" , (int) level );
 
-    if (DBsql.OpenDatabase(database) ) {
-      std::auto_ptr<Register::Zone::Manager> zman(
-        Register::Zone::Manager::create(&DBsql));
-      std::auto_ptr<Register::NSSet::Manager> nman(
-        Register::NSSet::Manager::create(&DBsql,zman.get(),conf.get<bool>("registry.restricted_handles")));
+    std::auto_ptr<Register::Zone::Manager> zman(
+            Register::Zone::Manager::create(action.getDB()));
+    std::auto_ptr<Register::NSSet::Manager> nman(
+            Register::NSSet::Manager::create(action.getDB(),zman.get(),conf.get<bool>("registry.restricted_handles")));
 
-      if ( (DBsql.BeginAction(clientID, EPP_NSsetUpdate, clTRID, XML, &paction) )) {
+    if ( (nssetID = getIdOfNSSet(action.getDB(), handle, conf, true) ) < 0) {
+        LOG(WARNING_LOG, "bad format of nsset [%s]", handle);
+    } else if (nssetID == 0) {
+        LOG( WARNING_LOG, "nsset handle [%s] NOT_EXIST", handle );
+        code = COMMAND_OBJECT_NOT_EXIST;
+    }
+    // registrar of the object
+    if (!code && !action.getDB()->TestObjectClientID(nssetID, action.getRegistrar()) ) {
+        LOG( WARNING_LOG, "bad autorization not  client of nsset [%s]", handle );
+        code = action.setErrorReason(COMMAND_AUTOR_ERROR,
+                ccReg::registrar_autor, 0,
+                REASON_MSG_REGISTRAR_AUTOR);
+    }
+    try {
+        if (!code && testObjectHasState(action.getDB(),nssetID,FLAG_serverUpdateProhibited))
+        {
+            LOG( WARNING_LOG, "update of object %s is prohibited" , handle );
+            code = COMMAND_STATUS_PROHIBITS_OPERATION;
+        }
+    } catch (...) {
+        code = COMMAND_FAILED;
+    }
 
-        if (DBsql.BeginTransaction() ) {
-          if ( (nssetID = getIdOfNSSet(&DBsql, handle, conf, true) ) < 0)
-            ret->code = SetReasonNSSetHandle(errors, handle,
-                GetRegistrarLang(clientID) );
-          else if (nssetID == 0) {
-            LOG( WARNING_LOG, "nsset handle [%s] NOT_EXIST", handle );
-            ret->code = COMMAND_OBJECT_NOT_EXIST;
-          }
-          // registrar of the object
-          if (!ret->code && !DBsql.TestObjectClientID(nssetID, regID) ) {
-            LOG( WARNING_LOG, "bad autorization not  client of nsset [%s]", handle );
-            ret->code = SetReasonWrongRegistrar(errors, regID, GetRegistrarLang(clientID));
-          }
-          try {
-            if (!ret->code && testObjectHasState(&DBsql,nssetID,FLAG_serverUpdateProhibited))
-            {
-              LOG( WARNING_LOG, "update of object %s is prohibited" , handle );
-              ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
-            }
-          } catch (...) {
-            ret->code = COMMAND_FAILED;
-          }
+    if (!code) {
 
-          if (!ret->code) {
-
-            // test  ADD tech-c
-            for (i = 0; i < tech_add.length(); i++) {
-              if ( (techid = getIdOfContact(&DBsql, tech_add[i], conf) ) <= 0)
-                ret->code = SetReasonNSSetTechADD(errors, tech_add[i], techid,
-                    GetRegistrarLang(clientID) , i);
-              else if (DBsql.CheckContactMap("nsset", nssetID, techid, 0) )
-                ret->code = SetReasonNSSetTechExistMap(errors, tech_add[i],
-                    GetRegistrarLang(clientID) , i);
-              else {
+        // test  ADD tech-c
+        for (i = 0; i < tech_add.length(); i++) {
+            if ( (techid = getIdOfContact(action.getDB(), tech_add[i], conf) ) <= 0) {
+                if (techid < 0) {
+                    LOG(WARNING_LOG, "bad format of contact %s", (const char *)tech_add[i]);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::nsset_tech_add, i + 1,
+                            REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+                } else if (techid == 0) {
+                    LOG(WARNING_LOG, "Contact %s not exist", (const char *)tech_add[i]);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::nsset_tech_add, i + 1,
+                            REASON_MSG_TECH_NOTEXIST);
+                }
+            } else if (action.getDB()->CheckContactMap("nsset", nssetID, techid, 0) ) {
+                LOG(WARNING_LOG, "Tech Contact [%s] exist in contact map table",
+                        (const char *)tech_add[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::nsset_tech_add, i + 1,
+                        REASON_MSG_TECH_EXIST);
+            } else {
                 tch_add[i] = techid;
                 for (j = 0; j < i; j ++)
-                  // duplicity test
-                  if (tch_add[j] == techid && tch_add[j] > 0) {
-                    tch_add[j] = 0;
-                    ret->code = SetReasonContactDuplicity(errors, tech_add[i],
-                        GetRegistrarLang(clientID) , i, ccReg::nsset_tech_add);
-                  }
-              }
-
-              LOG( NOTICE_LOG , "ADD  tech  techid ->%d [%s]" , techid , (const char *) tech_add[i] );
+                    // duplicity test
+                    if (tch_add[j] == techid && tch_add[j] > 0) {
+                        tch_add[j] = 0;
+                        LOG(WARNING_LOG, "Contact [%s] duplicity", (const char *)tech_add[i]);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::nsset_tech_add, i,
+                                REASON_MSG_DUPLICITY_CONTACT);
+                    }
             }
 
-            // test REM tech-c
-            for (i = 0; i < tech_rem.length(); i++) {
+            LOG( NOTICE_LOG , "ADD  tech  techid ->%d [%s]" , techid , (const char *) tech_add[i] );
+        }
 
-              if ( (techid = getIdOfContact(&DBsql, tech_rem[i], conf) ) <= 0)
-                ret->code = SetReasonNSSetTechREM(errors, tech_rem[i], techid,
-                    GetRegistrarLang(clientID) , i);
-              else if ( !DBsql.CheckContactMap("nsset", nssetID, techid, 0) )
-                ret->code = SetReasonNSSetTechNotExistMap(errors, tech_rem[i],
-                    GetRegistrarLang(clientID) , i);
-              else {
+        // test REM tech-c
+        for (i = 0; i < tech_rem.length(); i++) {
+
+            if ( (techid = getIdOfContact(action.getDB(), tech_rem[i], conf) ) <= 0) {
+                LOG(WARNING_LOG, "bad format of contact %s", (const char *)tech_rem[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::nsset_tech_rem, i + 1,
+                        REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+            } else if ( !action.getDB()->CheckContactMap("nsset", nssetID, techid, 0) ) {
+                LOG(WARNING_LOG, "Contact %s not exist", (const char *)tech_rem[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::nsset_tech_rem, i + 1,
+                        REASON_MSG_TECH_NOTEXIST);
+            } else {
                 tch_rem[i] = techid;
                 for (j = 0; j < i; j ++)
-                  // test  duplicity
-                  if (tch_rem[j] == techid && tch_rem[j] > 0) {
-                    tch_rem[j] = 0;
-                    ret->code = SetReasonContactDuplicity(errors, tech_rem[i],
-                        GetRegistrarLang(clientID) , i, ccReg::nsset_tech_rem);
-                  }
-              }
-              LOG( NOTICE_LOG , "REM  tech  techid ->%d [%s]" , techid , (const char *) tech_rem[i] );
-
+                    // test  duplicity
+                    if (tch_rem[j] == techid && tch_rem[j] > 0) {
+                        tch_rem[j] = 0;
+                        LOG(WARNING_LOG, "Contact [%s] duplicity", (const char *)tech_rem[i]);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::nsset_tech_rem, i,
+                                REASON_MSG_DUPLICITY_CONTACT);
+                    }
             }
+            LOG( NOTICE_LOG , "REM  tech  techid ->%d [%s]" , techid , (const char *) tech_rem[i] );
 
-            // ADD DNS HOSTS  and TEST IP address and name of the  DNS HOST
-            for (i = 0, inetNum =0; i < dns_add.length(); i++) {
+        }
 
-              /// test DNS host
-              if (nman->checkHostname((const char *)dns_add[i].fqdn, false)) {
+        // ADD DNS HOSTS  and TEST IP address and name of the  DNS HOST
+        for (i = 0, inetNum =0; i < dns_add.length(); i++) {
+
+            /// test DNS host
+            if (nman->checkHostname((const char *)dns_add[i].fqdn, false)) {
                 LOG( WARNING_LOG, "NSSetUpdate: bad add host name %s " , (const char *) dns_add[i].fqdn );
-                ret->code = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                    ccReg::nsset_dns_name_add, i+1, REASON_MSG_BAD_DNS_NAME,
-                    GetRegistrarLang(clientID) );
-              } else {
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::nsset_dns_name_add, i + 1,
+                        REASON_MSG_BAD_DNS_NAME);
+            } else {
                 LOG( NOTICE_LOG , "NSSetUpdate: add dns [%s]" , (const char * ) dns_add[i].fqdn );
 
                 convert_hostname(NAME, dns_add[i].fqdn); // convert to lower case
                 // HOST is not in defined zone and contain ip address
                 if (getZone(dns_add[i].fqdn) == 0
-                    && (int ) dns_add[i].inet.length() > 0) {
-                  for (j = 0; j < dns_add[i].inet.length() ; j ++) {
-                    LOG( WARNING_LOG, "NSSetUpdate:  ipaddr  glue not allowed %s " , (const char *) dns_add[i].inet[j] );
-                    ret->code = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                        ccReg::nsset_dns_addr, inetNum+j+1,
-                        REASON_MSG_IP_GLUE_NOT_ALLOWED,
-                        GetRegistrarLang(clientID) );
-                  }
+                        && (int ) dns_add[i].inet.length() > 0) {
+                    for (j = 0; j < dns_add[i].inet.length() ; j ++) {
+                        LOG( WARNING_LOG, "NSSetUpdate:  ipaddr  glue not allowed %s " , (const char *) dns_add[i].inet[j] );
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::nsset_dns_addr, inetNum + j + 1,
+                                REASON_MSG_IP_GLUE_NOT_ALLOWED);
+                    }
                 } else {
 
-                  if (DBsql.GetHostID(NAME, nssetID) ) // already exist can not add
-                  {
-                    // TEST if the add DNS host is in REM   dns_rem[i].fqdn
-                    findRem=false;
-                    for (k = 0; k < dns_rem.length(); k++) {
-                      convert_hostname(REM_NAME, dns_rem[k].fqdn);
-                      if (strcmp(NAME, REM_NAME) == 0) {
-                        LOG( NOTICE_LOG ,"NSSetUpdate: add HOST %s find remove host %s" , NAME , REM_NAME );
-                        findRem=true;
-                        break;
-                      }
-                    }
-
-                    if ( !findRem) // if is not in the REM DNS hosts
+                    if (action.getDB()->GetHostID(NAME, nssetID) ) // already exist can not add
                     {
-                      LOG( WARNING_LOG, "NSSetUpdate:  host name %s exist" , (const char *) dns_add[i].fqdn );
-                      ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_ERROR, ccReg::nsset_dns_name_add, i+1,
-                      REASON_MSG_DNS_NAME_EXIST, GetRegistrarLang(clientID) );
+                        // TEST if the add DNS host is in REM   dns_rem[i].fqdn
+                        findRem=false;
+                        for (k = 0; k < dns_rem.length(); k++) {
+                            convert_hostname(REM_NAME, dns_rem[k].fqdn);
+                            if (strcmp(NAME, REM_NAME) == 0) {
+                                LOG( NOTICE_LOG ,"NSSetUpdate: add HOST %s find remove host %s" , NAME , REM_NAME );
+                                findRem=true;
+                                break;
+                            }
+                        }
+
+                        if ( !findRem) // if is not in the REM DNS hosts
+                        {
+                            LOG( WARNING_LOG, "NSSetUpdate:  host name %s exist" , (const char *) dns_add[i].fqdn );
+                            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                    ccReg::nsset_dns_name_add, i + 1,
+                                    REASON_MSG_DNS_NAME_EXIST);
+                        }
+
                     }
 
-                  }
-
                 }
-
-              }
-
-              // TEST IP addresses
-              for (j = 0; j < dns_add[i].inet.length(); j++) {
-
-                if (TestInetAddress(dns_add[i].inet[j]) ) {
-                  for (l = 0; l < j; l ++) // duplicity test
-                  {
-                    if (strcmp(dns_add[i].inet[l], dns_add[i].inet[j]) == 0) {
-                      LOG( WARNING_LOG, "NSSetUpdate: duplicity host address %s " , (const char *) dns_add[i].inet[j] );
-                      ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_ERROR, ccReg::nsset_dns_addr, inetNum +j
-                          +1, REASON_MSG_DUPLICITY_DNS_ADDRESS,
-                          GetRegistrarLang(clientID) );
-                    }
-                  }
-
-                } else // not valid IP address
-                {
-                  LOG( WARNING_LOG, "NSSetUpdate: bad add host address %s " , (const char *) dns_add[i].inet[j] );
-                  ret->code = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                      ccReg::nsset_dns_addr, inetNum+j+1,
-                      REASON_MSG_BAD_IP_ADDRESS, GetRegistrarLang(clientID) );
-                }
-              }
-
-              inetNum+= dns_add[i].inet.length(); //  count  InetNum for errors
-
-              // test to duplicity of added nameservers
-              for (l = 0; l < i; l ++) {
-                char PREV_NAME[256]; // to upper case of name of DNS hosts
-                convert_hostname(PREV_NAME, dns_add[l].fqdn);
-                if (strcmp(NAME, PREV_NAME) == 0) {
-                  LOG( WARNING_LOG, "NSSetUpdate:  host name %s duplicate" , (const char *) dns_add[i].fqdn );
-                  ret->code = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                      ccReg::nsset_dns_name_add, i+1,
-                      REASON_MSG_DNS_NAME_EXIST, GetRegistrarLang(clientID) );
-                }
-              }
-
-            } // end of cycle
-
-
-            // test for DNS HOSTS to REMOVE if is valid format and if is exist in the table
-            for (i = 0; i < dns_rem.length(); i++) {
-              LOG( NOTICE_LOG , "NSSetUpdate:  delete  host  [%s] " , (const char *) dns_rem[i].fqdn );
-
-              if (nman->checkHostname((const char *)dns_rem[i].fqdn, false)) {
-                LOG( WARNING_LOG, "NSSetUpdate: bad rem host name %s " , (const char *) dns_rem[i].fqdn );
-                ret->code = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                    ccReg::nsset_dns_name_rem, i+1, REASON_MSG_BAD_DNS_NAME,
-                    GetRegistrarLang(clientID) );
-              } else {
-                convert_hostname(NAME, dns_rem[i].fqdn);
-                if ( (hostID = DBsql.GetHostID(NAME, nssetID) ) == 0) {
-                  LOG( WARNING_LOG, "NSSetUpdate:  host  [%s] not in table" , (const char *) dns_rem[i].fqdn );
-                  ret->code
-                      = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                          ccReg::nsset_dns_name_rem, i+1,
-                          REASON_MSG_DNS_NAME_NOTEXIST,
-                          GetRegistrarLang(clientID) );
-                }
-              }
-
-              // test to duplicity of removing nameservers
-              for (l = 0; l < i; l ++) {
-                char PREV_NAME[256]; // to upper case of name of DNS hosts
-                convert_hostname(PREV_NAME, dns_rem[l].fqdn);
-                if (strcmp(NAME, PREV_NAME) == 0) {
-                  LOG( WARNING_LOG, "NSSetUpdate:  host name %s duplicate" , (const char *) dns_rem[i].fqdn );
-                  ret->code
-                      = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                          ccReg::nsset_dns_name_rem, i+1,
-                          REASON_MSG_DNS_NAME_NOTEXIST,
-                          GetRegistrarLang(clientID) );
-                }
-              }
 
             }
 
-            // if not any errors in the parametrs run update
-            if (ret->code == 0)
-              if (DBsql.ObjectUpdate(nssetID, regID, authInfo_chg) ) {
+            // TEST IP addresses
+            for (j = 0; j < dns_add[i].inet.length(); j++) {
+
+                if (TestInetAddress(dns_add[i].inet[j]) ) {
+                    for (l = 0; l < j; l ++) // duplicity test
+                    {
+                        if (strcmp(dns_add[i].inet[l], dns_add[i].inet[j]) == 0) {
+                            LOG( WARNING_LOG, "NSSetUpdate: duplicity host address %s " , (const char *) dns_add[i].inet[j] );
+                            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                    ccReg::nsset_dns_addr, inetNum + j + 1,
+                                    REASON_MSG_DUPLICITY_DNS_ADDRESS);
+                        }
+                    }
+
+                } else // not valid IP address
+                {
+                    LOG( WARNING_LOG, "NSSetUpdate: bad add host address %s " , (const char *) dns_add[i].inet[j] );
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::nsset_dns_addr, inetNum + j + 1,
+                            REASON_MSG_BAD_IP_ADDRESS);
+                }
+            }
+
+            inetNum+= dns_add[i].inet.length(); //  count  InetNum for errors
+
+            // test to duplicity of added nameservers
+            for (l = 0; l < i; l ++) {
+                char PREV_NAME[256]; // to upper case of name of DNS hosts
+                convert_hostname(PREV_NAME, dns_add[l].fqdn);
+                if (strcmp(NAME, PREV_NAME) == 0) {
+                    LOG( WARNING_LOG, "NSSetUpdate:  host name %s duplicate" , (const char *) dns_add[i].fqdn );
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::nsset_dns_name_add, i + 1,
+                            REASON_MSG_DNS_NAME_EXIST);
+                }
+            }
+
+        } // end of cycle
+
+
+        // test for DNS HOSTS to REMOVE if is valid format and if is exist in the table
+        for (i = 0; i < dns_rem.length(); i++) {
+            LOG( NOTICE_LOG , "NSSetUpdate:  delete  host  [%s] " , (const char *) dns_rem[i].fqdn );
+
+            if (nman->checkHostname((const char *)dns_rem[i].fqdn, false)) {
+                LOG( WARNING_LOG, "NSSetUpdate: bad rem host name %s " , (const char *) dns_rem[i].fqdn );
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::nsset_dns_name_rem, i + 1,
+                        REASON_MSG_BAD_DNS_NAME);
+            } else {
+                convert_hostname(NAME, dns_rem[i].fqdn);
+                if ( (hostID = action.getDB()->GetHostID(NAME, nssetID) ) == 0) {
+                    LOG( WARNING_LOG, "NSSetUpdate:  host  [%s] not in table" , (const char *) dns_rem[i].fqdn );
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::nsset_dns_name_rem, i + 1,
+                            REASON_MSG_DNS_NAME_NOTEXIST);
+                }
+            }
+
+            // test to duplicity of removing nameservers
+            for (l = 0; l < i; l ++) {
+                char PREV_NAME[256]; // to upper case of name of DNS hosts
+                convert_hostname(PREV_NAME, dns_rem[l].fqdn);
+                if (strcmp(NAME, PREV_NAME) == 0) {
+                    LOG( WARNING_LOG, "NSSetUpdate:  host name %s duplicate" , (const char *) dns_rem[i].fqdn );
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::nsset_dns_name_rem, i + 1,
+                            REASON_MSG_DNS_NAME_NOTEXIST);
+                }
+            }
+
+        }
+
+        // if not any errors in the parametrs run update
+        if (code == 0)
+            if (action.getDB()->ObjectUpdate(nssetID, action.getRegistrar(), authInfo_chg) ) {
 
                 // notifier
-                ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , &DBsql, regID , nssetID ));
+                ntf.reset(new EPPNotifier(
+                              conf.get<bool>("registry.disable_epp_notifier"), 
+                              mm, action.getDB(), action.getRegistrar(), nssetID, regMan.get()));
+
                 //  add to current tech-c added tech-c
                 for (i = 0; i < tech_add.length(); i++)
-                  ntf->AddTechNew(tch_add[i]);
-
-                ntf->Send(); // send messages to all
-
+                    ntf->AddTechNew(tch_add[i]);
 
                 // update tech level
                 if (level >= 0) {
-                  LOG( NOTICE_LOG, "update nsset check level %d ", (int ) level );
-                  DBsql.UPDATE("nsset");
-                  DBsql.SET("checklevel", level);
-                  DBsql.WHERE("id", nssetID);
-                  if (DBsql.EXEC() == false)
-                    ret->code = COMMAND_FAILED;
+                    LOG( NOTICE_LOG, "update nsset check level %d ", (int ) level );
+                    action.getDB()->UPDATE("nsset");
+                    action.getDB()->SET("checklevel", level);
+                    action.getDB()->WHERE("id", nssetID);
+                    if (action.getDB()->EXEC() == false)
+                        code = COMMAND_FAILED;
                 }
 
                 //-------- TECH contacts
@@ -4303,103 +4163,101 @@ ccReg::Response* ccReg_EPP_i::NSSetUpdate(
                 // add tech contacts
                 for (i = 0; i < tech_add.length(); i++) {
 
-                  LOG( NOTICE_LOG , "INSERT add techid ->%d [%s]" , tch_add[i] , (const char *) tech_add[i] );
-                  if ( !DBsql.AddContactMap("nsset", nssetID, tch_add[i]) ) {
-                    ret->code = COMMAND_FAILED;
-                    break;
-                  }
+                    LOG( NOTICE_LOG , "INSERT add techid ->%d [%s]" , tch_add[i] , (const char *) tech_add[i] );
+                    if ( !action.getDB()->AddContactMap("nsset", nssetID, tch_add[i]) ) {
+                        code = COMMAND_FAILED;
+                        break;
+                    }
 
                 }
 
                 // delete  tech contacts
                 for (i = 0; i < tech_rem.length(); i++) {
 
-                  LOG( NOTICE_LOG , "DELETE rem techid ->%d [%s]" , tch_rem[i] , (const char *) tech_rem[i] );
-                  if ( !DBsql.DeleteFromTableMap("nsset", nssetID, tch_rem[i]) ) {
-                    ret->code = COMMAND_FAILED;
-                    break;
-                  }
+                    LOG( NOTICE_LOG , "DELETE rem techid ->%d [%s]" , tch_rem[i] , (const char *) tech_rem[i] );
+                    if ( !action.getDB()->DeleteFromTableMap("nsset", nssetID, tch_rem[i]) ) {
+                        code = COMMAND_FAILED;
+                        break;
+                    }
 
                 }
 
                 //--------- TEST for numer of tech-c after  ADD & REM
                 // only if the tech-c remove
                 if (tech_rem.length() > 0) {
-                  techNum = DBsql.GetNSSetContacts(nssetID);
-                  LOG(NOTICE_LOG, "NSSetUpdate: tech Contact  %d" , techNum );
+                    techNum = action.getDB()->GetNSSetContacts(nssetID);
+                    LOG(NOTICE_LOG, "NSSetUpdate: tech Contact  %d" , techNum );
 
-                  if (techNum == 0) // can not be nsset without tech-c
-                  {
+                    if (techNum == 0) // can not be nsset without tech-c
+                    {
 
-                    // marked all  REM tech-c as param  errors
-                    for (i = 0; i < tech_rem.length(); i++) {
-                      ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_VALUE_POLICY_ERROR,
-                          ccReg::nsset_tech_rem, i+1,
-                          REASON_MSG_CAN_NOT_REMOVE_TECH,
-                          GetRegistrarLang(clientID) );
+                        // marked all  REM tech-c as param  errors
+                        for (i = 0; i < tech_rem.length(); i++) {
+                            code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                                    ccReg::nsset_tech_rem, i + 1,
+                                    REASON_MSG_CAN_NOT_REMOVE_TECH);
+                        }
                     }
-                  }
                 }
 
                 // delete DNS HOSTY  first step
                 for (i = 0; i < dns_rem.length(); i++) {
-                  LOG( NOTICE_LOG , "NSSetUpdate:  delete  host  [%s] " , (const char *) dns_rem[i].fqdn );
+                    LOG( NOTICE_LOG , "NSSetUpdate:  delete  host  [%s] " , (const char *) dns_rem[i].fqdn );
 
-                  convert_hostname(NAME, dns_rem[i].fqdn);
-                  hostID = DBsql.GetHostID(NAME, nssetID);
-                  LOG( NOTICE_LOG , "DELETE  hostID %d" , hostID );
-                  if ( !DBsql.DeleteFromTable("HOST", "id", hostID) )
-                    ret->code = COMMAND_FAILED;
-                  else if ( !DBsql.DeleteFromTable("HOST_IPADDR_map", "hostID",
-                      hostID) )
-                    ret->code = COMMAND_FAILED;
+                    convert_hostname(NAME, dns_rem[i].fqdn);
+                    hostID = action.getDB()->GetHostID(NAME, nssetID);
+                    LOG( NOTICE_LOG , "DELETE  hostID %d" , hostID );
+                    if ( !action.getDB()->DeleteFromTable("HOST", "id", hostID) )
+                        code = COMMAND_FAILED;
+                    else if ( !action.getDB()->DeleteFromTable("HOST_IPADDR_map", "hostID",
+                                hostID) )
+                        code = COMMAND_FAILED;
                 }
 
                 //-------- add  DNS HOSTs second step
 
                 for (i = 0; i < dns_add.length(); i++) {
-                  // to lowe case
-                  convert_hostname(NAME, dns_add[i].fqdn);
+                    // to lowe case
+                    convert_hostname(NAME, dns_add[i].fqdn);
 
-                  // hostID from sequence
-                  hostID = DBsql.GetSequenceID("host");
+                    // hostID from sequence
+                    hostID = action.getDB()->GetSequenceID("host");
 
-                  // HOST information
-                  DBsql.INSERT("HOST");
-                  DBsql.INTO("ID");
-                  DBsql.INTO("nssetid");
-                  DBsql.INTO("fqdn");
-                  DBsql.VALUE(hostID);
-                  DBsql.VALUE(nssetID); // add nssetID
-                  DBsql.VALUE(NAME);
-                  if (DBsql.EXEC()) // add all IP address
-                  {
+                    // HOST information
+                    action.getDB()->INSERT("HOST");
+                    action.getDB()->INTO("ID");
+                    action.getDB()->INTO("nssetid");
+                    action.getDB()->INTO("fqdn");
+                    action.getDB()->VALUE(hostID);
+                    action.getDB()->VALUE(nssetID); // add nssetID
+                    action.getDB()->VALUE(NAME);
+                    if (action.getDB()->EXEC()) // add all IP address
+                    {
 
-                    for (j = 0; j < dns_add[i].inet.length(); j++) {
-                      LOG( NOTICE_LOG , "insert  IP address hostID  %d [%s] ", hostID , (const char *) dns_add[i].inet[j] );
+                        for (j = 0; j < dns_add[i].inet.length(); j++) {
+                            LOG( NOTICE_LOG , "insert  IP address hostID  %d [%s] ", hostID , (const char *) dns_add[i].inet[j] );
 
-                      // insert ipaddr with hostID and nssetID
-                      DBsql.INSERT("HOST_IPADDR_map");
-                      DBsql.INTO("HOSTID");
-                      DBsql.INTO("NSSETID");
-                      DBsql.INTO("ipaddr");
-                      DBsql.VALUE(hostID);
-                      DBsql.VALUE(nssetID);
-                      DBsql.VVALUE(dns_add[i].inet[j]);
+                            // insert ipaddr with hostID and nssetID
+                            action.getDB()->INSERT("HOST_IPADDR_map");
+                            action.getDB()->INTO("HOSTID");
+                            action.getDB()->INTO("NSSETID");
+                            action.getDB()->INTO("ipaddr");
+                            action.getDB()->VALUE(hostID);
+                            action.getDB()->VALUE(nssetID);
+                            action.getDB()->VVALUE(dns_add[i].inet[j]);
 
-                      // if failed
-                      if (DBsql.EXEC() == false) {
-                        ret->code = COMMAND_FAILED;
+                            // if failed
+                            if (action.getDB()->EXEC() == false) {
+                                code = COMMAND_FAILED;
+                                break;
+                            }
+
+                        }
+
+                    } else {
+                        code = COMMAND_FAILED;
                         break;
-                      }
-
-                    }
-
-                  } else {
-                    ret->code = COMMAND_FAILED;
-                    break;
-                  } // if add host failed
+                    } // if add host failed
 
 
                 }
@@ -4407,71 +4265,58 @@ ccReg::Response* ccReg_EPP_i::NSSetUpdate(
                 //------- TEST number DNS host after REM & ADD
                 //  only if the add or rem
                 if (dns_rem.length() > 0 || dns_add.length() > 0) {
-                  hostNum = DBsql.GetNSSetHosts(nssetID);
-                  LOG(NOTICE_LOG, "NSSetUpdate:  hostNum %d" , hostNum );
+                    hostNum = action.getDB()->GetNSSetHosts(nssetID);
+                    LOG(NOTICE_LOG, "NSSetUpdate:  hostNum %d" , hostNum );
 
-                  if (hostNum < 2) //  minimal two DNS
-                  {
-                    for (i = 0; i < dns_rem.length(); i++) {
-                      // marked all  REM DNS hots as param error
-                      ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_VALUE_POLICY_ERROR,
-                          ccReg::nsset_dns_name_rem, i+1,
-                          REASON_MSG_CAN_NOT_REM_DNS,
-                          GetRegistrarLang(clientID) );
+                    if (hostNum < 2) //  minimal two DNS
+                    {
+                        for (i = 0; i < dns_rem.length(); i++) {
+                            // marked all  REM DNS hots as param error
+                            code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                                    ccReg::nsset_dns_name_rem, i + 1,
+                                    REASON_MSG_CAN_NOT_REM_DNS);
+                        }
                     }
-                  }
 
-                  if (hostNum > 9) // maximal number
-                  {
-                    for (i = 0; i < dns_add.length(); i++) {
-                      // marked all ADD dns host  as param error
-                      ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_VALUE_POLICY_ERROR,
-                          ccReg::nsset_dns_name_add, i +1,
-                          REASON_MSG_CAN_NOT_ADD_DNS,
-                          GetRegistrarLang(clientID) );
+                    if (hostNum > 9) // maximal number
+                    {
+                        for (i = 0; i < dns_add.length(); i++) {
+                            // marked all ADD dns host  as param error
+                            code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                                    ccReg::nsset_dns_name_add, i + 1,
+                                    REASON_MSG_CAN_NOT_ADD_DNS);
+                        }
                     }
-                  }
 
                 }
 
                 // save to history if not errors
-                if (ret->code == 0)
-                  if (DBsql.SaveNSSetHistory(nssetID) )
-                    ret->code = COMMAND_OK; // set up successfully as default
+                if (code == 0)
+                    if (action.getDB()->SaveNSSetHistory(nssetID) )
+                        code = COMMAND_OK; // set up successfully as default
 
 
-                if (ret->code == COMMAND_OK)
-                  ntf->Send(); // send messages if is OK
+                if (code == COMMAND_OK)
+                    ntf->Send(); // send messages if is OK
 
 
-              }
+            }
 
-          }
-          DBsql.QuitTransaction(ret->code);
-        }
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
-      }
+    }
+    // free mem
+    delete[] tch_add;
+    delete[] tch_rem;
 
-      ret->msg =CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-
-      DBsql.Disconnect();
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
     }
 
-  // free mem
-  delete[] tch_add;
-  delete[] tch_rem;
+    if (code == 0) {
+        action.failedInternal("NSSetUpdate");
+    }
 
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
-
-  if (ret->code == 0)
-    ServerInternalError("NSSetUpdate");
-
-  return ret._retn();
+    return action.getRet()._retn();
 }
 
 /***********************************************************************
@@ -4493,6 +4338,7 @@ ccReg::Response* ccReg_EPP_i::DomainInfo(
   const char* fqdn, ccReg::Domain_out d, CORBA::Long clientID,
   const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -4611,92 +4457,71 @@ ccReg::Response* ccReg_EPP_i::DomainInfo(
 ccReg::Response* ccReg_EPP_i::DomainDelete(
   const char* fqdn, CORBA::Long clientID, const char* clTRID, const char* XML)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
-  DB DBsql;
-  std::auto_ptr<EPPNotifier> ntf;
-  int regID, id, zone;
-  ret = new ccReg::Response;
-  errors = new ccReg::Errors;
+    std::auto_ptr<EPPNotifier> ntf;
+    int id, zone;
+    short int code = 0;
 
-  // default
-  ret->code=0;
-  errors->length(0);
+    ParsedAction paction;
+    paction.add(1,(const char*)fqdn);
 
-  ParsedAction paction;
-  paction.add(1,(const char*)fqdn);
+    EPPAction action(this, clientID, EPP_DomainDelete, clTRID, XML, &paction);
 
-  LOG( NOTICE_LOG , "DomainDelete: clientID -> %d clTRID [%s] fqdn  [%s] " , (int ) clientID , clTRID , fqdn );
+    LOG( NOTICE_LOG , "DomainDelete: clientID -> %d clTRID [%s] fqdn  [%s] " , (int ) clientID , clTRID , fqdn );
 
-  if ( (regID = GetRegistrarID(clientID) ))
-
-    if (DBsql.OpenDatabase(database) ) {
-
-      if ( (DBsql.BeginAction(clientID, EPP_DomainDelete, clTRID, XML, &paction) )) {
-
-        if (DBsql.BeginTransaction() ) {
-          if ( (id = getIdOfDomain(&DBsql, fqdn, conf, true, &zone) ) < 0)
-            ret->code=SetReasonDomainFQDN(errors, fqdn, id == -1,
-                GetRegistrarLang(clientID) );
-          else if (id == 0) {
-            LOG( WARNING_LOG, "domain  [%s] NOT_EXIST", fqdn );
-            ret->code=COMMAND_OBJECT_NOT_EXIST;
-          }
-          else if (DBsql.TestRegistrarZone(regID, zone) == false) {
-            LOG( WARNING_LOG, "Authentication error to zone: %d " , zone );
-            ret->code = COMMAND_AUTHENTICATION_ERROR;
-          }
-          else if ( !DBsql.TestObjectClientID(id, regID) ) {
-            LOG( WARNING_LOG, "bad autorization not client of fqdn [%s]", fqdn );
-            ret->code = SetReasonWrongRegistrar(errors, regID, GetRegistrarLang(clientID));
-          }
-          try {
-            if (!ret->code && (
-                 testObjectHasState(&DBsql,id,FLAG_serverDeleteProhibited) ||
-                 testObjectHasState(&DBsql,id,FLAG_serverUpdateProhibited)
-               ))
-            {
-              LOG( WARNING_LOG, "delete of object %s is prohibited" , fqdn );
-              ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
-            }
-          } catch (...) {
-            ret->code = COMMAND_FAILED;
-          }
-          if (!ret->code) {
-                // run notifier
-                ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , &DBsql, regID , id ));
-
-                if (DBsql.SaveObjectDelete(id) ) //save object as delete
-                {
-                  if (DBsql.DeleteDomainObject(id) )
-                    ret->code = COMMAND_OK; // if succesfully deleted
-                }
-                if (ret->code == COMMAND_OK)
-                  ntf->Send(); // if is ok send messages
-          }
-
-            DBsql.QuitTransaction(ret->code);
-          }
-
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
-      }
-
-      ret->msg =CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-
-      DBsql.Disconnect();
+    if ( (id = getIdOfDomain(action.getDB(), fqdn, conf, true, &zone) ) <= 0) {
+        LOG( WARNING_LOG, "domain  [%s] NOT_EXIST", fqdn );
+        code=COMMAND_OBJECT_NOT_EXIST;
     }
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
+    else if (action.getDB()->TestRegistrarZone(action.getRegistrar(), zone) == false) {
+        LOG( WARNING_LOG, "Authentication error to zone: %d " , zone );
+        code = COMMAND_AUTHENTICATION_ERROR;
+    }
+    else if ( !action.getDB()->TestObjectClientID(id, action.getRegistrar()) ) {
+        LOG( WARNING_LOG, "bad autorization not client of fqdn [%s]", fqdn );
+        code = action.setErrorReason(COMMAND_AUTOR_ERROR,
+                ccReg::registrar_autor, 0, REASON_MSG_REGISTRAR_AUTOR);
+    }
+    try {
+        if (!code && (
+                    testObjectHasState(action.getDB(),id,FLAG_serverDeleteProhibited) ||
+                    testObjectHasState(action.getDB(),id,FLAG_serverUpdateProhibited)
+                    ))
+        {
+            LOG( WARNING_LOG, "delete of object %s is prohibited" , fqdn );
+            code = COMMAND_STATUS_PROHIBITS_OPERATION;
+        }
+    } catch (...) {
+        code = COMMAND_FAILED;
+    }
+    if (!code) {
+        // run notifier
+        bool notify = !disableNotification(action.getDB(), action.getRegistrar(), clTRID);
+        if (notify)
+            ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , action.getDB(), action.getRegistrar() , id ));
 
-  if (ret->code == 0)
-    ServerInternalError("DomainDelete");
+        if (action.getDB()->SaveObjectDelete(id) ) //save object as delete
+        {
+            if (action.getDB()->DeleteDomainObject(id) )
+                code = COMMAND_OK; // if succesfully deleted
+        }
+        if (code == COMMAND_OK && notify)
+            ntf->Send(); // if is ok send messages
+    }
 
-  return ret._retn();
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
+
+    if (code == 0) {
+        action.failedInternal("DomainDelete");
+    }
+
+    return action.getRet()._retn();
 }
 
 /***********************************************************************
@@ -4727,380 +4552,415 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
   const ccReg::AdminContact& tmpcontact_rem, CORBA::Long clientID,
   const char *clTRID, const char* XML, const ccReg::ExtensionList & ext)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
-  std::auto_ptr<EPPNotifier> ntf;
-  DB DBsql;
-  char valexpiryDate[MAX_DATE+1];
-  int regID = 0, id, nssetid, contactid, adminid, keysetid;
-  int seq, zone;
-  std::vector<int> ac_add, ac_rem, tc_rem;
-  unsigned int i, j;
+    std::auto_ptr<EPPNotifier> ntf;
+    char valexpiryDate[MAX_DATE+1];
+    int id, nssetid, contactid, adminid, keysetid;
+    int seq, zone;
+    std::vector<int> ac_add, ac_rem, tc_rem;
+    unsigned int i, j;
+    short int code = 0;
 
-  ret = new ccReg::Response;
-  errors = new ccReg::Errors;
+    seq=0;
 
-  seq=0;
-  ret->code = 0;
-  errors->length( 0);
+    ParsedAction paction;
+    paction.add(1,(const char*)fqdn);
 
-  ParsedAction paction;
-  paction.add(1,(const char*)fqdn);
+    EPPAction action(this, clientID, EPP_DomainUpdate, clTRID, XML, &paction);
 
-  LOG( NOTICE_LOG, "DomainUpdate: clientID -> %d clTRID [%s] fqdn  [%s] , registrant_chg  [%s] authInfo_chg [%s]  nsset_chg [%s] keyset_chg[%s] ext.length %ld",
-      (int ) clientID, clTRID, fqdn, registrant_chg, authInfo_chg, nsset_chg , keyset_chg, (long)ext.length() );
+    LOG( NOTICE_LOG, "DomainUpdate: clientID -> %d clTRID [%s] fqdn  [%s] , registrant_chg  [%s] authInfo_chg [%s]  nsset_chg [%s] keyset_chg[%s] ext.length %ld",
+            (int ) clientID, clTRID, fqdn, registrant_chg, authInfo_chg, nsset_chg , keyset_chg, (long)ext.length() );
 
-  ac_add.resize(admin_add.length());
-  ac_rem.resize(admin_rem.length());
-  tc_rem.resize(tmpcontact_rem.length());
+    ac_add.resize(admin_add.length());
+    ac_rem.resize(admin_rem.length());
+    tc_rem.resize(tmpcontact_rem.length());
 
-  // parse enum.Exdate extension
-  GetValExpDateFromExtension(valexpiryDate, ext);
+    // parse enum.Exdate extension
+    GetValExpDateFromExtension(valexpiryDate, ext);
 
-  if ( (regID = GetRegistrarID(clientID) ))
-      LOG(NOTICE_LOG, "registrarID: %d", regID);
+    if ( (id = getIdOfDomain(action.getDB(), fqdn, conf, true, &zone) ) <= 0) {
+        LOG( WARNING_LOG, "domain  [%s] NOT_EXIST", fqdn );
+        code=COMMAND_OBJECT_NOT_EXIST;
+    }
+    else if (action.getDB()->TestRegistrarZone(action.getRegistrar(), zone) == false) // test registrar autority to the zone
+    {
+        LOG( WARNING_LOG, "Authentication error to zone: %d " , zone );
+        code = COMMAND_AUTHENTICATION_ERROR;
+    }
+    // if not client of the domain
+    else if ( !action.getDB()->TestObjectClientID(id, action.getRegistrar()) ) {
+        LOG( WARNING_LOG, "bad autorization not client of domain [%s]", fqdn );
+        code = action.setErrorReason(COMMAND_AUTOR_ERROR,
+                ccReg::registrar_autor, 0,
+                REASON_MSG_REGISTRAR_AUTOR);
+    }
 
-    if (DBsql.OpenDatabase(database) ) {
+    if (!code) {
+        try {
+            if (!code && testObjectHasState(action.getDB(),id,FLAG_serverUpdateProhibited)) {
+                LOG( WARNING_LOG, "update of object %s is prohibited" , fqdn );
+                code = COMMAND_STATUS_PROHIBITS_OPERATION;
+            }
+        } catch (...) {
+            code = COMMAND_FAILED;
+        }
+    }
 
-      if ( (DBsql.BeginAction(clientID, EPP_DomainUpdate, clTRID, XML, &paction) )) {
+    if ( !code) {
 
-        if (DBsql.BeginTransaction()) {
-          if ( (id = getIdOfDomain(&DBsql, fqdn, conf, true, &zone) ) < 0)
-            ret->code=SetReasonDomainFQDN(errors, fqdn, id == -1,
-                GetRegistrarLang(clientID) );
-          else if (id == 0) {
-            LOG( WARNING_LOG, "domain  [%s] NOT_EXIST", fqdn );
-            ret->code=COMMAND_OBJECT_NOT_EXIST;
-          }
-          else if (DBsql.TestRegistrarZone(regID, zone) == false) // test registrar autority to the zone
-          {
-            LOG( WARNING_LOG, "Authentication error to zone: %d " , zone );
-            ret->code = COMMAND_AUTHENTICATION_ERROR;
-          }
-          // if not client of the domain
-          else if ( !DBsql.TestObjectClientID(id, regID) ) {
-            LOG( WARNING_LOG, "bad autorization not client of domain [%s]", fqdn );
-            ret->code = SetReasonWrongRegistrar(errors, regID, GetRegistrarLang(clientID));
-          }
-
-          if (!ret->code) {
-              try {
-                  if (!ret->code && testObjectHasState(&DBsql,id,FLAG_serverUpdateProhibited)) {
-                      LOG( WARNING_LOG, "update of object %s is prohibited" , fqdn );
-                      ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
-                  }
-              } catch (...) {
-                  ret->code = COMMAND_FAILED;
-              }
-          }
-
-          if ( !ret->code) {
-
-            // test  ADD admin-c
-            for (i = 0; i < admin_add.length(); i++) {
-              LOG( NOTICE_LOG , "admin ADD contact %s" , (const char *) admin_add[i] );
-              if ( (adminid = getIdOfContact(&DBsql, admin_add[i], conf) ) <= 0)
-                ret->code = SetReasonDomainAdminADD(errors, admin_add[i],
-                    adminid, GetRegistrarLang(clientID) , i);
-              else {
-                if (DBsql.CheckContactMap("domain", id, adminid, 1) )
-                  ret->code = SetReasonDomainAdminExistMap(errors,
-                      admin_add[i], GetRegistrarLang(clientID) , i);
-                else {
-                  ac_add[i] = adminid;
-                  for (j = 0; j < i; j ++)
-                    // test  duplicity
-                    if (ac_add[j] == adminid && ac_add[j] > 0) {
-                      ac_add[j] = 0;
-                      ret->code = SetReasonContactDuplicity(errors,
-                          admin_add[i], GetRegistrarLang(clientID) , i,
-                          ccReg::domain_admin_add);
-                    }
+        // test  ADD admin-c
+        for (i = 0; i < admin_add.length(); i++) {
+            LOG( NOTICE_LOG , "admin ADD contact %s" , (const char *) admin_add[i] );
+            adminid = getIdOfContact(action.getDB(), admin_add[i], conf);
+            if (adminid < 0) {
+                LOG(WARNING_LOG, "bad format of contact %s", (const char *)admin_add[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_admin_add, i + 1,
+                        REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+            } else if (adminid == 0) {
+                LOG(WARNING_LOG, "Contact %s not exist", (const char *)admin_add[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_admin_add, i + 1,
+                        REASON_MSG_ADMIN_NOTEXIST);
+            } else {
+                if (action.getDB()->CheckContactMap("domain", id, adminid, 1) ) {
+                    LOG(WARNING_LOG, "Admin Contact [%s] exist in contact map table",
+                            (const char *)admin_add[i]);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::domain_admin_add, i + 1,
+                            REASON_MSG_ADMIN_EXIST);
+                } else {
+                    ac_add[i] = adminid;
+                    for (j = 0; j < i; j ++)
+                        // test  duplicity
+                        if (ac_add[j] == adminid && ac_add[j] > 0) {
+                            ac_add[j] = 0;
+                            LOG( WARNING_LOG, "Contact [%s] duplicity " , (const char *) admin_add[i] );
+                            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                    ccReg::domain_admin_add, i + 1,
+                                    REASON_MSG_DUPLICITY_CONTACT);
+                        }
                 }
                 // admin cannot be added if there is equivalent id in temp-c
-                if (DBsql.CheckContactMap("domain", id, adminid, 2)) {
-                  // exception is when in this command there is schedulet remove of thet temp-c
-                  std::string adminHandle = (const char *)admin_add[i];
-                  bool tmpcFound = false;
-                  for (unsigned ti=0; ti<tmpcontact_rem.length(); ti++) {
-                    if (adminHandle == (const char *)tmpcontact_rem[ti]) {
-                      tmpcFound = true;
-                      break;
+                if (action.getDB()->CheckContactMap("domain", id, adminid, 2)) {
+                    // exception is when in this command there is schedulet remove of thet temp-c
+                    std::string adminHandle = (const char *)admin_add[i];
+                    bool tmpcFound = false;
+                    for (unsigned ti=0; ti<tmpcontact_rem.length(); ti++) {
+                        if (adminHandle == (const char *)tmpcontact_rem[ti]) {
+                            tmpcFound = true;
+                            break;
+                        }
                     }
-                  }
-                  if (!tmpcFound)
-                    ret->code = SetReasonDomainAdminExistMap(errors,
-                        admin_add[i], GetRegistrarLang(clientID) , i);
-                }
-              }
-            }
-
-            // test REM admin-c
-            for (i = 0; i < admin_rem.length(); i++) {
-              LOG( NOTICE_LOG , "admin REM contact %s" , (const char *) admin_rem[i] );
-              if ( (adminid = getIdOfContact(&DBsql, admin_rem[i], conf) ) <= 0)
-                ret->code = SetReasonDomainAdminREM(errors, admin_rem[i],
-                    adminid, GetRegistrarLang(clientID) , i);
-              else {
-                if ( !DBsql.CheckContactMap("domain", id, adminid, 1) )
-                  ret->code = SetReasonDomainAdminNotExistMap(errors,
-                      admin_rem[i], GetRegistrarLang(clientID) , i);
-                else {
-
-                  ac_rem[i] = adminid;
-                  for (j = 0; j < i; j ++)
-                    // test  duplicity
-                    if (ac_rem[j] == adminid && ac_rem[j] > 0) {
-                      ac_rem[j] = 0;
-                      ret->code = SetReasonContactDuplicity(errors,
-                          admin_rem[i], GetRegistrarLang(clientID) , i,
-                          ccReg::domain_admin_rem);
+                    if (!tmpcFound) {
+                        LOG(WARNING_LOG, "Admin Contact [%s] exist in contact map table",
+                                (const char *)admin_add[i]);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::domain_admin_add, i + 1,
+                                REASON_MSG_ADMIN_EXIST);
                     }
-
                 }
-              }
             }
+        }
 
-            // test REM temp-c
-            for (i = 0; i < tmpcontact_rem.length(); i++) {
-              LOG( NOTICE_LOG , "temp REM contact %s" , (const char *) tmpcontact_rem[i] );
-              if ( (adminid = getIdOfContact(&DBsql, tmpcontact_rem[i], conf) )
-                  <= 0)
-                ret->code = SetReasonDomainTempCREM(errors, tmpcontact_rem[i],
-                    adminid, GetRegistrarLang(clientID) , i);
-              else {
-                if ( !DBsql.CheckContactMap("domain", id, adminid, 2) )
-                  ret->code = SetReasonDomainTempCNotExistMap(errors,
-                      tmpcontact_rem[i], GetRegistrarLang(clientID) , i);
-                else {
-
-                  tc_rem[i] = adminid;
-                  for (j = 0; j < i; j ++)
-                    // test  duplicity
-                    if (tc_rem[j] == adminid && ac_rem[j] > 0) {
-                      tc_rem[j] = 0;
-                      ret->code = SetReasonContactDuplicity(errors,
-                          tmpcontact_rem[i], GetRegistrarLang(clientID) , i,
-                          ccReg::domain_admin_rem);
+        // test REM admin-c
+        for (i = 0; i < admin_rem.length(); i++) {
+            LOG( NOTICE_LOG , "admin REM contact %s" , (const char *) admin_rem[i] );
+            adminid = getIdOfContact(action.getDB(), admin_rem[i], conf);
+            if (adminid < 0) {
+                LOG(WARNING_LOG, "bad format of contact %s", (const char *)admin_rem[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_admin_rem, i + 1,
+                        REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+            } else if (adminid == 0) {
+                LOG(WARNING_LOG, "Contact %s not exist", (const char *)admin_rem[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_admin_rem, i + 1,
+                        REASON_MSG_ADMIN_NOTEXIST);
+            } else {
+                if ( !action.getDB()->CheckContactMap("domain", id, adminid, 1) ) {
+                    LOG(WARNING_LOG, "Admin Contact [%s] not exist in contact map table",
+                            (const char *)admin_rem[i]);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::domain_admin_rem, i + 1,
+                            REASON_MSG_ADMIN_NOTEXIST);
+                } else {
+                    ac_rem[i] = adminid;
+                    for (j = 0; j < i; j ++) {
+                        // test  duplicity
+                        if (ac_rem[j] == adminid && ac_rem[j] > 0) {
+                            ac_rem[j] = 0;
+                            LOG(WARNING_LOG, "Contact [%s] duplicity", (const char *)admin_rem[i]);
+                            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                    ccReg::domain_admin_rem, i,
+                                    REASON_MSG_DUPLICITY_CONTACT);
+                        }
                     }
+                }
+            }
+        }
+
+        // test REM temp-c
+        for (i = 0; i < tmpcontact_rem.length(); i++) {
+            LOG( NOTICE_LOG , "temp REM contact %s" , (const char *) tmpcontact_rem[i] );
+            adminid = getIdOfContact(action.getDB(), tmpcontact_rem[i], conf);
+            if (adminid < 0) {
+                LOG(WARNING_LOG, "bad format of contact %s", (const char *)tmpcontact_rem[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_tmpcontact, i + 1,
+                        REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+            } else if (adminid == 0) {
+                LOG(WARNING_LOG, "Contact %s not exist", (const char *)tmpcontact_rem[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_tmpcontact, i + 1,
+                        REASON_MSG_ADMIN_NOTEXIST);
+            } else {
+                if ( !action.getDB()->CheckContactMap("domain", id, adminid, 2) ) {
+                    LOG(WARNING_LOG, "Temp Contact [%s] notexist in contact map table",
+                            (const char *)tmpcontact_rem[i]);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::domain_tmpcontact, i + 1,
+                            REASON_MSG_ADMIN_NOTEXIST);
+                } else {
+
+                    tc_rem[i] = adminid;
+                    for (j = 0; j < i; j ++)
+                        // test  duplicity
+                        if (tc_rem[j] == adminid && ac_rem[j] > 0) {
+                            tc_rem[j] = 0;
+                            LOG(WARNING_LOG, "Contact [%s] duplicity", (const char *)tmpcontact_rem[i]);
+                            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                    ccReg::domain_admin_rem, i,
+                                    REASON_MSG_DUPLICITY_CONTACT);
+                        }
 
                 }
-              }
             }
+        }
 
-            if (strlen(nsset_chg) == 0)
-              nssetid = 0; // not change nsset;
-            else {
-              if (nsset_chg[0] == 0x8)
+        if (strlen(nsset_chg) == 0)
+            nssetid = 0; // not change nsset;
+        else {
+            if (nsset_chg[0] == 0x8)
                 nssetid = -1; // backslash escape to  NULL value
-              else {
-                if ( (nssetid = getIdOfNSSet(&DBsql, nsset_chg, conf) ) <= 0)
-                  ret->code = SetReasonDomainNSSet(errors, nsset_chg, nssetid,
-                      GetRegistrarLang(clientID) );
-              }
-            }
-
-            if (strlen(keyset_chg) == 0)
-                keysetid = 0; // not change keyset
             else {
-                // XXX ungly hack because i dont know how to write 0x8 on console :(
-                // should be removed before going to standard usage
-                if (keyset_chg[0] == 0x8 || keyset_chg[0] == '-')
-                    keysetid = -1;
-                else {
-                    if ((keysetid = getIdOfKeySet(&DBsql, keyset_chg, conf)) <= 0)
-                        ret->code = SetReasonDomainKeySet(errors, keyset_chg,
-                                keysetid, GetRegistrarLang(clientID));
+                nssetid = getIdOfNSSet(action.getDB(), nsset_chg, conf);
+                if (nssetid < 0) {
+                    LOG(WARNING_LOG, "bad format of domain nsset [%s]", nsset_chg);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::domain_nsset, 1, REASON_MSG_BAD_FORMAT_NSSET_HANDLE);
+                } else if (nssetid == 0) {
+                    LOG(WARNING_LOG, "domain nsset not exist [%s]", nsset_chg);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::domain_nsset, 1, REASON_MSG_NSSET_NOTEXIST);
                 }
             }
+        }
 
-            //  owner of domain
-            if (strlen(registrant_chg) == 0)
-              contactid = 0; // not change owner
-            else if ( (contactid = getIdOfContact(&DBsql, registrant_chg, conf) )
-                <= 0)
-              ret->code = SetReasonDomainRegistrant(errors, registrant_chg,
-                  contactid, GetRegistrarLang(clientID) );
+        if (strlen(keyset_chg) == 0)
+            keysetid = 0; // not change keyset
+        else {
+            // XXX ungly hack because i dont know how to write 0x8 on console :(
+            // should be removed before going to standard usage
+            if (keyset_chg[0] == 0x8 || keyset_chg[0] == '-')
+                keysetid = -1;
+            else {
+                keysetid = getIdOfKeySet(action.getDB(), keyset_chg, conf);
+                if (keysetid < 0) {
+                    LOG(WARNING_LOG, "bad format of domain keyset [%s]", keyset_chg);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::domain_keyset, 1, REASON_MSG_KEYSET_NOTEXIST);
+                } else if (keysetid == 0) {
+                    LOG(WARNING_LOG, "domain keyset not exist [%s]", keyset_chg);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::domain_keyset, 1, REASON_MSG_KEYSET_NOTEXIST);
+                }
+            }
+        }
 
-            if (strlen(valexpiryDate) ) {
-              // Test for  enum domain
-              if (GetZoneEnum(zone) ) {
-                if (DBsql.TestValExDate(valexpiryDate, GetZoneValPeriod(zone) ,
-                    DefaultValExpInterval() , id) == false) // test validace expirace
+        //  owner of domain
+        if (strlen(registrant_chg) == 0) {
+            contactid = 0; // not change owner
+        } else {
+            contactid = getIdOfContact(action.getDB(), registrant_chg, conf);
+            if (contactid < 0) {
+                LOG(WARNING_LOG, "bad format of registrar [%s]", registrant_chg);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_registrant, 1, REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+            } else if (contactid == 0) {
+                LOG(WARNING_LOG, "domain registrar not exist [%s]", registrant_chg);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                        ccReg::domain_registrant, 1, REASON_MSG_REGISTRANT_NOTEXIST);
+            }
+
+        }
+        if (strlen(valexpiryDate) ) {
+            // Test for  enum domain
+            if (GetZoneEnum(zone) ) {
+                if (action.getDB()->TestValExDate(valexpiryDate, GetZoneValPeriod(zone) ,
+                            DefaultValExpInterval() , id) == false) // test validace expirace
                 {
-                  LOG( WARNING_LOG, "DomainUpdate:  validity exp date is not valid %s" , valexpiryDate );
-                  ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_RANGE_ERROR, ccReg::domain_ext_valDate,
-                      1,
-                      REASON_MSG_VALEXPDATE_NOT_VALID,
-                      GetRegistrarLang(clientID) );
+                    LOG( WARNING_LOG, "DomainUpdate:  validity exp date is not valid %s" , valexpiryDate );
+                    code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+                            ccReg::domain_ext_valDate, 1, REASON_MSG_VALEXPDATE_NOT_VALID);
                 }
 
-              } else {
+            } else {
 
                 LOG( WARNING_LOG, "DomainUpdate: can not  validity exp date %s" , valexpiryDate );
-                ret->code = SetErrorReason(errors,
-                COMMAND_PARAMETR_VALUE_POLICY_ERROR, ccReg::domain_ext_valDate,
-                    1, REASON_MSG_VALEXPDATE_NOT_USED,
-                    GetRegistrarLang(clientID) );
+                code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                        ccReg::domain_ext_valDate, 1, REASON_MSG_VALEXPDATE_NOT_USED);
 
-              }
             }
-            if (strlen(registrant_chg) != 0) {
-              try {
-                if (!ret->code && testObjectHasState(&DBsql,id,FLAG_serverRegistrantChangeProhibited))
+        }
+        if (strlen(registrant_chg) != 0) {
+            try {
+                if (!code && testObjectHasState(action.getDB(),id,FLAG_serverRegistrantChangeProhibited))
                 {
-                  LOG( WARNING_LOG, "registrant change %s is prohibited" , fqdn );
-                  ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
+                    LOG( WARNING_LOG, "registrant change %s is prohibited" , fqdn );
+                    code = COMMAND_STATUS_PROHIBITS_OPERATION;
                 }
-              } catch (...) {
-                ret->code = COMMAND_FAILED;
-              }
+            } catch (...) {
+                code = COMMAND_FAILED;
             }
-            if (ret->code == 0) {
+        }
+        if (code == 0) {
 
-              // BEGIN notifier
-              // notify default contacts
-              ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , &DBsql, regID , id ));
+            // BEGIN notifier
+            // notify default contacts
+            ntf.reset(new EPPNotifier(
+                          conf.get<bool>("registry.disable_epp_notifier"), mm, action.getDB(),
+                          action.getRegistrar(), id, regMan.get()));
 
-              for (i = 0; i < admin_add.length(); i++)
+            for (i = 0; i < admin_add.length(); i++)
                 ntf->AddAdminNew(ac_add[i]); // notifier new ADMIN contact
 
-              //  NSSET change  if  NULL value   nssetid = -1
-              if (nssetid != 0) {
+            //  NSSET change  if  NULL value   nssetid = -1
+            if (nssetid != 0) {
                 ntf->AddNSSetTechByDomain(id); // notifier tech-c old nsset
                 if (nssetid > 0)
-                  ntf->AddNSSetTech(nssetid); // tech-c changed nsset if not null
-              }
+                    ntf->AddNSSetTech(nssetid); // tech-c changed nsset if not null
+            }
 
-              //KeySet change if NULL valus      keysetid = -1
-              if (keysetid != 0) {
-                  ntf->AddKeySetTechByDomain(id); //notifier tech-c old keyset
-                  if (keysetid > 0)
-                      ntf->AddKeySetTech(keysetid); //tech-c changed keyset if not null
-              }
+            //KeySet change if NULL valus      keysetid = -1
+            if (keysetid != 0) {
+                ntf->AddKeySetTechByDomain(id); //notifier tech-c old keyset
+                if (keysetid > 0)
+                    ntf->AddKeySetTech(keysetid); //tech-c changed keyset if not null
+            }
 
-              // change owner of domain send to new registrant
-              if (contactid)
+            // change owner of domain send to new registrant
+            if (contactid)
                 ntf->AddRegistrantNew(contactid);
 
-              // END notifier
+            // END notifier
 
-              // begin update
-              if (DBsql.ObjectUpdate(id, regID, authInfo_chg) ) {
+            // begin update
+            if (action.getDB()->ObjectUpdate(id, action.getRegistrar(), authInfo_chg) ) {
 
                 if (nssetid || contactid || keysetid) // update domain table only if change
                 {
-                  // change record of domain
-                  DBsql.UPDATE("DOMAIN");
+                    // change record of domain
+                    action.getDB()->UPDATE("DOMAIN");
 
-                  if (nssetid > 0)
-                    DBsql.SET("nsset", nssetid); // change nssetu
-                  else if (nssetid == -1)
-                    DBsql.SETNULL("nsset"); // delete nsset
+                    if (nssetid > 0)
+                        action.getDB()->SET("nsset", nssetid); // change nssetu
+                    else if (nssetid == -1)
+                        action.getDB()->SETNULL("nsset"); // delete nsset
 
-                  if (keysetid > 0)
-                      DBsql.SET("keyset", keysetid); // change keyset
-                  else if (keysetid == -1)
-                      DBsql.SETNULL("keyset"); // delete keyset
+                    if (keysetid > 0)
+                        action.getDB()->SET("keyset", keysetid); // change keyset
+                    else if (keysetid == -1)
+                        action.getDB()->SETNULL("keyset"); // delete keyset
 
-                  if (contactid)
-                    DBsql.SET("registrant", contactid); // change owner
+                    if (contactid)
+                        action.getDB()->SET("registrant", contactid); // change owner
 
-                  DBsql.WHEREID(id);
-                  if ( !DBsql.EXEC() )
-                    ret->code = COMMAND_FAILED;
+                    action.getDB()->WHEREID(id);
+                    if ( !action.getDB()->EXEC() )
+                        code = COMMAND_FAILED;
                 }
 
-                if (ret->code == 0) {
+                if (code == 0) {
 
-                  // change validity exdate  extension
-                  if (GetZoneEnum(zone) && strlen(valexpiryDate) > 0) {
-                    LOG( NOTICE_LOG, "change valExpDate %s ", valexpiryDate );
-                    DBsql.UPDATE("enumval");
-                    DBsql.SET("ExDate", valexpiryDate);
-                    DBsql.WHERE("domainID", id);
+                    // change validity exdate  extension
+                    if (GetZoneEnum(zone) && strlen(valexpiryDate) > 0) {
+                        LOG( NOTICE_LOG, "change valExpDate %s ", valexpiryDate );
+                        action.getDB()->UPDATE("enumval");
+                        action.getDB()->SET("ExDate", valexpiryDate);
+                        action.getDB()->WHERE("domainID", id);
 
-                    if ( !DBsql.EXEC() )
-                      ret->code = COMMAND_FAILED;
-                  }
-
-                  // REM temp-c (must be befor ADD admin-c because of uniqueness)
-                  for (i = 0; i < tmpcontact_rem.length(); i++) {
-                    if ( (adminid = getIdOfContact(&DBsql, tmpcontact_rem[i],
-                        conf) )) {
-                      LOG( NOTICE_LOG , "delete temp-c-c  -> %d [%s]" , tc_rem[i] , (const char * ) tmpcontact_rem[i] );
-                      if ( !DBsql.DeleteFromTableMap("domain", id, tc_rem[i]) ) {
-                        ret->code = COMMAND_FAILED;
-                        break;
-                      }
+                        if ( !action.getDB()->EXEC() )
+                            code = COMMAND_FAILED;
                     }
 
-                  }
+                    // REM temp-c (must be befor ADD admin-c because of uniqueness)
+                    for (i = 0; i < tmpcontact_rem.length(); i++) {
+                        if ( (adminid = getIdOfContact(action.getDB(), tmpcontact_rem[i],
+                                        conf) )) {
+                            LOG( NOTICE_LOG , "delete temp-c-c  -> %d [%s]" , tc_rem[i] , (const char * ) tmpcontact_rem[i] );
+                            if ( !action.getDB()->DeleteFromTableMap("domain", id, tc_rem[i]) ) {
+                                code = COMMAND_FAILED;
+                                break;
+                            }
+                        }
 
-                  // ADD admin-c
-                  for (i = 0; i < admin_add.length(); i++) {
-
-                    LOG( DEBUG_LOG, "DomainUpdate: add admin Contact %s id %d " , (const char *) admin_add[i] , ac_add[i] );
-                    if ( !DBsql.AddContactMap("domain", id, ac_add[i]) ) {
-                      ret->code = COMMAND_FAILED;
-                      break;
                     }
 
-                  }
+                    // ADD admin-c
+                    for (i = 0; i < admin_add.length(); i++) {
 
-                  // REM admin-c
-                  for (i = 0; i < admin_rem.length(); i++) {
-                    if ( (adminid = getIdOfContact(&DBsql, admin_rem[i], conf) )) {
-                      LOG( NOTICE_LOG , "delete admin  -> %d [%s]" , ac_rem[i] , (const char * ) admin_rem[i] );
-                      if ( !DBsql.DeleteFromTableMap("domain", id, ac_rem[i]) ) {
-                        ret->code = COMMAND_FAILED;
-                        break;
-                      }
+                        LOG( DEBUG_LOG, "DomainUpdate: add admin Contact %s id %d " , (const char *) admin_add[i] , ac_add[i] );
+                        if ( !action.getDB()->AddContactMap("domain", id, ac_add[i]) ) {
+                            code = COMMAND_FAILED;
+                            break;
+                        }
+
                     }
 
-                  }
+                    // REM admin-c
+                    for (i = 0; i < admin_rem.length(); i++) {
+                        if ( (adminid = getIdOfContact(action.getDB(), admin_rem[i], conf) )) {
+                            LOG( NOTICE_LOG , "delete admin  -> %d [%s]" , ac_rem[i] , (const char * ) admin_rem[i] );
+                            if ( !action.getDB()->DeleteFromTableMap("domain", id, ac_rem[i]) ) {
+                                code = COMMAND_FAILED;
+                                break;
+                            }
+                        }
 
-                  // save to the history on the end if is OK
-                  if (ret->code == 0)
-                    if (DBsql.SaveDomainHistory(id) )
-                      ret->code = COMMAND_OK; // set up successfully
+                    }
+
+                    // save to the history on the end if is OK
+                    if (code == 0)
+                        if (action.getDB()->SaveDomainHistory(id) )
+                            code = COMMAND_OK; // set up successfully
 
 
                 }
-
-              }
-
-              // notifier send messages
-              if (ret->code == COMMAND_OK)
-                ntf->Send();
 
             }
 
-          }
-          DBsql.QuitTransaction(ret->code);
+            // notifier send messages
+            if (code == COMMAND_OK)
+                ntf->Send();
+
         }
 
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
-      }
-
-      ret->msg =CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-
-      DBsql.Disconnect();
     }
 
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
 
-  if (ret->code == 0)
-    ServerInternalError("DomainUpdate");
+    if (code == 0) {
+        action.failedInternal("DomainUpdate");
+    }
 
-  return ret._retn();
+    return action.getRet()._retn();
 }
 
 /***********************************************************************
@@ -5142,378 +5002,374 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
         const ccReg::ExtensionList & ext
         )
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  DB DBsql;
-  std::auto_ptr<EPPNotifier> ntf;
-  char valexpiryDate[MAX_DATE+1];
-  char FQDN[164];
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
-  int contactid, regID, nssetid, adminid, id, keysetid;
-  int zone =0;
-  unsigned int i, j;
-  std::vector<int> ad;
-  int period_count;
-  char periodStr[10];
-  Register::NameIdPair dConflict;
-  Register::Domain::CheckAvailType dType;
+    std::auto_ptr<EPPNotifier> ntf;
+    char valexpiryDate[MAX_DATE+1];
+    char FQDN[164];
+    int contactid, nssetid, adminid, id, keysetid;
+    int zone =0;
+    unsigned int i, j;
+    std::vector<int> ad;
+    int period_count;
+    char periodStr[10];
+    Register::NameIdPair dConflict;
+    Register::Domain::CheckAvailType dType;
+    short int code = 0;
 
-  ret = new ccReg::Response;
-  errors = new ccReg::Errors;
+    ParsedAction paction;
+    paction.add(1,(const char*)fqdn);
 
-  // default
-  ret->code = 0;
-  errors->length();
+    crDate = CORBA::string_dup("");
+    exDate = CORBA::string_dup("");
 
-  ParsedAction paction;
-  paction.add(1,(const char*)fqdn);
+    EPPAction action(this, clientID, EPP_DomainCreate, clTRID, XML, &paction);
 
-  crDate = CORBA::string_dup("");
-  exDate = CORBA::string_dup("");
+    ad.resize(admin.length());
 
-  ad.resize(admin.length());
+    LOG( NOTICE_LOG, "DomainCreate: clientID -> %d clTRID [%s] fqdn  [%s] ",
+            (int ) clientID, clTRID, fqdn );
+    LOG( NOTICE_LOG,
+            "DomainCreate:  Registrant  [%s]  nsset [%s]  keyset [%s] AuthInfoPw [%s]",
+            Registrant, nsset, keyset, AuthInfoPw);
 
-  LOG( NOTICE_LOG, "DomainCreate: clientID -> %d clTRID [%s] fqdn  [%s] ",
-          (int ) clientID, clTRID, fqdn );
-  LOG( NOTICE_LOG,
-          "DomainCreate:  Registrant  [%s]  nsset [%s]  keyset [%s] AuthInfoPw [%s]",
-          Registrant, nsset, keyset, AuthInfoPw);
+    //  period transform from structure to month
+    // if in year
+    if (period.unit == ccReg::unit_year) {
+        period_count = period.count * 12;
+        sprintf(periodStr, "y%d", period.count);
+    }
+    // if in month
+    else if (period.unit == ccReg::unit_month) {
+        period_count = period.count;
+        sprintf(periodStr, "m%d", period.count);
+    } else
+        period_count = 0;
 
-  //  period transform from structure to month
-  // if in year
-  if (period.unit == ccReg::unit_year) {
-    period_count = period.count * 12;
-    sprintf(periodStr, "y%d", period.count);
-  }
-  // if in month
-  else if (period.unit == ccReg::unit_month) {
-    period_count = period.count;
-    sprintf(periodStr, "m%d", period.count);
-  } else
-    period_count = 0;
+    LOG( NOTICE_LOG,
+            "DomainCreate: period count %d unit %d period_count %d string [%s]" ,
+            period.count , period.unit , period_count , periodStr);
 
-  LOG( NOTICE_LOG,
-          "DomainCreate: period count %d unit %d period_count %d string [%s]" ,
-          period.count , period.unit , period_count , periodStr);
+    // parse enum.exdate extension for validitydate
+    GetValExpDateFromExtension(valexpiryDate, ext);
 
-  // parse enum.exdate extension for validitydate
-  GetValExpDateFromExtension(valexpiryDate, ext);
+    try {
+        std::auto_ptr<Register::Zone::Manager> zm( Register::Zone::Manager::create(action.getDB()) );
+        std::auto_ptr<Register::Domain::Manager> dman( Register::Domain::Manager::create(action.getDB(),zm.get()) );
 
-  if ( (regID = GetRegistrarID(clientID) ))
+        LOG( NOTICE_LOG , "Domain::checkAvail  fqdn [%s]" , (const char * ) fqdn );
 
-    if (DBsql.OpenDatabase(database) ) {
-
-      if ( (DBsql.BeginAction(clientID, EPP_DomainCreate, clTRID, XML, &paction) )) {
-
-        if (DBsql.BeginTransaction() ) {
-
-          // check domain FQDN by registrar lib
-
-          try {
-            std::auto_ptr<Register::Zone::Manager> zm( Register::Zone::Manager::create(&DBsql) );
-            std::auto_ptr<Register::Domain::Manager> dman( Register::Domain::Manager::create(&DBsql,zm.get()) );
-
-            LOG( NOTICE_LOG , "Domain::checkAvail  fqdn [%s]" , (const char * ) fqdn );
-
-            dType = dman->checkAvail( ( const char * ) fqdn , dConflict);
-            LOG( NOTICE_LOG , "domain type %d" , dType );
-            switch (dType) {
-              case Register::Domain::CA_INVALID_HANDLE:
-              case Register::Domain::CA_BAD_LENGHT:
+        dType = dman->checkAvail( ( const char * ) fqdn , dConflict);
+        LOG( NOTICE_LOG , "domain type %d" , dType );
+        switch (dType) {
+            case Register::Domain::CA_INVALID_HANDLE:
+            case Register::Domain::CA_BAD_LENGHT:
                 LOG( NOTICE_LOG , "bad format %s of fqdn" , (const char * ) fqdn );
-                ret->code = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                    ccReg::domain_fqdn, 1, REASON_MSG_BAD_FORMAT_FQDN,
-                    GetRegistrarLang(clientID));
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_fqdn, 1, REASON_MSG_BAD_FORMAT_FQDN);
                 break;
-              case Register::Domain::CA_REGISTRED:
-              case Register::Domain::CA_CHILD_REGISTRED:
-              case Register::Domain::CA_PARENT_REGISTRED:
+            case Register::Domain::CA_REGISTRED:
+            case Register::Domain::CA_CHILD_REGISTRED:
+            case Register::Domain::CA_PARENT_REGISTRED:
                 LOG( WARNING_LOG, "domain  [%s] EXIST", fqdn );
-                ret->code = COMMAND_OBJECT_EXIST; // if is exist
+                code = COMMAND_OBJECT_EXIST; // if is exist
                 break;
-              case Register::Domain::CA_BLACKLIST: // black listed
+            case Register::Domain::CA_BLACKLIST: // black listed
                 LOG( NOTICE_LOG , "blacklisted  %s" , (const char * ) fqdn );
-                ret->code = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                    ccReg::domain_fqdn, 1, REASON_MSG_BLACKLISTED_DOMAIN,
-                    GetRegistrarLang(clientID) );
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_fqdn, 1, REASON_MSG_BLACKLISTED_DOMAIN);
                 break;
-              case Register::Domain::CA_AVAILABLE: // if is free
+            case Register::Domain::CA_AVAILABLE: // if is free
                 // conver fqdn to lower case and get zone
                 zone = getFQDN(FQDN, fqdn);
                 LOG( NOTICE_LOG , "domain %s avail zone %d" ,(const char * ) FQDN , zone );
                 break;
-              case Register::Domain::CA_BAD_ZONE:
+            case Register::Domain::CA_BAD_ZONE:
                 // domain not in zone
                 LOG( NOTICE_LOG , "NOn in zone not applicable %s" , (const char * ) fqdn );
-                ret->code = SetErrorReason(errors, COMMAND_PARAMETR_ERROR,
-                    ccReg::domain_fqdn, 1, REASON_MSG_NOT_APPLICABLE_DOMAIN,
-                    GetRegistrarLang(clientID) );
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_fqdn, 1, REASON_MSG_NOT_APPLICABLE_DOMAIN);
                 break;
-            }
+        }
 
-            if (dType == Register::Domain::CA_AVAILABLE) {
+        if (dType == Register::Domain::CA_AVAILABLE) {
 
-              if (DBsql.TestRegistrarZone(regID, zone) == false) {
+            if (action.getDB()->TestRegistrarZone(action.getRegistrar(), zone) == false) {
                 LOG( WARNING_LOG, "Authentication error to zone: %d " , zone );
-                ret->code = COMMAND_AUTHENTICATION_ERROR;
-              } else {
+                code = COMMAND_AUTHENTICATION_ERROR;
+            } else {
 
-                if (strlen(nsset) == 0)
-                  nssetid = 0; // domain can be create without nsset
-                else if ( (nssetid = getIdOfNSSet( &DBsql, nsset, conf) ) <= 0)
-                  ret->code = SetReasonDomainNSSet(errors, nsset, nssetid,
-                      GetRegistrarLang(clientID) );
-
+                if (strlen(nsset) == 0) {
+                    nssetid = 0; // domain can be create without nsset
+                } else {
+                    nssetid = getIdOfNSSet( action.getDB(), nsset, conf);
+                    if (nssetid < 0) {
+                        LOG(WARNING_LOG, "bad format of domain nsset [%s]", nsset);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::domain_nsset, 1, REASON_MSG_BAD_FORMAT_NSSET_HANDLE);
+                    } else if (nssetid == 0) {
+                        LOG(WARNING_LOG, "domain nsset not exist [%s]", nsset);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::domain_nsset, 1, REASON_MSG_NSSET_NOTEXIST);
+                    }
+                }
                 // KeySet
-                if (strlen(keyset) == 0)
+                if (strlen(keyset) == 0) {
                     keysetid = 0;
-                else if ((keysetid = getIdOfKeySet(&DBsql, keyset, conf)) <= 0)
-                    ret->code = SetReasonDomainKeySet(errors, keyset, keysetid,
-                            GetRegistrarLang(clientID));
+                } else {
+                    keysetid = getIdOfKeySet(action.getDB(), keyset, conf);
+                    if (keysetid < 0) {
+                        LOG(WARNING_LOG, "bad format of domain keyset [%s]", keyset);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::domain_keyset, 1, REASON_MSG_BAD_FORMAT_KEYSET_HANDLE);
+                    } else if (keysetid == 0) {
+                        LOG(WARNING_LOG, "domain keyset not exist [%s]", keyset);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::domain_keyset, 1, REASON_MSG_KEYSET_NOTEXIST);
+                    }
+                }
 
                 //  owner of domain
-                if ( (contactid = getIdOfContact(&DBsql, Registrant, conf) ) <= 0)
-                  ret->code = SetReasonDomainRegistrant(errors, Registrant,
-                      contactid, GetRegistrarLang(clientID) );
+                if ( (contactid = getIdOfContact(action.getDB(), Registrant, conf) ) <= 0) {
+                    if (contactid < 0) {
+                        LOG(WARNING_LOG, "bad format of registrant [%s]", Registrant);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::domain_registrant, 1,
+                                REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+                    } else if (contactid == 0) {
+                        LOG(WARNING_LOG, "domain registrant not exist [%s]", Registrant);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::domain_registrant, 1,
+                                REASON_MSG_REGISTRANT_NOTEXIST);
+                    }
+                }
 
                 // default period if not set from zone parametrs
                 if (period_count == 0) {
-                  period_count = GetZoneExPeriodMin(zone);
-                  LOG( NOTICE_LOG, "get defualt peridod %d month  for zone   %d ", period_count , zone );
+                    period_count = GetZoneExPeriodMin(zone);
+                    LOG( NOTICE_LOG, "get defualt peridod %d month  for zone   %d ", period_count , zone );
                 }
 
                 // test period validity range and modulo
                 switch (TestPeriodyInterval(period_count,
-                    GetZoneExPeriodMin(zone) , GetZoneExPeriodMax(zone) ) ) {
-                  case 2:
-                    LOG( WARNING_LOG, "period %d interval ot of range MAX %d MIN %d" , period_count , GetZoneExPeriodMax( zone ) , GetZoneExPeriodMin( zone ) );
-                    ret->code = SetErrorReason(errors,
-                    COMMAND_PARAMETR_RANGE_ERROR, ccReg::domain_period, 1,
-                    REASON_MSG_PERIOD_RANGE, GetRegistrarLang(clientID) );
-                    break;
-                  case 1:
-                    LOG( WARNING_LOG, "period %d  interval policy error MIN %d" , period_count , GetZoneExPeriodMin( zone ) );
-                    ret->code = SetErrorReason(errors,
-                    COMMAND_PARAMETR_VALUE_POLICY_ERROR, ccReg::domain_period, 1,
-                        REASON_MSG_PERIOD_POLICY, GetRegistrarLang(clientID) );
-                    break;
+                            GetZoneExPeriodMin(zone) , GetZoneExPeriodMax(zone) ) ) {
+                    case 2:
+                        LOG( WARNING_LOG, "period %d interval ot of range MAX %d MIN %d" , period_count , GetZoneExPeriodMax( zone ) , GetZoneExPeriodMin( zone ) );
+                        code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+                                ccReg::domain_period, 1, REASON_MSG_PERIOD_RANGE);
+                        break;
+                    case 1:
+                        LOG( WARNING_LOG, "period %d  interval policy error MIN %d" , period_count , GetZoneExPeriodMin( zone ) );
+                        code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                                ccReg::domain_period, 1, REASON_MSG_PERIOD_POLICY);
+                        break;
 
                 }
 
                 // test  validy date for enum domain
                 if (strlen(valexpiryDate) == 0) {
-                  // for enum domain must set validity date
-                  if (GetZoneEnum(zone) ) {
-                    LOG( WARNING_LOG, "DomainCreate: validity exp date MISSING" );
-
-                    ret->code = SetErrorReason(errors, COMMAND_PARAMETR_MISSING,
-                        ccReg::domain_ext_valDate_missing, 0,
-                        REASON_MSG_VALEXPDATE_REQUIRED,
-                        GetRegistrarLang(clientID) );
-                  }
-                } else {
-                  // Test for enum domain
-                  if (GetZoneEnum(zone) ) {
-                    // test
-                    if (DBsql.TestValExDate(valexpiryDate,
-                        GetZoneValPeriod(zone) , DefaultValExpInterval() , 0)
-                        == false) {
-                      LOG( WARNING_LOG, "Validity exp date is not valid %s" , valexpiryDate );
-                      ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_RANGE_ERROR, ccReg::domain_ext_valDate, 1,
-                          REASON_MSG_VALEXPDATE_NOT_VALID,
-                          GetRegistrarLang(clientID) );
+                    // for enum domain must set validity date
+                    if (GetZoneEnum(zone) ) {
+                        LOG( WARNING_LOG, "DomainCreate: validity exp date MISSING" );
+                        code = action.setErrorReason(COMMAND_PARAMETR_MISSING,
+                                ccReg::domain_ext_valDate_missing, 0,
+                                REASON_MSG_VALEXPDATE_REQUIRED);
                     }
-
-                  } else {
-                    LOG( WARNING_LOG, "Validity exp date %s not user" , valexpiryDate );
-                    ret->code = SetErrorReason(errors,
-                    COMMAND_PARAMETR_VALUE_POLICY_ERROR,
-                        ccReg::domain_ext_valDate, 1,
-                        REASON_MSG_VALEXPDATE_NOT_USED,
-                        GetRegistrarLang(clientID) );
-
-                  }
+                } else {
+                    // Test for enum domain
+                    if (GetZoneEnum(zone) ) {
+                        // test
+                        if (action.getDB()->TestValExDate(valexpiryDate,
+                                    GetZoneValPeriod(zone) , DefaultValExpInterval() , 0)
+                                == false) {
+                            LOG( WARNING_LOG, "Validity exp date is not valid %s" , valexpiryDate );
+                            code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+                                    ccReg::domain_ext_valDate, 1,
+                                    REASON_MSG_VALEXPDATE_NOT_VALID);
+                        }
+                    } else {
+                        LOG( WARNING_LOG, "Validity exp date %s not user" , valexpiryDate );
+                        code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                                ccReg::domain_ext_valDate, 1,
+                                REASON_MSG_VALEXPDATE_NOT_USED);
+                    }
 
                 }
 
                 // test   admin-c if set
 
                 if (admin.length() > 0) {
-                  // test
-                  for (i = 0; i < admin.length(); i++) {
-                    if ( (adminid = getIdOfContact( &DBsql, admin[i], conf) )
-                        <= 0)
-                      ret->code = SetReasonDomainAdmin(errors, admin[i], adminid,
-                          GetRegistrarLang(clientID) , i);
-                    else {
-                      ad[i] = adminid;
-                      for (j = 0; j < i; j ++) // test  duplicity
-                      {
-                        LOG( DEBUG_LOG , "admin comapare j %d adminid %d ad %d" , j , adminid , ad[j] );
-                        if (ad[j] == adminid && ad[j] > 0) {
-                          ad[j] = 0;
-                          ret->code
-                              = SetReasonContactDuplicity(errors, admin[i],
-                                  GetRegistrarLang(clientID) , i,
-                                  ccReg::domain_admin);
-                        }
-                      }
+                    // test
+                    for (i = 0; i < admin.length(); i++) {
+                        adminid = getIdOfContact( action.getDB(), admin[i], conf);
+                        if (adminid < 0) {
+                            LOG(WARNING_LOG, "bad format of contact %", (const char *)admin[i]);
+                            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                    ccReg::domain_admin, i + 1,
+                                    REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+                        } else if (adminid == 0) {
+                            LOG(WARNING_LOG, "contact %s not exist", (const char *)admin[i]);
+                            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                    ccReg::domain_admin, i + 1,
+                                    REASON_MSG_ADMIN_NOTEXIST);
+                        } else {
+                            ad[i] = adminid;
+                            for (j = 0; j < i; j ++) // test  duplicity
+                            {
+                                LOG( DEBUG_LOG , "admin comapare j %d adminid %d ad %d" , j , adminid , ad[j] );
+                                if (ad[j] == adminid && ad[j] > 0) {
+                                    ad[j] = 0;
+                                    LOG(WARNING_LOG, "Contact [%s] duplicity", (const char *)admin[i]);
+                                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                            ccReg::domain_admin, i, REASON_MSG_DUPLICITY_CONTACT);
+                                }
+                            }
 
+                        }
                     }
-                  }
 
                 }
 
-                if (ret->code == 0) // if not error
+                if (code == 0) // if not error
                 {
 
-                  id= DBsql.CreateObject("D", regID, FQDN, AuthInfoPw);
-                  if (id<=0) {
-                    if (id == 0) {
-                      LOG( WARNING_LOG, "domain fqdn [%s] EXIST", fqdn );
-                      ret->code= COMMAND_OBJECT_EXIST;
+                    id= action.getDB()->CreateObject("D", action.getRegistrar(), FQDN, AuthInfoPw);
+                    if (id<=0) {
+                        if (id == 0) {
+                            LOG( WARNING_LOG, "domain fqdn [%s] EXIST", fqdn );
+                            code= COMMAND_OBJECT_EXIST;
+                        } else {
+                            LOG( WARNING_LOG, "Cannot insert [%s] into object_registry", fqdn );
+                            code= COMMAND_FAILED;
+                        }
                     } else {
-                      LOG( WARNING_LOG, "Cannot insert [%s] into object_registry", fqdn );
-                      ret->code= COMMAND_FAILED;
-                    }
-                  } else {
 
-                    std::string computed_exdate;
-                    try {
-                      /* compute expiration date from creation time - need
-                       * proper conversion to local time then take only date
-                       */
-                      using namespace boost::posix_time;
+                        std::string computed_exdate;
+                        try {
+                            /* compute expiration date from creation time - need
+                             * proper conversion to local time then take only date
+                             */
+                            using namespace boost::posix_time;
 
-                      ptime db_crdate = time_from_string(DBsql.GetValueFromTable("object_registry", "crdate", "id", id));
-                      ptime local_crdate = boost::date_time::c_local_adjustor<ptime>::utc_to_local(db_crdate);
-                      date local_exdate = (local_crdate + months(period_count)).date();
-                      computed_exdate = to_iso_extended_string(local_exdate);
+                            ptime db_crdate = time_from_string(action.getDB()->GetValueFromTable("object_registry", "crdate", "id", id));
+                            ptime local_crdate = boost::date_time::c_local_adjustor<ptime>::utc_to_local(db_crdate);
+                            date local_exdate = (local_crdate + months(period_count)).date();
+                            computed_exdate = to_iso_extended_string(local_exdate);
 
-                      LOG(DEBUG_LOG, "db crdate: [%s] local create date: [%s] computed exdate: [%s]",
-                          to_simple_string(db_crdate).c_str(),
-                          to_simple_string(local_crdate).c_str(),
-                          computed_exdate.c_str());
-                    }
-                    catch (std::exception &ex) {
-                      /* on error log and rethrow again - we can't create
-                       * domain without expiration date
-                       */
-                      LOG(DEBUG_LOG, "time convert error: %s", ex.what());
-                      throw;
-                    }
-
-                    DBsql.INSERT("DOMAIN");
-                    DBsql.INTO("id");
-                    DBsql.INTO("zone");
-                    DBsql.INTO("Exdate");
-                    DBsql.INTO("Registrant");
-                    DBsql.INTO("nsset");
-                    DBsql.INTO("keyset");
-
-                    DBsql.VALUE(id);
-                    DBsql.VALUE(zone);
-                    DBsql.VALUE(computed_exdate.c_str());
-                    //DBsql.VALUEPERIOD(period_count); // actual time plus interval of period in months
-                    DBsql.VALUE(contactid);
-                    if (nssetid == 0)
-                      DBsql.VALUENULL(); // domain without  nsset write NULL value
-                    else
-                      DBsql.VALUE(nssetid);
-
-                    if (keysetid == 0)
-                        DBsql.VALUENULL();
-                    else
-                        DBsql.VALUE(keysetid);
-
-                    if (DBsql.EXEC() ) {
-
-                      // get local timestamp of created domain
-                      CORBA::string_free(crDate);
-                      crDate= CORBA::string_dup(DBsql.GetObjectCrDateTime(id) );
-
-                      //  get local date of expiration
-                      CORBA::string_free(exDate);
-                      exDate = CORBA::string_dup(DBsql.GetDomainExDate(id) );
-
-                      // save  enum domain   extension validity date
-                      if (GetZoneEnum(zone) && strlen(valexpiryDate) > 0) {
-                        DBsql.INSERT("enumval");
-                        DBsql.VALUE(id);
-                        DBsql.VALUE(valexpiryDate);
-                        if (DBsql.EXEC() == false)
-                          ret->code = COMMAND_FAILED;
-                      }
-
-                      // insert   admin-c
-                      for (i = 0; i < admin.length(); i++) {
-                        LOG( DEBUG_LOG, "DomainCreate: add admin Contact %s id %d " , (const char *) admin[i] , ad[i] );
-                        if ( !DBsql.AddContactMap("domain", id, ad[i]) ) {
-                          ret->code = COMMAND_FAILED;
-                          break;
+                            LOG(DEBUG_LOG, "db crdate: [%s] local create date: [%s] computed exdate: [%s]",
+                                    to_simple_string(db_crdate).c_str(),
+                                    to_simple_string(local_crdate).c_str(),
+                                    computed_exdate.c_str());
+                        }
+                        catch (std::exception &ex) {
+                            /* on error log and rethrow again - we can't create
+                             * domain without expiration date
+                             */
+                            LOG(DEBUG_LOG, "time convert error: %s", ex.what());
+                            throw;
                         }
 
-                      }
+                        action.getDB()->INSERT("DOMAIN");
+                        action.getDB()->INTO("id");
+                        action.getDB()->INTO("zone");
+                        action.getDB()->INTO("Exdate");
+                        action.getDB()->INTO("Registrant");
+                        action.getDB()->INTO("nsset");
+                        action.getDB()->INTO("keyset");
 
-                      //  billing credit from and save for invoicing
-                      // first operation billing domain-create
-                      if (DBsql.BillingCreateDomain(regID, zone, id) == false)
-                        ret->code = COMMAND_BILLING_FAILURE;
-                      else
-                      // next operation billing  domain-renew save Exdate
-                      if (DBsql.BillingRenewDomain(regID, zone, id, period_count,
-                          exDate) == false)
-                        ret->code = COMMAND_BILLING_FAILURE;
-                      else if (DBsql.SaveDomainHistory(id) ) // if is ok save to history
-                        if (DBsql.SaveObjectCreate(id) )
-                          ret->code = COMMAND_OK;
+                        action.getDB()->VALUE(id);
+                        action.getDB()->VALUE(zone);
+                        action.getDB()->VALUE(computed_exdate.c_str());
+                        //action.getDB()->VALUEPERIOD(period_count); // actual time plus interval of period in months
+                        action.getDB()->VALUE(contactid);
+                        if (nssetid == 0)
+                            action.getDB()->VALUENULL(); // domain without  nsset write NULL value
+                        else
+                            action.getDB()->VALUE(nssetid);
 
-                    } else
-                      ret->code = COMMAND_FAILED;
+                        if (keysetid == 0)
+                            action.getDB()->VALUENULL();
+                        else
+                            action.getDB()->VALUE(keysetid);
 
-                    if (ret->code == COMMAND_OK) // run notifier
-                    {
-                      ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , &DBsql, regID , id ));
-                      ntf->Send(); // send messages
+                        if (action.getDB()->EXEC() ) {
+
+                            // get local timestamp of created domain
+                            CORBA::string_free(crDate);
+                            crDate= CORBA::string_dup(action.getDB()->GetObjectCrDateTime(id) );
+
+                            //  get local date of expiration
+                            CORBA::string_free(exDate);
+                            exDate = CORBA::string_dup(action.getDB()->GetDomainExDate(id) );
+
+                            // save  enum domain   extension validity date
+                            if (GetZoneEnum(zone) && strlen(valexpiryDate) > 0) {
+                                action.getDB()->INSERT("enumval");
+                                action.getDB()->VALUE(id);
+                                action.getDB()->VALUE(valexpiryDate);
+                                if (action.getDB()->EXEC() == false)
+                                    code = COMMAND_FAILED;
+                            }
+
+                            // insert   admin-c
+                            for (i = 0; i < admin.length(); i++) {
+                                LOG( DEBUG_LOG, "DomainCreate: add admin Contact %s id %d " , (const char *) admin[i] , ad[i] );
+                                if ( !action.getDB()->AddContactMap("domain", id, ad[i]) ) {
+                                    code = COMMAND_FAILED;
+                                    break;
+                                }
+
+                            }
+
+                            //  billing credit from and save for invoicing
+                            // first operation billing domain-create
+                            if (action.getDB()->BillingCreateDomain(action.getRegistrar(), zone, id) == false)
+                                code = COMMAND_BILLING_FAILURE;
+                            else
+                                // next operation billing  domain-renew save Exdate
+                                if (action.getDB()->BillingRenewDomain(action.getRegistrar(), zone, id, period_count,
+                                            exDate) == false)
+                                    code = COMMAND_BILLING_FAILURE;
+                                else if (action.getDB()->SaveDomainHistory(id) ) // if is ok save to history
+                                    if (action.getDB()->SaveObjectCreate(id) )
+                                        code = COMMAND_OK;
+
+                        } else
+                            code = COMMAND_FAILED;
+
+                            if (code == COMMAND_OK) // run notifier
+                            {
+                                ntf.reset(new EPPNotifier(
+                                            conf.get<bool>("registry.disable_epp_notifier"),
+                                            mm , action.getDB(), action.getRegistrar(), id ));
+                                ntf->Send(); // send messages
+                            }
+
                     }
-
-                  }
                 }
 
-              }
-
             }
-          }
-          catch (...) {
-            LOG( WARNING_LOG, "cannot run Register::Domain::checkAvail");
-            ret->code=COMMAND_FAILED;
-          }
 
-
-          // if ret->code == COMMAND_OK commit transaction
-          DBsql.QuitTransaction(ret->code);
         }
-
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
-      }
-
-      ret->msg =CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-
-      DBsql.Disconnect();
+    }
+    catch (...) {
+        LOG( WARNING_LOG, "cannot run Register::Domain::checkAvail");
+        code=COMMAND_FAILED;
     }
 
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
 
-  if (ret->code == 0)
-    ServerInternalError("DomainCreate");
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
 
-  return ret._retn();
+    if (code == 0) {
+        action.failedInternal("DomainCreate");
+    }
+
+    return action.getRet()._retn();
 }
 
 /***********************************************************************
@@ -5534,232 +5390,202 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
  *
  ***********************************************************************/
 
-ccReg::Response * ccReg_EPP_i::DomainRenew(
-  const char *fqdn, const char* curExpDate, const ccReg::Period_str& period,
-  ccReg::timestamp_out exDate, CORBA::Long clientID, const char *clTRID,
-  const char* XML, const ccReg::ExtensionList & ext)
+ccReg::Response *
+ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
+        const ccReg::Period_str& period, ccReg::timestamp_out exDate,
+        CORBA::Long clientID, const char *clTRID, const char* XML, 
+        const ccReg::ExtensionList & ext)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-  DB DBsql;
-  std::auto_ptr<EPPNotifier> ntf;
-  char valexpiryDate[MAX_DATE+1];
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
-  int regID, id, zone;
-  int period_count;
-  char periodStr[10];
+    std::auto_ptr<EPPNotifier> ntf;
+    char valexpiryDate[MAX_DATE+1];
+    int id, zone;
+    int period_count;
+    char periodStr[10];
+    short int code = 0;
 
-  ret = new ccReg::Response;
-  errors = new ccReg::Errors;
+    ParsedAction paction;
+    paction.add(1,(const char*)fqdn);
 
-  ParsedAction paction;
-  paction.add(1,(const char*)fqdn);
+    EPPAction action(this, clientID, EPP_DomainRenew, clTRID, XML, &paction);
 
-  // default
-  exDate = CORBA::string_dup("");
+    // default
+    exDate = CORBA::string_dup("");
 
-  // default
-  ret->code = 0;
-  errors->length( 0);
+    LOG( NOTICE_LOG, "DomainRenew: clientID -> %d clTRID [%s] fqdn  [%s] curExpDate [%s]", (int ) clientID, clTRID, fqdn , (const char *) curExpDate );
 
-  LOG( NOTICE_LOG, "DomainRenew: clientID -> %d clTRID [%s] fqdn  [%s] curExpDate [%s]", (int ) clientID, clTRID, fqdn , (const char *) curExpDate );
-
-  //  period count
-  if (period.unit == ccReg::unit_year) {
-    period_count = period.count * 12;
-    snprintf(periodStr, sizeof(periodStr), "y%d", period.count);
-  } else if (period.unit == ccReg::unit_month) {
-    period_count = period.count;
-    snprintf(periodStr, sizeof(periodStr), "m%d", period.count);
-  } else
-    period_count = 0; // use default value
+    //  period count
+    if (period.unit == ccReg::unit_year) {
+        period_count = period.count * 12;
+        snprintf(periodStr, sizeof(periodStr), "y%d", period.count);
+    } else if (period.unit == ccReg::unit_month) {
+        period_count = period.count;
+        snprintf(periodStr, sizeof(periodStr), "m%d", period.count);
+    } else
+        period_count = 0; // use default value
 
 
-  LOG( NOTICE_LOG, "DomainRenew: period count %d unit %d period_count %d string [%s]" , period.count , period.unit , period_count , periodStr);
+    LOG( NOTICE_LOG, "DomainRenew: period count %d unit %d period_count %d string [%s]" , period.count , period.unit , period_count , periodStr);
 
-  // parse enum.ExDate extension
-  GetValExpDateFromExtension(valexpiryDate, ext);
+    // parse enum.ExDate extension
+    GetValExpDateFromExtension(valexpiryDate, ext);
 
-  if ( (regID = GetRegistrarID(clientID) )) {
+    if ((id = getIdOfDomain(action.getDB(), fqdn, conf, true, &zone) ) <= 0) {
+        LOG( WARNING_LOG, "domain  [%s] NOT_EXIST", fqdn );
+        code=COMMAND_OBJECT_NOT_EXIST;
+    }
+    else  if (action.getDB()->TestRegistrarZone(action.getRegistrar(), zone) == false) {
+        LOG( WARNING_LOG, "Authentication error to zone: %d " , zone );
+        code = COMMAND_AUTHENTICATION_ERROR;
+    }
+    // test curent ExDate
+    // there should be lock here for row with exdate
+    // but there is already lock on object_registry row
+    // (from getIdOfDomain) and so there cannot be any race condition
+    else if (TestExDate(curExpDate, action.getDB()->GetDomainExDate(id)) == false) {
+        LOG( WARNING_LOG, "curExpDate is not same as ExDate" );
+        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                ccReg::domain_curExpDate, 1,
+                REASON_MSG_CUREXPDATE_NOT_EXPDATE);
+    } else {
+        // set default renew  period from zone params
+        if (period_count == 0) {
+            period_count = GetZoneExPeriodMin(zone);
+            LOG( NOTICE_LOG, "get default peridod %d month  for zone   %d ", period_count , zone );
+        }
 
-    if (DBsql.OpenDatabase(database)) {
-      if (DBsql.BeginAction(clientID, EPP_DomainRenew, clTRID, XML, &paction)) {
-        if (DBsql.BeginTransaction()) {
-          if ((id = getIdOfDomain(&DBsql, fqdn, conf, true, &zone) ) < 0)
-            ret->code=SetReasonDomainFQDN(errors, fqdn, id == -1,
-                GetRegistrarLang(clientID) );
-          else if (id == 0) {
-            LOG( WARNING_LOG, "domain  [%s] NOT_EXIST", fqdn );
-            ret->code=COMMAND_OBJECT_NOT_EXIST;
-          }
-          else  if (DBsql.TestRegistrarZone(regID, zone) == false) {
-              LOG( WARNING_LOG, "Authentication error to zone: %d " , zone );
-              ret->code = COMMAND_AUTHENTICATION_ERROR;
-          }
-          // test curent ExDate
-          // there should be lock here for row with exdate
-          // but there is already lock on object_registry row
-          // (from getIdOfDomain) and so there cannot be any race condition
-          else if (TestExDate(curExpDate, DBsql.GetDomainExDate(id)) == false) {
-            LOG( WARNING_LOG, "curExpDate is not same as ExDate" );
-            ret->code = SetErrorReason(
-              errors, COMMAND_PARAMETR_ERROR,
-              ccReg::domain_curExpDate, 1,
-              REASON_MSG_CUREXPDATE_NOT_EXPDATE,
-              GetRegistrarLang(clientID)
-            );
-          } else {
-                // set default renew  period from zone params
-                if (period_count == 0) {
-                  period_count = GetZoneExPeriodMin(zone);
-                  LOG( NOTICE_LOG, "get default peridod %d month  for zone   %d ", period_count , zone );
-                }
-
-                //  test period
-                switch (TestPeriodyInterval(period_count,
+        //  test period
+        switch (TestPeriodyInterval(period_count,
                     GetZoneExPeriodMin(zone) , GetZoneExPeriodMax(zone) ) ) {
-                  case 2:
-                    LOG( WARNING_LOG, "period %d interval ot of range MAX %d MIN %d" , period_count , GetZoneExPeriodMax( zone ) , GetZoneExPeriodMin( zone ) );
-                    ret->code = SetErrorReason(errors,
-                    COMMAND_PARAMETR_RANGE_ERROR, ccReg::domain_period, 1,
-                    REASON_MSG_PERIOD_RANGE, GetRegistrarLang(clientID) );
-                    break;
-                  case 1:
-                    LOG( WARNING_LOG, "period %d  interval policy error MIN %d" , period_count , GetZoneExPeriodMin( zone ) );
-                    ret->code
-                        = SetErrorReason(errors,
-                        COMMAND_PARAMETR_VALUE_POLICY_ERROR,
-                            ccReg::domain_period, 1, REASON_MSG_PERIOD_POLICY,
-                            GetRegistrarLang(clientID) );
-                    break;
-                  default:
-                    // count new  ExDate
-                    if (DBsql.CountExDate(id, period_count,
-                        GetZoneExPeriodMax(zone) ) == false) {
-                      LOG( WARNING_LOG, "period %d ExDate out of range" , period_count );
-                      ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_RANGE_ERROR, ccReg::domain_period, 1,
-                      REASON_MSG_PERIOD_RANGE, GetRegistrarLang(clientID) );
-                    }
-                    break;
-
+            case 2:
+                LOG( WARNING_LOG, "period %d interval ot of range MAX %d MIN %d" , period_count , GetZoneExPeriodMax( zone ) , GetZoneExPeriodMin( zone ) );
+                code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+                        ccReg::domain_period, 1,
+                        REASON_MSG_PERIOD_RANGE);
+                break;
+            case 1:
+                LOG( WARNING_LOG, "period %d  interval policy error MIN %d" , period_count , GetZoneExPeriodMin( zone ) );
+                code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                        ccReg::domain_period, 1,
+                        REASON_MSG_PERIOD_POLICY);
+                break;
+            default:
+                // count new  ExDate
+                if (action.getDB()->CountExDate(id, period_count,
+                            GetZoneExPeriodMax(zone) ) == false) {
+                    LOG( WARNING_LOG, "period %d ExDate out of range" , period_count );
+                    code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+                            ccReg::domain_period, 1,
+                            REASON_MSG_PERIOD_RANGE);
                 }
+                break;
 
-                // test validity Date for enum domain
-                if (strlen(valexpiryDate) ) {
-                  // Test for enum domain only
-                  if (GetZoneEnum(zone) ) {
-                    if (DBsql.TestValExDate(valexpiryDate,
-                        GetZoneValPeriod(zone) , DefaultValExpInterval() , id)
+        }
+
+        // test validity Date for enum domain
+        if (strlen(valexpiryDate) ) {
+            // Test for enum domain only
+            if (GetZoneEnum(zone) ) {
+                if (action.getDB()->TestValExDate(valexpiryDate,
+                            GetZoneValPeriod(zone) , DefaultValExpInterval() , id)
                         == false) {
-                      LOG( WARNING_LOG, "Validity exp date is not valid %s" , valexpiryDate );
-                      ret->code = SetErrorReason(errors,
-                      COMMAND_PARAMETR_RANGE_ERROR, ccReg::domain_ext_valDate,
-                          1,
-                          REASON_MSG_VALEXPDATE_NOT_VALID,
-                          GetRegistrarLang(clientID) );
-                    }
-
-                  } else {
-
-                    LOG( WARNING_LOG, "Can not  validity exp date %s" , valexpiryDate );
-                    ret->code = SetErrorReason(errors,
-                    COMMAND_PARAMETR_VALUE_POLICY_ERROR,
-                        ccReg::domain_ext_valDate, 1,
-                        REASON_MSG_VALEXPDATE_NOT_USED,
-                        GetRegistrarLang(clientID) );
-
-                  }
+                    LOG( WARNING_LOG, "Validity exp date is not valid %s" , valexpiryDate );
+                    code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+                            ccReg::domain_ext_valDate, 1,
+                            REASON_MSG_VALEXPDATE_NOT_VALID);
                 }
 
-                if (ret->code == 0)// if not param error
+            } else {
+
+                LOG( WARNING_LOG, "Can not  validity exp date %s" , valexpiryDate );
+                code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                        ccReg::domain_ext_valDate, 1,
+                        REASON_MSG_VALEXPDATE_NOT_USED);
+
+            }
+        }
+
+        if (code == 0)// if not param error
+        {
+            // test client of the object
+            if ( !action.getDB()->TestObjectClientID(id, action.getRegistrar()) ) {
+                LOG( WARNING_LOG, "bad autorization not client of domain [%s]", fqdn );
+                code = action.setErrorReason(COMMAND_AUTOR_ERROR,
+                        ccReg::registrar_autor, 0, 
+                        REASON_MSG_REGISTRAR_AUTOR);
+            }
+            try {
+                if (!code && (
+                            testObjectHasState(action.getDB(),id,FLAG_serverRenewProhibited) ||
+                            testObjectHasState(action.getDB(),id,FLAG_deleteCandidate)
+                            )
+                   )
                 {
-                  // test client of the object
-                  if ( !DBsql.TestObjectClientID(id, regID) ) {
-                    LOG( WARNING_LOG, "bad autorization not client of domain [%s]", fqdn );
-                    ret->code = SetReasonWrongRegistrar(errors, regID, GetRegistrarLang(clientID));
-                  }
-                  try {
-                    if (!ret->code && (
-                            testObjectHasState(&DBsql,id,FLAG_serverRenewProhibited) ||
-                            testObjectHasState(&DBsql,id,FLAG_deleteCandidate)
-                        )
-                    )
-                    {
-                      LOG( WARNING_LOG, "renew of object %s is prohibited" , fqdn );
-                      ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
-                    }
-                  } catch (...) {
-                    ret->code = COMMAND_FAILED;
-                  }
+                    LOG( WARNING_LOG, "renew of object %s is prohibited" , fqdn );
+                    code = COMMAND_STATUS_PROHIBITS_OPERATION;
+                }
+            } catch (...) {
+                code = COMMAND_FAILED;
+            }
 
-                  if (!ret->code) {
+            if (!code) {
 
-                    // change validity date for enum domain
-                    if (GetZoneEnum(zone) ) {
-                      if (strlen(valexpiryDate) > 0) {
+                // change validity date for enum domain
+                if (GetZoneEnum(zone) ) {
+                    if (strlen(valexpiryDate) > 0) {
                         LOG( NOTICE_LOG, "change valExpDate %s ", valexpiryDate );
 
-                        DBsql.UPDATE("enumval");
-                        DBsql.SET("ExDate", valexpiryDate);
-                        DBsql.WHERE("domainID", id);
+                        action.getDB()->UPDATE("enumval");
+                        action.getDB()->SET("ExDate", valexpiryDate);
+                        action.getDB()->WHERE("domainID", id);
 
-                        if (DBsql.EXEC() == false)
-                          ret->code = COMMAND_FAILED;
-                      }
+                        if (action.getDB()->EXEC() == false)
+                            code = COMMAND_FAILED;
                     }
+                }
 
-                    if (ret->code == 0) // if is OK OK
-                    {
+                if (code == 0) // if is OK OK
+                {
 
-                      // make Renew Domain count new Exdate in
-                      if (DBsql.RenewExDate(id, period_count) ) {
+                    // make Renew Domain count new Exdate in
+                    if (action.getDB()->RenewExDate(id, period_count) ) {
                         //  return new Exdate as local date
                         CORBA::string_free(exDate);
-                        exDate = CORBA::string_dup(DBsql.GetDomainExDate(id) );
+                        exDate = CORBA::string_dup(action.getDB()->GetDomainExDate(id) );
 
                         // billing credit operation domain-renew
-                        if (DBsql.BillingRenewDomain(regID, zone, id,
-                            period_count, exDate) == false)
-                          ret->code = COMMAND_BILLING_FAILURE;
-                        else if (DBsql.SaveDomainHistory(id) )
-                          ret->code = COMMAND_OK;
+                        if (action.getDB()->BillingRenewDomain(action.getRegistrar(), zone, id,
+                                    period_count, exDate) == false)
+                            code = COMMAND_BILLING_FAILURE;
+                        else if (action.getDB()->SaveDomainHistory(id) )
+                            code = COMMAND_OK;
 
-                      } else
-                        ret->code = COMMAND_FAILED;
-                    }
-                  }
+                    } else
+                        code = COMMAND_FAILED;
                 }
-              }
-            if (ret->code == COMMAND_OK) // run notifier
-            {
-              ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , &DBsql, regID , id ));
-              ntf->Send(); // send mesages to default contats
             }
-            DBsql.QuitTransaction(ret->code);
-
-          }
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
-      }
-
-      ret->msg =CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-
-      DBsql.Disconnect();
+        }
+    }
+    if (code == COMMAND_OK) // run notifier
+    {
+        ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , action.getDB(), action.getRegistrar() , id ));
+        ntf->Send(); // send mesages to default contats
+    }
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
     }
 
-  }
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
+    if (code == 0) {
+        action.failedInternal("DomainRenew");
+    }
 
-  if (ret->code == 0)
-    ServerInternalError("DomainRenew");
-
-  return ret._retn();
+    return action.getRet()._retn();
 }
+
 /*************************************************************
  *
  * Function:    KeySetInfo
@@ -5773,6 +5599,7 @@ ccReg_EPP_i::KeySetInfo(
         const char *clTRID,
         const char *XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -5802,9 +5629,9 @@ ccReg_EPP_i::KeySetInfo(
     keyFilter->addHandle().setValue(std::string(handle));
     keyFilter->addDeleteTime().setNULL();
     unionFilter.addFilter(keyFilter);
-    Database::Manager *dbman = new Database::Manager(database);
+    Database::Manager dbman(new Database::ConnectionFactory(database));
+    klist->reload(unionFilter, &dbman);
 
-    klist->reload(unionFilter, dbman);
 
     //klist->setHandleFilter(handle);
     // try {
@@ -5902,92 +5729,76 @@ ccReg_EPP_i::KeySetDelete(
         const char *clTRID,
         const char *XML)
 {
-  Logging::Context ctx("rifd");
-  Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    Logging::Context::clear();
+    Logging::Context ctx("rifd");
+    Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-    ccReg::Response_var ret;
-    ccReg::Errors_var   errors;
-    DB                  DBsql;
-    int                 regID, id;
+    int                 id;
     std::auto_ptr<EPPNotifier> ntf;
-
-    ret = new ccReg::Response;
-    errors = new ccReg::Errors;
-
-    ret->code = 0;
-    errors->length(0);
+    short int code = 0;
 
     ParsedAction paction;
     paction.add(1, (const char *)handle);
 
+    EPPAction action(this, clientID, EPP_KeySetDelete, clTRID, XML, &paction);
+
     LOG(NOTICE_LOG, "KeySetDelete: clientID -> %d clTRID [%s] handle [%s]",
             (int)clientID, clTRID, handle);
 
-    if ((regID = GetRegistrarID(clientID))) {
-        if (DBsql.OpenDatabase(database)) {
-            if (DBsql.BeginAction(clientID, EPP_KeySetDelete, clTRID, XML, &paction)) {
-                if (DBsql.BeginTransaction()) {
-                    id = getIdOfKeySet(&DBsql, handle, conf, true);
-                    if (id < 0)
-                        ret->code = SetReasonKeySetHandle(
-                                errors,
-                                handle,
-                                GetRegistrarLang(clientID));
-                    else if (id == 0) {
-                        LOG(WARNING_LOG, "KeySet handle [%s] NOT_EXISTS", handle);
-                        ret->code = COMMAND_OBJECT_NOT_EXIST;
-                    }
-                    if (!ret->code && !DBsql.TestObjectClientID(id, regID)) {
-                        LOG(WARNING_LOG, "bad authorisation not client of KeySet [%s]", handle);
-                        ret->code = SetReasonWrongRegistrar(errors, regID, GetRegistrarLang(clientID));
-                    }
-                    try {
-                        if (!ret->code && (
-                                    testObjectHasState(&DBsql, id, FLAG_serverDeleteProhibited) ||
-                                    testObjectHasState(&DBsql, id, FLAG_serverUpdateProhibited)
-                                    )) {
-                            LOG(WARNING_LOG, "delete of object %s is prohibited", handle);
-                            ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
-                        }
-                    } catch (...) {
-                        ret->code = COMMAND_FAILED;
-                    }
-                    if (!ret->code) {
-                        //create notifier
-                        ntf.reset(new EPPNotifier(
-                                    conf.get<bool>("registry.disable_epp_notifier"),
-                                    mm,
-                                    &DBsql,
-                                    regID,
-                                    id));
-                        if (DBsql.TestKeySetRelations(id)) {
-                            LOG(WARNING_LOG, "KeySet can't be deleted - relations in db");
-                            ret->code = COMMAND_PROHIBITS_OPERATION;
-                        } else {
-                            if (DBsql.SaveObjectDelete(id))
-                                if (DBsql.DeleteKeySetObject(id))
-                                    ret->code = COMMAND_OK;
-                        }
-                        if (ret->code == COMMAND_OK)
-                            ntf->Send();
-                    }
-                    DBsql.QuitTransaction(ret->code);
-                }
-                ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code));
-            }
-            ret->msg = CORBA::string_dup(
-                    GetErrorMessage(
-                        ret->code,
-                        GetRegistrarLang(clientID))
-                    );
-            DBsql.Disconnect();
-        }
+    id = getIdOfKeySet(action.getDB(), handle, conf, true);
+    if (id < 0) {
+        LOG(WARNING_LOG, "bad format of keyset [%s]", handle);
+        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                ccReg::keyset_handle, 1,
+                REASON_MSG_BAD_FORMAT_KEYSET_HANDLE);
+    } else if (id == 0) {
+        LOG(WARNING_LOG, "KeySet handle [%s] NOT_EXISTS", handle);
+        code = COMMAND_OBJECT_NOT_EXIST;
     }
-    if (ret->code > COMMAND_EXCEPTION)
-        EppError(ret->code, ret->msg, ret->svTRID, errors);
-    if (ret->code == 0)
-        ServerInternalError("KeySetDelete");
-    return ret._retn();
+    if (!code && !action.getDB()->TestObjectClientID(id, action.getRegistrar())) {
+        LOG(WARNING_LOG, "bad authorisation not client of KeySet [%s]", handle);
+        code = action.setErrorReason(COMMAND_AUTOR_ERROR,
+                ccReg::registrar_autor, 0, REASON_MSG_REGISTRAR_AUTOR);
+    }
+    try {
+        if (!code && (
+                    testObjectHasState(action.getDB(), id, FLAG_serverDeleteProhibited) ||
+                    testObjectHasState(action.getDB(), id, FLAG_serverUpdateProhibited)
+                    )) {
+            LOG(WARNING_LOG, "delete of object %s is prohibited", handle);
+            code = COMMAND_STATUS_PROHIBITS_OPERATION;
+        }
+    } catch (...) {
+        code = COMMAND_FAILED;
+    }
+    if (!code) {
+        //create notifier
+        bool notify = !disableNotification(action.getDB(), action.getRegistrar(), clTRID);
+        if (notify)
+            ntf.reset(new EPPNotifier(
+                      conf.get<bool>("registry.disable_epp_notifier"),
+                      mm,
+                      action.getDB(),
+                      action.getRegistrar(),
+                      id));
+        if (action.getDB()->TestKeySetRelations(id)) {
+            LOG(WARNING_LOG, "KeySet can't be deleted - relations in db");
+            code = COMMAND_PROHIBITS_OPERATION;
+        } else {
+            if (action.getDB()->SaveObjectDelete(id))
+                if (action.getDB()->DeleteKeySetObject(id))
+                    code = COMMAND_OK;
+        }
+        if (code == COMMAND_OK && notify)
+            ntf->Send();
+    }
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
+    if (code == 0) {
+        action.failedInternal("KeySetDelete");
+    }
+    return action.getRet()._retn();
 }
 
 /*
@@ -6044,527 +5855,399 @@ ccReg_EPP_i::KeySetCreate(
         const char *clTRID,
         const char *XML)
 {
+    Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
-    DB                          DBsql;
     std::auto_ptr<EPPNotifier>  ntf;
-    ccReg::Response_var         ret;
-    ccReg::Errors_var           errors;
-    int                         regID, id, techid, dsrecID;
+    int                         id, techid, dsrecID;
     unsigned int                i, j;
     int                         *tch = NULL;
+    short int                   code = 0;
 
     LOG(NOTICE_LOG, "KeySetCreate: clientID -> %d clTRID [%s] handle [%s] authInfoPw [%s]",
             (int)clientID, clTRID, handle, authInfoPw);
-
-    ret = new ccReg::Response;
-    errors = new ccReg::Errors;
-
-    ret->code = 0;
-    errors->length(0);
 
     ParsedAction paction;
     paction.add(1, (const char *)handle);
 
     crDate = CORBA::string_dup("");
 
-    if ((regID = GetRegistrarID(clientID))) {
-        if (DBsql.OpenDatabase(database)) {
-            std::auto_ptr<Register::KeySet::Manager> keyMan(
-                    Register::KeySet::Manager::create(
-                        &DBsql,
-                        conf.get<bool>("registry.restricted_handles"))
-                    );
-            if ((DBsql.BeginAction(
-                            clientID,
-                            EPP_KeySetCreate,
-                            clTRID,
-                            XML,
-                            &paction))) {
-                if (DBsql.BeginTransaction()) {
-                    if (tech.length() < 1) {
-                        LOG(WARNING_LOG, "KeySetCreate: not any tech contact ");
-                        ret->code = SetErrorReason(
-                                errors,
-                                COMMAND_PARAMETR_MISSING,
-                                ccReg::keyset_tech,
-                                0,
-                                REASON_MSG_TECH_NOTEXIST,
-                                GetRegistrarLang(clientID));
-                    } else if (tech.length() > 10) {
-                        LOG(WARNING_LOG, "KeySetCreate: too many tech contacts (maximum is 10)");
-                        ret->code = SetErrorReason(
-                                errors,
-                                COMMAND_PARAMETR_RANGE_ERROR,
-                                ccReg::keyset_tech,
-                                0,
-                                REASON_MSG_TECHADMIN_LIMIT,
-                                GetRegistrarLang(clientID));
-                    } else if (dsrec.length() < 1 && dnsk.length() < 1) {
-                        if (dsrec.length() < 1) {
-                            LOG(WARNING_LOG, "KeySetCreate: not any DS record");
-                            ret->code = SetErrorReason(
-                                    errors,
-                                    COMMAND_PARAMETR_MISSING,
-                                    ccReg::keyset_dsrecord,
-                                    0,
-                                    REASON_MSG_NO_DSRECORD,
-                                    GetRegistrarLang(clientID));
-                        }
-                        if (dnsk.length() < 1) {
-                            LOG(WARNING_LOG, "KeySetCreate: not any DNSKey record");
-                            ret->code = SetErrorReason(
-                                    errors,
-                                    COMMAND_PARAMETR_MISSING,
-                                    ccReg::keyset_dnskey,
-                                    0,
-                                    REASON_MSG_NO_DNSKEY,
-                                    GetRegistrarLang(clientID));
-                        }
-                    } else if (dsrec.length() > 10) {
-                        LOG(WARNING_LOG, "KeySetCreate: too many ds-records (maximum is 10)");
-                        ret->code = SetErrorReason(
-                                errors,
-                                COMMAND_PARAMETR_RANGE_ERROR,
-                                ccReg::keyset_dsrecord,
-                                0,
-                                REASON_MSG_DSRECORD_LIMIT,
-                                GetRegistrarLang(clientID));
-                    } else if (dnsk.length() > 10) {
-                        LOG(WARNING_LOG, "KeySetCreate: too many dnskeys (maximum is 10)");
-                        ret->code = SetErrorReason(
-                                errors,
-                                COMMAND_PARAMETR_RANGE_ERROR,
-                                ccReg::keyset_dnskey,
-                                0,
-                                REASON_MSG_DNSKEY_LIMIT,
-                                GetRegistrarLang(clientID));
-                    }
-                    if (ret->code == 0) {
-                        Register::KeySet::Manager::CheckAvailType caType;
+    EPPAction action(this, clientID, EPP_KeySetCreate, clTRID, XML, &paction);
 
-                        tch = new int[tech.length()];
+    std::auto_ptr<Register::KeySet::Manager> keyMan(
+            Register::KeySet::Manager::create(
+                action.getDB(),
+                conf.get<bool>("registry.restricted_handles"))
+            );
+    if (tech.length() < 1) {
+        LOG(WARNING_LOG, "KeySetCreate: not any tech contact ");
+        code = action.setErrorReason(
+                COMMAND_PARAMETR_MISSING,
+                ccReg::keyset_tech,
+                0,
+                REASON_MSG_TECH_NOTEXIST);
+    } else if (tech.length() > 10) {
+        LOG(WARNING_LOG, "KeySetCreate: too many tech contacts (maximum is 10)");
+        code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR, 
+                ccReg::keyset_tech, 0, REASON_MSG_TECHADMIN_LIMIT);
+    } else if (dsrec.length() < 1 && dnsk.length() < 1) {
+        if (dsrec.length() < 1) {
+            LOG(WARNING_LOG, "KeySetCreate: not any DS record");
+            code = action.setErrorReason(COMMAND_PARAMETR_MISSING, 
+                    ccReg::keyset_dsrecord, 0, REASON_MSG_NO_DSRECORD);
+        }
+        if (dnsk.length() < 1) {
+            LOG(WARNING_LOG, "KeySetCreate: not any DNSKey record");
+            code = action.setErrorReason(COMMAND_PARAMETR_MISSING,
+                    ccReg::keyset_dnskey, 0, REASON_MSG_NO_DNSKEY);
+        }
+    } else if (dsrec.length() > 10) {
+        LOG(WARNING_LOG, "KeySetCreate: too many ds-records (maximum is 10)");
+        code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+                ccReg::keyset_dsrecord, 0, REASON_MSG_DSRECORD_LIMIT);
+    } else if (dnsk.length() > 10) {
+        LOG(WARNING_LOG, "KeySetCreate: too many dnskeys (maximum is 10)");
+        code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+                ccReg::keyset_dnskey, 0, REASON_MSG_DNSKEY_LIMIT);
+    }
+    if (code == 0) {
+        Register::KeySet::Manager::CheckAvailType caType;
 
-                        try {
-                            Register::NameIdPair nameId;
-                            caType = keyMan->checkAvail(handle, nameId);
-                            id = nameId.id;
-                        } catch (...) {
-                            caType = Register::KeySet::Manager::CA_INVALID_HANDLE;
-                            id = -1;
-                        }
+        tch = new int[tech.length()];
 
-                        if (id < 0 || caType == Register::KeySet::Manager::CA_INVALID_HANDLE)
-                            ret->code = SetReasonKeySetHandle(
-                                    errors, handle, GetRegistrarLang(clientID));
-                        else if (caType == Register::KeySet::Manager::CA_REGISTRED) {
-                            LOG(WARNING_LOG, "KeySet handle [%s] EXISTS", handle);
-                            ret->code = COMMAND_OBJECT_EXIST;
-                        } else if (caType == Register::KeySet::Manager::CA_PROTECTED)
-                            ret->code = SetReasonProtectedPeriod(
-                                    errors,
-                                    handle,
-                                    GetRegistrarLang(clientID),
-                                    ccReg::keyset_handle);
-                    }
+        try {
+            Register::NameIdPair nameId;
+            caType = keyMan->checkAvail(handle, nameId);
+            id = nameId.id;
+        } catch (...) {
+            caType = Register::KeySet::Manager::CA_INVALID_HANDLE;
+            id = -1;
+        }
 
-                    if (ret->code == 0) {
-                        // test technical contact
-                        std::auto_ptr<Register::Contact::Manager> cman(
-                                Register::Contact::Manager::create(
-                                    &DBsql,
-                                    conf.get<bool>("registry.restricted_handles"))
-                                );
-                        for (i = 0; i < tech.length(); i++) {
-                            Register::Contact::Manager::CheckAvailType caType;
-                            try {
-                                Register::NameIdPair nameId;
-                                caType = cman->checkAvail((const char *)tech[i], nameId);
-                                techid = nameId.id;
-                            } catch (...) {
-                                caType = Register::Contact::Manager::CA_INVALID_HANDLE;
-                                techid = 0;
-                            }
-
-                            if (caType != Register::Contact::Manager::CA_REGISTRED) {
-                                LOG(DEBUG_LOG, "Tech contact doesn't exist: %s",
-                                        CORBA::string_dup(tech[i]));
-                                ret->code = SetReasonKeySetTech(
-                                        errors,
-                                        tech[i],
-                                        techid,
-                                        GetRegistrarLang(clientID),
-                                        i);
-                            }
-                            else {
-                                tch[i] = techid;
-                                //duplicity test
-                                for (j = 0; j < i; j++) {
-                                    LOG(DEBUG_LOG, "tech compare j %d techid %d and %d",
-                                            j, techid, tch[j]);
-                                    if (tch[j] == techid && tch[j] > 0) {
-                                        tch[j] = 0;
-                                        ret->code = SetReasonContactDuplicity(
-                                                errors,
-                                                tech[i],
-                                                GetRegistrarLang(clientID),
-                                                i,
-                                                ccReg::keyset_tech);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // test if dsrecord already exists in database
-                    /*
-                    if (ret->code == 0) {
-                        for (int ii = 0; ii < (int)dsrec.length(); ii++) {
-                            int id = DBsql.GetDSRecordId(
-                                    dsrec[ii].keyTag,
-                                    dsrec[ii].alg,
-                                    dsrec[ii].digestType,
-                                    dsrec[ii].digest,
-                                    dsrec[ii].maxSigLife);
-                            if (id > 0) {
-                                LOG(WARNING_LOG,
-                                        "DSRecord already exist, cannot create it: id(%d) (%d %d %d '%s' %d)",
-                                        id, dsrec[ii].keyTag, dsrec[ii].alg, dsrec[ii].digestType,
-                                        CORBA::string_dup(dsrec[ii].digest), dsrec[ii].maxSigLife);
-                                ret->code = SetErrorReason(
-                                        errors,
-                                        COMMAND_PARAMETR_ERROR,
-                                        ccReg::keyset_dsrecord,
-                                        ii,
-                                        REASON_MSG_DUPLICITY_DSRECORD,
-                                        GetRegistrarLang(clientID));
-                                break;
-                            }
-                        }
-                    }
-                    */
-
-                    // dsrecord digest type test
-                    if (ret->code == 0) {
-                        // digest type must be 1 (sha-1) - see RFC 4034 for details:
-                        // http://rfc-ref.org/RFC-TEXTS/4034/kw-dnssec_digest_type.html
-                        for (int ii = 0; ii < (int)dsrec.length(); ii++) {
-                            if (dsrec[ii].digestType != 1) {
-                                LOG(WARNING_LOG,
-                                        "Digest is %d (must be 1)",
-                                        dsrec[ii].digestType);
-                                ret->code = SetErrorReason(
-                                        errors,
-                                        COMMAND_PARAMETR_ERROR,
-                                        ccReg::keyset_dsrecord,
-                                        ii,
-                                        REASON_MSG_DSRECORD_BAD_DIGEST_TYPE,
-                                        GetRegistrarLang(clientID)
-                                        );
-                                break;
-                            }
-                        }
-                    }
-                    // dsrecord digest length test
-                    if (ret->code == 0) {
-                        // digest must be 40 characters length (because SHA-1 is used)
-                        for (int ii = 0; ii < (int)dsrec.length(); ii++) {
-                            if (strlen(dsrec[ii].digest) != 40) {
-                                LOG(WARNING_LOG,
-                                        "Digest length is %d char (must be 40)",
-                                        strlen(dsrec[ii].digest));
-                                ret->code = SetErrorReason(
-                                        errors,
-                                        COMMAND_PARAMETR_ERROR,
-                                        ccReg::keyset_dsrecord,
-                                        ii,
-                                        REASON_MSG_DSRECORD_BAD_DIGEST_LENGTH,
-                                        GetRegistrarLang(clientID)
-                                        );
-                                break;
-                            }
-                        }
-                    }
-                    // dsrecord duplicity test
-                    if (ret->code == 0) {
-                        if (dsrec.length() >= 2) {
-                            for (int ii = 0; ii < (int)dsrec.length(); ii++) {
-                                for (int jj = ii + 1; jj < (int)dsrec.length(); jj++) {
-                                    if (testDSRecordDuplicity(dsrec[ii], dsrec[jj])) {
-                                        LOG(WARNING_LOG,
-                                                "Found DSRecord duplicity: %d x %d (%d %d %d '%s' %s)",
-                                                ii, jj, dsrec[ii].keyTag, dsrec[ii].alg, dsrec[ii].digestType,
-                                                CORBA::string_dup(dsrec[ii].digest), dsrec[ii].maxSigLife);
-                                        ret->code = SetErrorReason(
-                                                errors,
-                                                COMMAND_PARAMETR_ERROR,
-                                                ccReg::keyset_dsrecord,
-                                                jj,
-                                                REASON_MSG_DUPLICITY_DSRECORD,
-                                                GetRegistrarLang(clientID));
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // dnskey flag field (must be 0, 256 or 267)
-                    // http://rfc-ref.org/RFC-TEXTS/4034/kw-flags_field.html
-                    if (ret->code == 0) {
-                        for (int ii = 0; ii < (int)dnsk.length(); ii++) {
-                            if (!(dnsk[ii].flags == 0 || dnsk[ii].flags == 256 || dnsk[ii].flags == 257)) {
-                                LOG(WARNING_LOG,
-                                        "dnskey flag is %d (must be 0, 256 or 257)",
-                                        dnsk[ii].flags);
-                                ret->code = SetErrorReason(
-                                        errors,
-                                        COMMAND_PARAMETR_ERROR,
-                                        ccReg::keyset_dnskey,
-                                        ii,
-                                        REASON_MSG_DNSKEY_BAD_FLAGS,
-                                        GetRegistrarLang(clientID));
-                                break;
-                            }
-                        }
-                    }
-                    // dnskey protocol field (must be 3)
-                    // http://rfc-ref.org/RFC-TEXTS/4034/kw-protocol_field.html
-                    if (ret->code == 0) {
-                        for (int ii = 0; ii < (int)dnsk.length(); ii++) {
-                            if (dnsk[ii].protocol != 3) {
-                                LOG(WARNING_LOG,
-                                        "dnskey protocol is %d (must be 3)",
-                                        dnsk[ii].protocol);
-                                ret->code = SetErrorReason(
-                                        errors,
-                                        COMMAND_PARAMETR_ERROR,
-                                        ccReg::keyset_dnskey,
-                                        ii,
-                                        REASON_MSG_DNSKEY_BAD_PROTOCOL,
-                                        GetRegistrarLang(clientID));
-                                break;
-                            }
-                        }
-                    }
-                    // dnskey algorithm type (must be 1, 2, 3, 4, 5, 252, 253, 254 or 255)
-                    // http://rfc-ref.org/RFC-TEXTS/4034/kw-dnssec_algorithm_type.html
-                    // http://rfc-ref.org/RFC-TEXTS/4034/chapter7.html#d4e446172
-                    if (ret->code == 0) {
-                        for (int ii = 0; ii < (int)dnsk.length(); ii++) {
-                            if (!((dnsk[ii].alg >= 1 && dnsk[ii].alg <= 5) ||
-                                        (dnsk[ii].alg >= 252 && dnsk[ii].alg <=255))) {
-                                LOG(WARNING_LOG,
-                                        "dnskey algorithm is %d (must be 1,2,3,4,5,252,253,254 or 255)",
-                                        dnsk[ii].alg);
-                                ret->code = SetErrorReason(
-                                        errors,
-                                        COMMAND_PARAMETR_ERROR,
-                                        ccReg::keyset_dnskey,
-                                        ii,
-                                        REASON_MSG_DNSKEY_BAD_ALG,
-                                        GetRegistrarLang(clientID));
-                                break;
-                            }
-                        }
-                    }
-                    // test if key is valid base64 encoded string
-                    if (ret->code == 0) {
-                        int ret1, ret2;
-                        for (int ii = 0; ii < (int)dnsk.length(); ii++) {
-                            if ((ret1 = isValidBase64((const char *)dnsk[ii].key, &ret2)) != BASE64_OK) {
-                                if (ret1 == BASE64_BAD_LENGTH) {
-                                    LOG(WARNING_LOG, "dnskey key length is wrong (must be dividable by 4)");
-                                    ret->code = SetErrorReason(
-                                            errors,
-                                            COMMAND_PARAMETR_ERROR,
-                                            ccReg::keyset_dnskey,
-                                            ii,
-                                            REASON_MSG_DNSKEY_BAD_KEY_LEN,
-                                            GetRegistrarLang(clientID));
-                                } else if (ret1 == BASE64_BAD_CHAR) {
-                                    LOG(WARNING_LOG, "dnskey key contain invalid character '%c' at position %d",
-                                            ((const char *)dnsk[ii].key)[ret2], ret2);
-                                    ret->code = SetErrorReason(
-                                            errors,
-                                            COMMAND_PARAMETR_ERROR,
-                                            ccReg::keyset_dnskey,
-                                            ii,
-                                            REASON_MSG_DNSKEY_BAD_KEY_CHAR,
-                                            GetRegistrarLang(clientID));
-                                } else {
-                                    LOG(WARNING_LOG, "isValidBase64() return unknown value (%d)",
-                                            ret1);
-                                    ret->code = COMMAND_FAILED;
-                                }
-                            }
-                        }
-                    }
-                    // dnskey duplicity test
-                    if (ret->code == 0) {
-                        if (dnsk.length() >= 2) {
-                            for (int ii = 0; ii < (int)dnsk.length(); ii++) {
-                                for (int jj = ii + 1; jj < (int)dnsk.length(); jj++) {
-                                    if (testDNSKeyDuplicity(dnsk[ii], dnsk[jj])) {
-                                        LOG(WARNING_LOG,
-                                                "Found DSNKey duplicity: %d x %d (%d %d %d %s)",
-                                                ii, jj, dnsk[ii].flags, dnsk[ii].protocol,
-                                                dnsk[ii].alg, CORBA::string_dup(dnsk[ii].key));
-                                        ret->code = SetErrorReason(
-                                                errors,
-                                                COMMAND_PARAMETR_ERROR,
-                                                ccReg::keyset_dnskey,
-                                                jj,
-                                                REASON_MSG_DUPLICITY_DNSKEY,
-                                                GetRegistrarLang(clientID));
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // keyset creating
-                    if (ret->code == 0) {
-                        id = DBsql.CreateObject("K", regID, handle, authInfoPw);
-                        if (id <= 0) {
-                            if (id == 0) {
-                                LOG(WARNING_LOG, "KeySet handle [%s] EXISTS", handle);
-                                ret->code = COMMAND_OBJECT_EXIST;
-                            } else {
-                                LOG(WARNING_LOG, "Cannot insert [%s] into object_registry", handle);
-                                ret->code = COMMAND_FAILED;
-                            }
-                        } else {
-                            DBsql.INSERT("keyset");
-                            DBsql.INTO("id");
-                            DBsql.VALUE(id);
-
-                            if (!DBsql.EXEC())
-                                ret->code = COMMAND_FAILED;
-                            else {
-                                CORBA::string_free(crDate);
-                                crDate = CORBA::string_dup(DBsql.GetObjectCrDateTime(id));
-
-                                //insert all technical contact
-                                for (i = 0; i < tech.length(); i++) {
-                                    LOG(DEBUG_LOG, "KeySetCreate: add tech contact %s id %d",
-                                            (const char *)tech[i], tch[i]);
-                                    if (!DBsql.AddContactMap("keyset", id, tch[i])) {
-                                        ret->code = COMMAND_FAILED;
-                                        break;
-                                    }
-                                }
-                                // insert dnskey(s)
-                                for (int ii = 0; ii < (int)dnsk.length(); ii++) {
-                                    char *key;
-                                    if ((key = removeWhitespaces((const char *)dnsk[ii].key)) == NULL) {
-                                        LOG(WARNING_LOG, "removeWhitespaces fails (memory problem)");
-                                        ret->code = COMMAND_FAILED;
-                                        break;
-                                    }
-                                    LOG(NOTICE_LOG, "KeySetCreate: dnskey");
-
-                                    int dnskeyId = DBsql.GetSequenceID("dnskey");
-
-                                    DBsql.INSERT("dnskey");
-                                    DBsql.INTO("id");
-                                    DBsql.INTO("keysetid");
-                                    DBsql.INTO("flags");
-                                    DBsql.INTO("protocol");
-                                    DBsql.INTO("alg");
-                                    DBsql.INTO("key");
-
-                                    DBsql.VALUE(dnskeyId);
-                                    DBsql.VALUE(id);
-                                    DBsql.VALUE(dnsk[ii].flags);
-                                    DBsql.VALUE(dnsk[ii].protocol);
-                                    DBsql.VALUE(dnsk[ii].alg);
-                                    DBsql.VALUE(key);
-                                    if (!DBsql.EXEC()) {
-                                        ret->code = COMMAND_FAILED;
-                                        free(key);
-                                        break;
-                                    }
-                                    free(key);
-                                }
-
-                                // insert DSRecord(s)
-                                for (i = 0; i < dsrec.length(); i++) {
-                                    LOG(NOTICE_LOG, "KeySetCreate: DSRecord");
-
-                                    dsrecID = DBsql.GetSequenceID("dsrecord");
-
-                                    //DSRecord information
-                                    DBsql.INSERT("DSRECORD");
-                                    DBsql.INTO("ID");
-                                    DBsql.INTO("KEYSETID");
-                                    DBsql.INTO("KEYTAG");
-                                    DBsql.INTO("ALG");
-                                    DBsql.INTO("DIGESTTYPE");
-                                    DBsql.INTO("DIGEST");
-                                    DBsql.INTO("MAXSIGLIFE");
-
-                                    DBsql.VALUE(dsrecID);
-                                    DBsql.VALUE(id);
-                                    DBsql.VALUE(dsrec[i].keyTag);
-                                    DBsql.VALUE(dsrec[i].alg);
-                                    DBsql.VALUE(dsrec[i].digestType);
-                                    DBsql.VVALUE(dsrec[i].digest);
-                                    if (dsrec[i].maxSigLife == -1)
-                                        DBsql.VALUENULL();
-                                    else
-                                        DBsql.VALUE(dsrec[i].maxSigLife);
-
-                                    if (!DBsql.EXEC()) {
-                                        ret->code = COMMAND_FAILED;
-                                        break;
-                                    }
-                                }
-
-                                // save it to histrory if it's ok
-                                if (ret->code != COMMAND_FAILED)
-                                    if (DBsql.SaveKeySetHistory(id))
-                                        if (DBsql.SaveObjectCreate(id))
-                                            ret->code = COMMAND_OK;
-                            }
-
-                            if (ret->code == COMMAND_OK) {
-                                // run notifier and send notify (suprisingly) message
-                                ntf.reset(new EPPNotifier(
-                                            conf.get<bool>("registry.disable_epp_notifier"),
-                                            mm,
-                                            &DBsql,
-                                            regID,
-                                            id)
-                                        );
-                                ntf->Send();
-                            }
-                        }
-                    }
-
-                    delete []tch;
-                    DBsql.QuitTransaction(ret->code);
-                }
-                ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code));
-            }
-            ret->msg = CORBA::string_dup(GetErrorMessage(
-                        ret->code,
-                        GetRegistrarLang(clientID))
-                    );
-
-            DBsql.Disconnect();
+        if (id < 0 || caType == Register::KeySet::Manager::CA_INVALID_HANDLE) {
+            LOG(WARNING_LOG, "Bad format of keyset handle [%s]", handle);
+            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                    ccReg::keyset_handle, 1, REASON_MSG_BAD_FORMAT_KEYSET_HANDLE);
+        } else if (caType == Register::KeySet::Manager::CA_REGISTRED) {
+            LOG(WARNING_LOG, "KeySet handle [%s] EXISTS", handle);
+            code = COMMAND_OBJECT_EXIST;
+        } else if (caType == Register::KeySet::Manager::CA_PROTECTED) {
+            LOG(WARNING_LOG, "object [%s] in history period", handle);
+            code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                    ccReg::keyset_handle, 1, REASON_MSG_PROTECTED_PERIOD);
         }
     }
 
-    if (ret->code > COMMAND_EXCEPTION)
-        EppError(ret->code, ret->msg, ret->svTRID, errors);
+    if (code == 0) {
+        // test technical contact
+        std::auto_ptr<Register::Contact::Manager> cman(
+                Register::Contact::Manager::create(
+                    action.getDB(),
+                    conf.get<bool>("registry.restricted_handles"))
+                );
+        for (i = 0; i < tech.length(); i++) {
+            Register::Contact::Manager::CheckAvailType caType;
+            try {
+                Register::NameIdPair nameId;
+                caType = cman->checkAvail((const char *)tech[i], nameId);
+                techid = nameId.id;
+            } catch (...) {
+                caType = Register::Contact::Manager::CA_INVALID_HANDLE;
+                techid = 0;
+            }
 
-    if (ret->code == 0)
-        ServerInternalError("KeySetCreate");
+            if (caType != Register::Contact::Manager::CA_REGISTRED) {
+                LOG(DEBUG_LOG, "Tech contact doesn't exist: %s",
+                        (const char *)tech[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_tech, i + 1, REASON_MSG_TECH_NOTEXIST);
+            }
+            else {
+                tch[i] = techid;
+                //duplicity test
+                for (j = 0; j < i; j++) {
+                    LOG(DEBUG_LOG, "tech compare j %d techid %d and %d",
+                            j, techid, tch[j]);
+                    if (tch[j] == techid && tch[j] > 0) {
+                        tch[j] = 0;
+                        LOG(WARNING_LOG, "Contact [%s] duplicity",
+                                (const char *)tech[i]);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::keyset_tech, i, REASON_MSG_DUPLICITY_CONTACT);
+                    }
+                }
+            }
+        }
+    }
 
-    return ret._retn();
+    // dsrecord digest type test
+    if (code == 0) {
+        // digest type must be 1 (sha-1) - see RFC 4034 for details:
+        // http://rfc-ref.org/RFC-TEXTS/4034/kw-dnssec_digest_type.html
+        for (int ii = 0; ii < (int)dsrec.length(); ii++) {
+            if (dsrec[ii].digestType != 1) {
+                LOG(WARNING_LOG,
+                        "Digest is %d (must be 1)",
+                        dsrec[ii].digestType);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                        ccReg::keyset_dsrecord, ii, 
+                        REASON_MSG_DSRECORD_BAD_DIGEST_TYPE);
+                break;
+            }
+        }
+    }
+    // dsrecord digest length test
+    if (code == 0) {
+        // digest must be 40 characters length (because SHA-1 is used)
+        for (int ii = 0; ii < (int)dsrec.length(); ii++) {
+            if (strlen(dsrec[ii].digest) != 40) {
+                LOG(WARNING_LOG,
+                        "Digest length is %d char (must be 40)",
+                        strlen(dsrec[ii].digest));
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_dsrecord, ii, 
+                        REASON_MSG_DSRECORD_BAD_DIGEST_LENGTH);
+                break;
+            }
+        }
+    }
+    // dsrecord duplicity test
+    if (code == 0) {
+        if (dsrec.length() >= 2) {
+            for (int ii = 0; ii < (int)dsrec.length(); ii++) {
+                for (int jj = ii + 1; jj < (int)dsrec.length(); jj++) {
+                    if (testDSRecordDuplicity(dsrec[ii], dsrec[jj])) {
+                        LOG(WARNING_LOG,
+                                "Found DSRecord duplicity: %d x %d (%d %d %d '%s' %d)",
+                                ii, jj, dsrec[ii].keyTag, dsrec[ii].alg, dsrec[ii].digestType,
+                                (const char *)dsrec[ii].digest, dsrec[ii].maxSigLife);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::keyset_dsrecord, jj, REASON_MSG_DUPLICITY_DSRECORD);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // dnskey flag field (must be 0, 256 or 267)
+    // http://rfc-ref.org/RFC-TEXTS/4034/kw-flags_field.html
+    if (code == 0) {
+        for (int ii = 0; ii < (int)dnsk.length(); ii++) {
+            if (!(dnsk[ii].flags == 0 || dnsk[ii].flags == 256 || dnsk[ii].flags == 257)) {
+                LOG(WARNING_LOG,
+                        "dnskey flag is %d (must be 0, 256 or 257)",
+                        dnsk[ii].flags);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                        ccReg::keyset_dnskey, ii, REASON_MSG_DNSKEY_BAD_FLAGS);
+                break;
+            }
+        }
+    }
+    // dnskey protocol field (must be 3)
+    // http://rfc-ref.org/RFC-TEXTS/4034/kw-protocol_field.html
+    if (code == 0) {
+        for (int ii = 0; ii < (int)dnsk.length(); ii++) {
+            if (dnsk[ii].protocol != 3) {
+                LOG(WARNING_LOG,
+                        "dnskey protocol is %d (must be 3)",
+                        dnsk[ii].protocol);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                        ccReg::keyset_dnskey, ii, REASON_MSG_DNSKEY_BAD_PROTOCOL);
+                break;
+            }
+        }
+    }
+    // dnskey algorithm type (must be 1, 2, 3, 4, 5, 252, 253, 254 or 255)
+    // http://rfc-ref.org/RFC-TEXTS/4034/kw-dnssec_algorithm_type.html
+    // http://rfc-ref.org/RFC-TEXTS/4034/chapter7.html#d4e446172
+    if (code == 0) {
+        for (int ii = 0; ii < (int)dnsk.length(); ii++) {
+            if (!((dnsk[ii].alg >= 1 && dnsk[ii].alg <= 5) ||
+                        (dnsk[ii].alg >= 252 && dnsk[ii].alg <=255))) {
+                LOG(WARNING_LOG,
+                        "dnskey algorithm is %d (must be 1,2,3,4,5,252,253,254 or 255)",
+                        dnsk[ii].alg);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                        ccReg::keyset_dnskey, ii, REASON_MSG_DNSKEY_BAD_ALG);
+                break;
+            }
+        }
+    }
+    // test if key is valid base64 encoded string
+    if (code == 0) {
+        int ret1, ret2;
+        for (int ii = 0; ii < (int)dnsk.length(); ii++) {
+            if ((ret1 = isValidBase64((const char *)dnsk[ii].key, &ret2)) != BASE64_OK) {
+                if (ret1 == BASE64_BAD_LENGTH) {
+                    LOG(WARNING_LOG, "dnskey key length is wrong (must be dividable by 4)");
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                            ccReg::keyset_dnskey, ii, REASON_MSG_DNSKEY_BAD_KEY_LEN);
+                } else if (ret1 == BASE64_BAD_CHAR) {
+                    LOG(WARNING_LOG, "dnskey key contain invalid character '%c' at position %d",
+                            ((const char *)dnsk[ii].key)[ret2], ret2);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                            ccReg::keyset_dnskey, ii, REASON_MSG_DNSKEY_BAD_KEY_CHAR);
+                } else {
+                    LOG(WARNING_LOG, "isValidBase64() return unknown value (%d)",
+                            ret1);
+                    code = COMMAND_FAILED;
+                }
+            }
+        }
+    }
+    // dnskey duplicity test
+    if (code == 0) {
+        if (dnsk.length() >= 2) {
+            for (int ii = 0; ii < (int)dnsk.length(); ii++) {
+                for (int jj = ii + 1; jj < (int)dnsk.length(); jj++) {
+                    if (testDNSKeyDuplicity(dnsk[ii], dnsk[jj])) {
+                        LOG(WARNING_LOG,
+                                "Found DSNKey duplicity: %d x %d (%d %d %d %s)",
+                                ii, jj, dnsk[ii].flags, dnsk[ii].protocol,
+                                dnsk[ii].alg, (const char *)dnsk[ii].key);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                                ccReg::keyset_dnskey, jj, REASON_MSG_DUPLICITY_DNSKEY);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // keyset creating
+    if (code == 0) {
+        // id = DBsql.CreateObject("K", regID, handle, authInfoPw);
+        id = action.getDB()->CreateObject("K", action.getRegistrar(),
+                handle, authInfoPw);
+        if (id <= 0) {
+            if (id == 0) {
+                LOG(WARNING_LOG, "KeySet handle [%s] EXISTS", handle);
+                code = COMMAND_OBJECT_EXIST;
+            } else {
+                LOG(WARNING_LOG, "Cannot insert [%s] into object_registry", handle);
+                code = COMMAND_FAILED;
+            }
+        } else {
+            action.getDB()->INSERT("keyset");
+            action.getDB()->INTO("id");
+            action.getDB()->VALUE(id);
+
+            if (!action.getDB()->EXEC())
+                code = COMMAND_FAILED;
+            else {
+                CORBA::string_free(crDate);
+                crDate = CORBA::string_dup(action.getDB()->GetObjectCrDateTime(id));
+
+                //insert all technical contact
+                for (i = 0; i < tech.length(); i++) {
+                    LOG(DEBUG_LOG, "KeySetCreate: add tech contact %s id %d",
+                            (const char *)tech[i], tch[i]);
+                    if (!action.getDB()->AddContactMap("keyset", id, tch[i])) {
+                        code = COMMAND_FAILED;
+                        break;
+                    }
+                }
+                // insert dnskey(s)
+                for (int ii = 0; ii < (int)dnsk.length(); ii++) {
+                    char *key;
+                    if ((key = removeWhitespaces((const char *)dnsk[ii].key)) == NULL) {
+                        LOG(WARNING_LOG, "removeWhitespaces fails (memory problem)");
+                        code = COMMAND_FAILED;
+                        break;
+                    }
+                    LOG(NOTICE_LOG, "KeySetCreate: dnskey");
+
+                    int dnskeyId = action.getDB()->GetSequenceID("dnskey");
+
+                    action.getDB()->INSERT("dnskey");
+                    action.getDB()->INTO("id");
+                    action.getDB()->INTO("keysetid");
+                    action.getDB()->INTO("flags");
+                    action.getDB()->INTO("protocol");
+                    action.getDB()->INTO("alg");
+                    action.getDB()->INTO("key");
+
+                    action.getDB()->VALUE(dnskeyId);
+                    action.getDB()->VALUE(id);
+                    action.getDB()->VALUE(dnsk[ii].flags);
+                    action.getDB()->VALUE(dnsk[ii].protocol);
+                    action.getDB()->VALUE(dnsk[ii].alg);
+                    action.getDB()->VALUE(key);
+                    if (!action.getDB()->EXEC()) {
+                        code = COMMAND_FAILED;
+                        free(key);
+                        break;
+                    }
+                    free(key);
+                }
+
+                // insert DSRecord(s)
+                for (i = 0; i < dsrec.length(); i++) {
+                    LOG(NOTICE_LOG, "KeySetCreate: DSRecord");
+
+                    dsrecID = action.getDB()->GetSequenceID("dsrecord");
+
+                    //DSRecord information
+                    action.getDB()->INSERT("DSRECORD");
+                    action.getDB()->INTO("ID");
+                    action.getDB()->INTO("KEYSETID");
+                    action.getDB()->INTO("KEYTAG");
+                    action.getDB()->INTO("ALG");
+                    action.getDB()->INTO("DIGESTTYPE");
+                    action.getDB()->INTO("DIGEST");
+                    action.getDB()->INTO("MAXSIGLIFE");
+
+                    action.getDB()->VALUE(dsrecID);
+                    action.getDB()->VALUE(id);
+                    action.getDB()->VALUE(dsrec[i].keyTag);
+                    action.getDB()->VALUE(dsrec[i].alg);
+                    action.getDB()->VALUE(dsrec[i].digestType);
+                    action.getDB()->VVALUE(dsrec[i].digest);
+                    if (dsrec[i].maxSigLife == -1)
+                        action.getDB()->VALUENULL();
+                    else
+                        action.getDB()->VALUE(dsrec[i].maxSigLife);
+
+                    if (!action.getDB()->EXEC()) {
+                        code = COMMAND_FAILED;
+                        break;
+                    }
+                }
+
+                // save it to histrory if it's ok
+                if (code != COMMAND_FAILED)
+                    if (action.getDB()->SaveKeySetHistory(id))
+                        if (action.getDB()->SaveObjectCreate(id))
+                            code = COMMAND_OK;
+            }
+
+            if (code == COMMAND_OK) {
+                // run notifier and send notify (suprisingly) message
+                ntf.reset(new EPPNotifier(
+                            conf.get<bool>("registry.disable_epp_notifier"),
+                            mm,
+                            action.getDB(),
+                            action.getRegistrar(),
+                            id)
+                        );
+                ntf->Send();
+            }
+        }
+    }
+
+    delete []tch;
+
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
+
+    if (code == 0) {
+        action.failedInternal("KeySetCreate");
+    }
+
+    return action.getRet()._retn();
 }
 
 /*************************************************************
@@ -6586,22 +6269,17 @@ ccReg_EPP_i::KeySetUpdate(
         const char *clTRID,
         const char *XML)
 {
+    Logging::Context::clear();
     Logging::Context ctx("rifd");
 
     std::auto_ptr<EPPNotifier> ntf;
-    DB DbSql;
-    int regId, keysetId, techId;
-
-    ccReg::Response_var ret = new ccReg::Response;
-    ccReg::Errors_var errors = new ccReg::Errors;
-
-    ret->code = 0;
-    errors->length(0);
+    int keysetId, techId;
 
     int *techAdd = NULL;
     int *techRem = NULL;
     techAdd = new int[tech_add.length()];
     techRem = new int[tech_rem.length()];
+    short int code = 0;
 
     for (int i = 0; i < (int)tech_add.length(); i++) {
         techAdd[i] = 0;
@@ -6613,6 +6291,8 @@ ccReg_EPP_i::KeySetUpdate(
     ParsedAction paction;
     paction.add(1, (const char *)handle);
 
+    EPPAction action(this, clientId, EPP_KeySetUpdate, clTRID, XML, &paction);
+
     LOG(NOTICE_LOG, "KeySetUpdate: clientId -> %d clTRID[%s] handle[%s] "
             "authInfo_chg[%s] tech_add[%d] tech_rem[%d] dsrec_add[%d] "
             "dsrec_rem[%d] dnskey_add[%d] dnskey_rem[%d]",
@@ -6620,746 +6300,656 @@ ccReg_EPP_i::KeySetUpdate(
             tech_rem.length(), dsrec_add.length(), dsrec_rem.length(),
             dnsk_add.length(), dnsk_rem.length());
 
-    if ((regId = GetRegistrarID(clientId))) {
-        if (DbSql.OpenDatabase(database)) {
-            std::auto_ptr<Register::KeySet::Manager> kMan(
-                    Register::KeySet::Manager::create(
-                        &DbSql, conf.get<bool>("registry.restricted_handles"))
-                    );
-            if ((DbSql.BeginAction(clientId, EPP_KeySetUpdate, clTRID, XML, &paction))) {
-                if (DbSql.BeginTransaction()) {
-                    if ((keysetId = getIdOfKeySet(&DbSql, handle, conf, true)) < 0)
-                        ret->code = SetReasonKeySetHandle(
-                                errors, handle, GetRegistrarLang(clientId));
-                    else if (keysetId == 0) {
-                        LOG(WARNING_LOG, "KeySet handle [%s] NOT_EXISTS", handle);
-                        ret->code = COMMAND_OBJECT_NOT_EXIST;
-                    }
-                    // registrar of the object
-                    if (!ret->code && !DbSql.TestObjectClientID(keysetId, regId)) {
-                        LOG(WARNING_LOG, "bad authorization not client of KeySet [%s]", handle);
-                        ret->code = SetReasonWrongRegistrar(errors, regId, GetRegistrarLang(clientId));
-                    }
-                    try {
-                        if (!ret->code && testObjectHasState(&DbSql, keysetId, FLAG_serverUpdateProhibited)) {
-                            LOG(WARNING_LOG, "update of object %s is prohibited", handle);
-                            ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
-                        }
-                    } catch (...) {
-                        ret->code = COMMAND_FAILED;
-                    }
+    std::auto_ptr<Register::KeySet::Manager> kMan(
+            Register::KeySet::Manager::create(
+                action.getDB(), conf.get<bool>("registry.restricted_handles"))
+            );
+    if ((keysetId = getIdOfKeySet(action.getDB(), handle, conf, true)) < 0) {
+        LOG(WARNING_LOG, "bad format of keyset [%s]", handle);
+        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                ccReg::keyset_handle, 1, REASON_MSG_BAD_FORMAT_KEYSET_HANDLE);
+    } else if (keysetId == 0) {
+        LOG(WARNING_LOG, "KeySet handle [%s] NOT_EXISTS", handle);
+        code = COMMAND_OBJECT_NOT_EXIST;
+    }
+    // registrar of the object
+    if (!code && !action.getDB()->TestObjectClientID(keysetId, action.getRegistrar())) {
+        LOG(WARNING_LOG, "bad authorization not client of KeySet [%s]", handle);
+        code = action.setErrorReason(COMMAND_AUTOR_ERROR,
+                ccReg::registrar_autor, 0,
+                REASON_MSG_REGISTRAR_AUTOR);
+    }
+    try {
+        if (!code && testObjectHasState(action.getDB(), keysetId, FLAG_serverUpdateProhibited)) {
+            LOG(WARNING_LOG, "update of object %s is prohibited", handle);
+            code = COMMAND_STATUS_PROHIBITS_OPERATION;
+        }
+    } catch (...) {
+        code = COMMAND_FAILED;
+    }
 
-                    ///////////////////////////////////////////////////////////
-                    //
-                    //  ** KeySetUpdate() - TESTS **
-                    //
-                    ///////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////
+    //
+    //  ** KeySetUpdate() - TESTS **
+    //
+    ///////////////////////////////////////////////////////////
 
-                    // duplicity test of dsrec_add in given parameters
-                    if (!ret->code) {
-                        for (int ii = 0; ii < (int)dsrec_add.length(); ii++) {
-                            for (int jj = ii + 1; jj < (int)dsrec_add.length(); jj++) {
-                                if (testDSRecordDuplicity(dsrec_add[ii], dsrec_add[jj])) {
-                                    LOG(WARNING_LOG, "Found DSRecord add duplicity: 1:(%d %d %d '%s' %d) 2:(%d %d %d '%s' %d)",
-                                            dsrec_add[ii].keyTag, dsrec_add[ii].alg, dsrec_add[ii].digestType,
-                                            (const char *)dsrec_add[ii].digest, dsrec_add[ii].maxSigLife,
-                                            dsrec_add[jj].keyTag, dsrec_add[jj].alg, dsrec_add[jj].digestType,
-                                            (const char *)dsrec_add[jj].digest, dsrec_add[jj].maxSigLife);
-                                    ret->code = SetErrorReason(
-                                            errors,
-                                            COMMAND_PARAMETR_ERROR,
-                                            ccReg::keyset_dsrecord_add,
-                                            jj,
-                                            REASON_MSG_DUPLICITY_DSRECORD,
-                                            GetRegistrarLang(clientId));
-                                    break;
-                                }
-                            }
-                            LOG(NOTICE_LOG, "ADD keyset DSRecord (%d %d %d '%s' %d)",
-                                    dsrec_add[ii].keyTag, dsrec_add[ii].alg, dsrec_add[ii].digestType,
-                                    (const char *)dsrec_add[ii].digest, dsrec_add[ii].maxSigLife);
-                        }
-                    }
-
-                    // duplicity test of dsrec_rem in given parameters
-                    if (!ret->code) {
-                        for (int ii = 0; ii < (int)dsrec_rem.length(); ii++) {
-                            for (int jj = ii + 1; jj < (int)dsrec_rem.length(); jj++) {
-                                if (testDSRecordDuplicity(dsrec_rem[ii], dsrec_rem[jj])) {
-                                    LOG(WARNING_LOG, "Found DSRecord rem duplicity: 1:(%d %d %d '%s' %d) 2:(%d %d %d '%s' %d)",
-                                            dsrec_rem[ii].keyTag, dsrec_rem[ii].alg, dsrec_rem[ii].digestType,
-                                            (const char *)dsrec_rem[ii].digest, dsrec_rem[ii].maxSigLife,
-                                            dsrec_rem[jj].keyTag, dsrec_rem[jj].alg, dsrec_rem[jj].digestType,
-                                            (const char *)dsrec_rem[jj].digest, dsrec_rem[jj].maxSigLife);
-                                    ret->code = SetErrorReason(
-                                            errors,
-                                            COMMAND_PARAMETR_ERROR,
-                                            ccReg::keyset_dsrecord_rem,
-                                            jj,
-                                            REASON_MSG_DUPLICITY_DSRECORD,
-                                            GetRegistrarLang(clientId));
-                                    break;
-                                }
-                            }
-                            LOG(NOTICE_LOG, "REM keyset DSRecord (%d %d %d '%s' %d)",
-                                    dsrec_rem[ii].keyTag, dsrec_rem[ii].alg, dsrec_rem[ii].digestType,
-                                    (const char *)dsrec_rem[ii].digest, dsrec_rem[ii].maxSigLife);
-                        }
-                    }
-
-                    // duplicity test for dnsk_add in given parameters
-                    if (!ret->code) {
-                        for (int ii = 0; ii < (int)dnsk_add.length(); ii++) {
-                            for (int jj = ii + 1; jj < (int)dnsk_add.length(); jj++) {
-                                if (testDNSKeyDuplicity(dnsk_add[ii], dnsk_add[jj])) {
-                                    LOG(WARNING_LOG, "Found DNSKey add duplicity: %d x %d (%d %d %d %s)",
-                                            ii, jj, dnsk_add[ii].flags, dnsk_add[ii].protocol,
-                                            dnsk_add[ii].alg, (const char *)dnsk_add[ii].key);
-                                    ret->code = SetErrorReason(
-                                            errors,
-                                            COMMAND_PARAMETR_ERROR,
-                                            ccReg::keyset_dnskey_add,
-                                            jj,
-                                            REASON_MSG_DUPLICITY_DNSKEY,
-                                            GetRegistrarLang(clientId));
-                                    break;
-                                }
-                            }
-                            LOG(NOTICE_LOG, "ADD keyset DNSKey (%d %d %d %s)",
-                                    dnsk_add[ii].flags, dnsk_add[ii].protocol,
-                                    dnsk_add[ii].alg, (const char *)dnsk_add[ii].key);
-                        }
-                    }
-
-                    // duplicity test for dnsk_rem in given parameters
-                    if (!ret->code) {
-                        for (int ii = 0; ii < (int)dnsk_rem.length(); ii++) {
-                            for (int jj = ii + 1; jj < (int)dnsk_rem.length(); jj++) {
-                                if (testDNSKeyDuplicity(dnsk_rem[ii], dnsk_rem[jj])) {
-                                    LOG(WARNING_LOG, "Found DNSKey rem duplicity: %d x %d (%d %d %d %s)",
-                                            ii, jj, dnsk_rem[ii].flags, dnsk_rem[ii].protocol,
-                                            dnsk_rem[ii].alg, (const char *)dnsk_rem[ii].key);
-                                    ret->code = SetErrorReason(
-                                            errors,
-                                            COMMAND_PARAMETR_ERROR,
-                                            ccReg::keyset_dnskey_rem,
-                                            jj,
-                                            REASON_MSG_DUPLICITY_DNSKEY,
-                                            GetRegistrarLang(clientId));
-                                    break;
-                                }
-                            }
-                            LOG(NOTICE_LOG, "REM keyset DNSKey (%d %d %d %s)",
-                                    dnsk_rem[ii].flags, dnsk_rem[ii].protocol,
-                                    dnsk_rem[ii].alg, (const char *)dnsk_rem[ii].key);
-                        }
-                    }
-
-                    // test dsrecord to add (if same exist for this keyset)
-                    if (!ret->code) {
-                        for (int i = 0; i < (int)dsrec_add.length(); i++) {
-                            int id;
-                            id = DbSql.GetDSRecordId(
-                                    keysetId,
-                                    dsrec_add[i].keyTag,
-                                    dsrec_add[i].alg,
-                                    dsrec_add[i].digestType,
-                                    dsrec_add[i].digest,
-                                    dsrec_add[i].maxSigLife);
-                            // GetDSRecordId returns id number (equal or bigger than zero) if
-                            // record is found, otherwise returns -1 (record not found)
-                            if (id > 0) {
-                                LOG(WARNING_LOG, "Same DSRecord already exist for keyset [%d]: (%d %d %d '%s' %d) with id %d",
-                                        keysetId,
-                                        dsrec_add[i].keyTag,
-                                        dsrec_add[i].alg,
-                                        dsrec_add[i].digestType,
-                                        (const char *)dsrec_add[i].digest,
-                                        dsrec_add[i].maxSigLife,
-                                        id);
-                                ret->code = SetErrorReason(
-                                        errors,
-                                        COMMAND_PARAMETR_ERROR,
-                                        ccReg::keyset_dsrecord_add,
-                                        i,
-                                        REASON_MSG_DSRECORD_EXIST,
-                                        GetRegistrarLang(clientId));
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // test dsrecord to rem (if this dsrecord exist for this keyset)
-                    if (!ret->code) {
-                        for (int i = 0; i < (int)dsrec_rem.length(); i++) {
-                            int id;
-                            id = DbSql.GetDSRecordId(
-                                    keysetId,
-                                    dsrec_rem[i].keyTag,
-                                    dsrec_rem[i].alg,
-                                    dsrec_rem[i].digestType,
-                                    dsrec_rem[i].digest,
-                                    dsrec_rem[i].maxSigLife);
-                            if (id <= 0) {
-                                LOG(WARNING_LOG, "This DSRecord not exist for keyset [%d]: (%d %d %d '%s' %d)",
-                                        keysetId,
-                                        dsrec_rem[i].keyTag,
-                                        dsrec_rem[i].alg,
-                                        dsrec_rem[i].digestType,
-                                        (const char *)dsrec_rem[i].digest,
-                                        dsrec_rem[i].maxSigLife);
-                                ret->code = SetErrorReason(
-                                        errors,
-                                        COMMAND_PARAMETR_ERROR,
-                                        ccReg::keyset_dsrecord_rem,
-                                        i,
-                                        REASON_MSG_DSRECORD_NOTEXIST,
-                                        GetRegistrarLang(clientId));
-                                break;
-                            }
-                        }
-                    }
-
-                    // dnsk_add tests - if exact same exist for this keyset
-                    if (!ret->code) {
-                        for (int ii = 0; ii < (int)dnsk_add.length(); ii++) {
-                            bool pass = true;
-                            int id;
-                            char *key;
-                            // keys are inserted into database without whitespaces
-                            if ((key = removeWhitespaces(dnsk_add[ii].key)) == NULL) {
-                                ret->code = COMMAND_FAILED;
-                                LOG(WARNING_LOG, "removeWhitespaces failed");
-                                free(key);
-                                pass = false;
-                                break;
-                            }
-                            id = DbSql.GetDNSKeyId(
-                                    keysetId,
-                                    dnsk_add[ii].flags,
-                                    dnsk_add[ii].protocol,
-                                    dnsk_add[ii].alg,
-                                    key);
-                            free(key);
-                            if (id > 0) {
-                                LOG(WARNING_LOG, "Same DNSKey already exist for keyset [%d]: (%d %d %d '%s') with id %d",
-                                        keysetId, dnsk_add[ii].flags, dnsk_add[ii].protocol, dnsk_add[ii].alg,
-                                        (const char *)dnsk_add[ii].key);
-                                ret->code = SetErrorReason(
-                                        errors,
-                                        COMMAND_PARAMETR_ERROR,
-                                        ccReg::keyset_dnskey_add,
-                                        ii,
-                                        REASON_MSG_DNSKEY_EXIST,
-                                        GetRegistrarLang(clientId));
-                                pass = false;
-                                break;
-                            }
-                        }
-                    }
-
-                    // test dnskey to rem (if this dnskey exist for this keyset)
-                    if (!ret->code) {
-                        for (int ii = 0; ii < (int)dnsk_rem.length(); ii++) {
-                            int id;
-                            char *key;
-                            // keys are inserted into database without whitespaces
-                            if ((key = removeWhitespaces(dnsk_rem[ii].key)) == NULL) {
-                                ret->code = COMMAND_FAILED;
-                                LOG(WARNING_LOG, "removeWhitespaces failed");
-                                free(key);
-                                break;
-                            }
-                            id = DbSql.GetDNSKeyId(
-                                    keysetId,
-                                    dnsk_rem[ii].flags,
-                                    dnsk_rem[ii].protocol,
-                                    dnsk_rem[ii].alg,
-                                    key);
-                                    //dnsk_rem[ii].key);
-                            if (id <= 0) {
-                                LOG(WARNING_LOG, "This DNSKey not exists for keyset [%d] (%d %d %d %s)",
-                                        keysetId,
-                                        dnsk_rem[ii].flags,
-                                        dnsk_rem[ii].protocol,
-                                        dnsk_rem[ii].alg,
-                                        (const char *)dnsk_rem[ii].key);
-                                ret->code = SetErrorReason(
-                                        errors,
-                                        COMMAND_PARAMETR_ERROR,
-                                        ccReg::keyset_dnskey_rem,
-                                        ii,
-                                        REASON_MSG_DNSKEY_NOTEXIST,
-                                        GetRegistrarLang(clientId));
-                                free(key);
-                                break;
-                            }
-                            free(key);
-                        }
-                    }
-
-                    // test maximum values - technical contacts
-                    if (!ret->code) {
-                        if ((DbSql.GetKeySetContacts(keysetId) + tech_add.length() - tech_rem.length()) > 10) {
-                            LOG(WARNING_LOG, "KeySetUpdate: too may tech contacts (maximum is 10)"
-                                    "(existing:%d, to add:%d, to rem:%d)",
-                                    DbSql.GetKeySetContacts(keysetId),
-                                    tech_add.length(),
-                                    tech_rem.length());
-                            ret->code = SetErrorReason(
-                                    errors,
-                                    COMMAND_PARAMETR_RANGE_ERROR,
-                                    ccReg::keyset_tech,
-                                    0,
-                                    REASON_MSG_TECHADMIN_LIMIT,
-                                    GetRegistrarLang(clientId));
-                        }
-                    }
-
-                    // test maximum values - dsrecords
-                    if (!ret->code) {
-                        if ((DbSql.GetKeySetDSRecords(keysetId) + dsrec_add.length() - dsrec_rem.length()) > 10) {
-                            LOG(WARNING_LOG, "KeySetUpdate: too many ds-records (maximum is 10)"
-                                    "(existing:%d, to add:%d, to rem:%d)",
-                                    DbSql.GetKeySetDSRecords(keysetId),
-                                    dsrec_add.length(),
-                                    dsrec_rem.length());
-                            ret->code = SetErrorReason(
-                                    errors,
-                                    COMMAND_PARAMETR_RANGE_ERROR,
-                                    ccReg::keyset_dsrecord,
-                                    0,
-                                    REASON_MSG_DSRECORD_LIMIT,
-                                    GetRegistrarLang(clientId));
-                        }
-                    }
-
-                    // test maximum values - dnskeys
-                    if (!ret->code) {
-                        if ((DbSql.GetKeySetDNSKeys(keysetId) + dnsk_add.length() - dnsk_rem.length()) > 10) {
-                            LOG(WARNING_LOG, "KeySetUpdate: too many dnskeys (maximum is 10)"
-                                    "(existing:%d, to add:%d, to rem:%d)",
-                                    DbSql.GetKeySetDNSKeys(keysetId),
-                                    dnsk_add.length(),
-                                    dnsk_rem.length());
-                            ret->code = SetErrorReason(
-                                    errors,
-                                    COMMAND_PARAMETR_RANGE_ERROR,
-                                    ccReg::keyset_dnskey,
-                                    0,
-                                    REASON_MSG_DNSKEY_LIMIT,
-                                    GetRegistrarLang(clientId));
-                        }
-                    }
-
-                    // test minimum value - there must be at least one from the pair dnskey-dsrecord
-                    if (!ret->code) {
-                        if ((DbSql.GetKeySetDSRecords(keysetId) + DbSql.GetKeySetDNSKeys(keysetId) +
-                                    dsrec_add.length() + dnsk_add.length() - dsrec_rem.length() -
-                                    dnsk_rem.length()) <= 0) {
-                            LOG(WARNING_LOG, "KeySetUpdate: there must remain one DNSKey or one DSRecord");
-                            ret->code = SetErrorReason(
-                                    errors,
-                                    COMMAND_FAILED,
-                                    ccReg::keyset_dnskey,
-                                    0,
-                                    REASON_MSG_NO_DNSKEY_DSRECORD,
-                                    GetRegistrarLang(clientId));
-                            ret->code = COMMAND_FAILED;
-                        }
-                    }
-
-                    if (!ret->code) {
-                        // test ADD tech-c
-                        for (int i = 0; i < (int)tech_add.length(); i++) {
-                            if ((techId = getIdOfContact(&DbSql, tech_add[i], conf)) <= 0)
-                                ret->code = SetReasonKeySetTechADD(
-                                        errors,
-                                        tech_add[i],
-                                        techId,
-                                        GetRegistrarLang(clientId),
-                                        i);
-                            else if (DbSql.CheckContactMap("keyset", keysetId, techId, 0))
-                                ret->code = SetReasonKeySetTechExistMap(
-                                        errors,
-                                        tech_add[i],
-                                        GetRegistrarLang(clientId),
-                                        i);
-                            else {
-                                techAdd[i] = techId;
-                                for (int j = 0; j < i; j++) {
-                                    if (techAdd[j] == techId && techAdd[j] > 0) {
-                                        techAdd[j] = 0;
-                                        ret->code = SetReasonContactDuplicity(
-                                                errors,
-                                                tech_add[i],
-                                                GetRegistrarLang(clientId),
-                                                i,
-                                                ccReg::keyset_tech_add);
-                                    }
-                                }
-                            }
-                            LOG(NOTICE_LOG, "ADD tech  techid -> %d [%s]",
-                                    techId, (const char *)tech_add[i]);
-                        }
-
-                        // test REM tech-c
-                        if (!ret->code) {
-                            for (int i = 0; i < (int)tech_rem.length(); i++) {
-                                if ((techId = getIdOfContact(&DbSql, tech_rem[i], conf)) <= 0)
-                                    ret->code = SetReasonKeySetTechREM(
-                                            errors,
-                                            tech_rem[i],
-                                            techId,
-                                            GetRegistrarLang(clientId),
-                                            i);
-                                else if (!DbSql.CheckContactMap("keyset", keysetId, techId, 0))
-                                    ret->code = SetReasonKeySetTechNotExistMap(
-                                            errors,
-                                            tech_rem[i],
-                                            GetRegistrarLang(clientId),
-                                            i);
-                                else {
-                                    techRem[i] = techId;
-                                    for (int j = 0; j < i; j++) {
-                                        if (techRem[j] == techId && techRem[j] > 0) {
-                                            techRem[j] = 0;
-                                            ret->code = SetReasonContactDuplicity(
-                                                    errors,
-                                                    tech_rem[i],
-                                                    GetRegistrarLang(clientId),
-                                                    i,
-                                                    ccReg::keyset_tech_rem);
-                                        }
-                                    }
-                                }
-                                LOG(NOTICE_LOG, "REM tech  techid -> %d [%s]",
-                                        techId, (const char *)tech_rem[i]);
-                            }
-                        }
-
-                        // DSRecord member tests
-                        if (!ret->code) {
-                            for (int i = 0; i < (int)dsrec_add.length(); i++) {
-                                // test digest type
-                                if (dsrec_add[i].digestType != 1) {
-                                    LOG(WARNING_LOG, "Bad digest type: %d (must be 1)",
-                                            dsrec_add[i].digestType);
-                                    ret->code = SetErrorReason(
-                                            errors,
-                                            COMMAND_PARAMETR_ERROR,
-                                            ccReg::keyset_dsrecord_add,
-                                            i,
-                                            REASON_MSG_DSRECORD_BAD_DIGEST_TYPE,
-                                            GetRegistrarLang(clientId)
-                                            );
-                                    break;
-                                }
-                                // test digest length
-                                if (strlen(dsrec_add[i].digest) != 40) {
-                                    LOG(WARNING_LOG, "Bad digest length: %d (must be 40)",
-                                            strlen(dsrec_add[i].digest));
-                                    ret->code = SetErrorReason(
-                                            errors,
-                                            COMMAND_PARAMETR_ERROR,
-                                            ccReg::keyset_dsrecord_add,
-                                            i,
-                                            REASON_MSG_DSRECORD_BAD_DIGEST_LENGTH,
-                                            GetRegistrarLang(clientId)
-                                            );
-                                    break;
-                                }
-                            }
-                        }
-
-                        // DNSKey member tests
-                        if (!ret->code) {
-                            for (int ii = 0; ii < (int)dnsk_add.length(); ii++) {
-                                // dnskey flag field test (must be 0, 256, 257)
-                                if (!(dnsk_add[ii].flags == 0 || dnsk_add[ii].flags == 256 || dnsk_add[ii].flags == 257)) {
-                                    LOG(WARNING_LOG,
-                                            "dnskey flag is %d (must be 0, 256 or 257)",
-                                            dnsk_add[ii].flags);
-                                    ret->code = SetErrorReason(
-                                            errors,
-                                            COMMAND_PARAMETR_ERROR,
-                                            ccReg::keyset_dnskey_add,
-                                            ii,
-                                            REASON_MSG_DNSKEY_BAD_FLAGS,
-                                            GetRegistrarLang(clientId));
-                                    break;
-                                }
-                                // dnskey protocol test (must be 3)
-                                if (dnsk_add[ii].protocol != 3) {
-                                    LOG(WARNING_LOG,
-                                            "dnskey protocol is %d (must be 3)",
-                                            dnsk_add[ii].protocol);
-                                    ret->code = SetErrorReason(
-                                            errors,
-                                            COMMAND_PARAMETR_ERROR,
-                                            ccReg::keyset_dnskey_add,
-                                            ii,
-                                            REASON_MSG_DNSKEY_BAD_PROTOCOL,
-                                            GetRegistrarLang(clientId));
-                                    break;
-                                }
-                                // dnskey algorithm type test (must be 1,2,3,4,5,252,253,254,255)
-                                if (!((dnsk_add[ii].alg >= 1 && dnsk_add[ii].alg <= 5) ||
-                                            (dnsk_add[ii].alg >= 252 && dnsk_add[ii].alg <= 255))) {
-                                    LOG(WARNING_LOG,
-                                            "dnskey algorithm is %d (must be 1,2,3,4,5,252,253,254 or 255)",
-                                            dnsk_add[ii].alg);
-                                    ret->code = SetErrorReason(
-                                            errors,
-                                            COMMAND_PARAMETR_ERROR,
-                                            ccReg::keyset_dnskey_add,
-                                            ii,
-                                            REASON_MSG_DNSKEY_BAD_ALG,
-                                            GetRegistrarLang(clientId));
-                                    break;
-                                }
-                                // dnskey key test - see isValidBase64 function for details
-                                int ret1, ret2;
-                                if ((ret1 = isValidBase64((const char *)dnsk_add[ii].key, &ret2)) != BASE64_OK) {
-                                    if (ret1 == BASE64_BAD_LENGTH) {
-                                        LOG(WARNING_LOG, "dnskey key length is wrong (must be dividable by 4)");
-                                        ret->code = SetErrorReason(
-                                                errors,
-                                                COMMAND_PARAMETR_ERROR,
-                                                ccReg::keyset_dnskey_add,
-                                                ii,
-                                                REASON_MSG_DNSKEY_BAD_KEY_LEN,
-                                                GetRegistrarLang(clientId));
-                                    } if (ret1 == BASE64_BAD_CHAR) {
-                                        LOG(WARNING_LOG, "dnskey key contain bad character '%c' at position %d",
-                                                ((const char *)dnsk_add[ii].key)[ret2], ret2);
-                                        ret->code = SetErrorReason(
-                                                errors,
-                                                COMMAND_PARAMETR_ERROR,
-                                                ccReg::keyset_dnskey_add,
-                                                ii,
-                                                REASON_MSG_DNSKEY_BAD_KEY_CHAR,
-                                                GetRegistrarLang(clientId));
-                                    } else {
-                                        LOG(WARNING_LOG, "isValidBase64() return unknown value (%d)",
-                                                ret1);
-                                        ret->code = COMMAND_FAILED;
-                                    }
-                                    break;
-                                }
-                            }
-
-                        }
-
-                        ///////////////////////////////////////////////////////
-                        //
-                        //  ** KeySetUpdate() - UPDATE **
-                        //
-                        ///////////////////////////////////////////////////////
-
-                        // if no errors occured run update
-                        if (ret->code == 0) {
-                            if (DbSql.ObjectUpdate(keysetId, regId, authInfo_chg)) {
-                                ntf.reset(new EPPNotifier(
-                                            conf.get<bool>("registry.disable_epp_notifier"), mm, &DbSql, regId, keysetId));
-
-                                for (int i = 0; i < (int)tech_add.length(); i++)
-                                    ntf->AddTechNew(techAdd[i]);
-
-                                ntf->Send(); // send message to all technical contacts
-
-                                // adding tech contacts
-                                for (int i = 0; i < (int)tech_add.length(); i++) {
-                                    LOG(NOTICE_LOG, "INSERT add techid -> %d [%s]",
-                                            techAdd[i], (const char *)tech_add[i]);
-                                    if (!DbSql.AddContactMap("keyset", keysetId, techAdd[i])) {
-                                        ret->code = COMMAND_FAILED;
-                                        break;
-                                    }
-                                }
-
-                                // delete tech contacts
-                                for (int i = 0; i < (int)tech_rem.length(); i++) {
-                                    LOG(NOTICE_LOG, "DELETE rem techid -> %d [%s]",
-                                            techRem[i], (const char *)tech_rem[i]);
-                                    if (!DbSql.DeleteFromTableMap("keyset", keysetId, techRem[i])) {
-                                        ret->code = COMMAND_FAILED;
-                                        break;
-                                    }
-                                }
-
-                                // test for count of tech contacts after add&rem
-                                if (tech_rem.length() > 0) {
-                                    int techNum = DbSql.GetKeySetContacts(keysetId);
-                                    LOG(NOTICE_LOG, "KeySetUpdate: tech Contacts %d", techNum);
-                                    if (techNum == 0) {
-                                        // mark all rem tech-c as param error
-                                        for (int i = 0; i < (int)tech_rem.length(); i++) {
-                                            ret->code = SetErrorReason(
-                                                    errors,
-                                                    COMMAND_PARAMETR_VALUE_POLICY_ERROR,
-                                                    ccReg::keyset_tech_rem,
-                                                    i + 1,
-                                                    REASON_MSG_CAN_NOT_REMOVE_TECH,
-                                                    GetRegistrarLang(clientId));
-                                        }
-                                    }
-                                }
-
-                                // delete dsrecords
-                                for (int i = 0; i < (int)dsrec_rem.length(); i++) {
-                                    LOG(NOTICE_LOG,
-                                            "KeySetUpdate: delete DSRecord (keytag:%d,alg:%d,"
-                                            "digestType:%d,digest:%s,maxSigLife:%d) from KeySet [%s]",
-                                            dsrec_rem[i].keyTag, dsrec_rem[i].alg, dsrec_rem[i].digestType,
-                                            (const char *)dsrec_rem[i].digest, dsrec_rem[i].maxSigLife,
-                                            (const char *)handle);
-                                    int dsrecId = DbSql.GetDSRecordId(keysetId, dsrec_rem[i].keyTag,
-                                            dsrec_rem[i].alg, dsrec_rem[i].digestType,
-                                            (const char *)dsrec_rem[i].digest, dsrec_rem[i].maxSigLife);
-                                    if (dsrecId == -1) {
-                                        ret->code = COMMAND_FAILED;
-                                        break;
-                                    }
-                                    LOG(NOTICE_LOG,
-                                            "KeySetUpdate: delete DSRecord id found: %d",
-                                            dsrecId);
-                                    if (!DbSql.DeleteFromTable("dsrecord", "id", dsrecId))
-                                        ret->code = COMMAND_FAILED;
-                                }
-                                // delete dnskey(s)
-                                for (int ii = 0; ii < (int)dnsk_rem.length(); ii++) {
-                                    char *key;
-                                    // keys are inserted into database without whitespaces
-                                    if ((key = removeWhitespaces(dnsk_rem[ii].key)) == NULL) {
-                                        ret->code = COMMAND_FAILED;
-                                        LOG(WARNING_LOG, "removeWhitespaces failed");
-                                        free(key);
-                                        break;
-                                    }
-                                    LOG(NOTICE_LOG,
-                                            "KeySetUpdate: delete DNSKey (flags:%d,protocol:%d,"
-                                            "alg:%d,key:%s from keyset (handle:%d)",
-                                            dnsk_rem[ii].flags, dnsk_rem[ii].protocol,
-                                            dnsk_rem[ii].alg, (const char *)dnsk_rem[ii].key,
-                                            (const char *)handle);
-                                    int dnskeyId = DbSql.GetDNSKeyId(keysetId, dnsk_rem[ii].flags,
-                                            dnsk_rem[ii].protocol, dnsk_rem[ii].alg,
-                                            key);
-                                    if (dnskeyId == -1) {
-                                        ret->code = COMMAND_FAILED;
-                                        free(key);
-                                        break;
-                                    }
-                                    LOG(NOTICE_LOG, "KeySetUpdate: delete DNSKey id found: %d",
-                                            dnskeyId);
-                                    if (!DbSql.DeleteFromTable("dnskey", "id", dnskeyId)) {
-                                        LOG(WARNING_LOG, "during deleting dnskeys command failed");
-                                        ret->code = COMMAND_FAILED;
-                                        free(key);
-                                        break;
-                                    }
-                                    free(key);
-                                }
-
-                                // add dsrecords
-                                for (int i = 0; i < (int)dsrec_add.length(); i++) {
-                                    LOG(NOTICE_LOG,
-                                            "KeySetUpdate: add DSRecord (keyTag:%d,alg:%d,"
-                                            "digestType:%d,digest:%s,maxSigLife:%d) to KeySet [%s]",
-                                            dsrec_add[i].keyTag, dsrec_add[i].alg, dsrec_add[i].digestType,
-                                            (const char *)dsrec_add[i].digest, dsrec_add[i].maxSigLife,
-                                            (const char *)handle);
-                                    int dsrecId = DbSql.GetSequenceID("dsrecord");
-
-                                    DbSql.INSERT("dsrecord");
-                                    DbSql.INTO("id");
-                                    DbSql.INTO("keysetid");
-                                    DbSql.INTO("keytag");
-                                    DbSql.INTO("alg");
-                                    DbSql.INTO("digesttype");
-                                    DbSql.INTO("digest");
-                                    DbSql.INTO("maxsiglife");
-                                    DbSql.VALUE(dsrecId);
-                                    DbSql.VALUE(keysetId);
-                                    DbSql.VALUE(dsrec_add[i].keyTag);
-                                    DbSql.VALUE(dsrec_add[i].alg);
-                                    DbSql.VALUE(dsrec_add[i].digestType);
-                                    DbSql.VALUE(dsrec_add[i].digest);
-                                    if (dsrec_add[i].maxSigLife == -1)
-                                        DbSql.VALUENULL();
-                                    else
-                                        DbSql.VALUE(dsrec_add[i].maxSigLife);
-                                    if (!DbSql.EXEC()) {
-                                        ret->code = COMMAND_FAILED;
-                                        break;
-                                    }
-                                }
-
-                                // add dnskey(s)
-                                for (int ii = 0; ii < (int)dnsk_add.length(); ii++) {
-                                    char *key;
-                                    if ((key = removeWhitespaces((const char *)dnsk_add[ii].key)) == NULL) {
-                                        LOG(WARNING_LOG, "removeWhitespaces fails (memory problem)");
-                                        ret->code = COMMAND_FAILED;
-                                        break;
-                                    }
-                                    LOG(NOTICE_LOG,
-                                            "KeySetUpdate: add DNSKey (flags:%d,protocol:%d,"
-                                            "alg:%d,key:%s to keyset (handle:%d)",
-                                            dnsk_add[ii].flags, dnsk_add[ii].protocol,
-                                            dnsk_add[ii].alg, (const char *)dnsk_add[ii].key,
-                                            (const char *)handle);
-                                    int dnskeyId = DbSql.GetSequenceID("dnskey");
-                                    DbSql.INSERT("dnskey");
-                                    DbSql.INTO("id");
-                                    DbSql.INTO("keysetid");
-                                    DbSql.INTO("flags");
-                                    DbSql.INTO("protocol");
-                                    DbSql.INTO("alg");
-                                    DbSql.INTO("key");
-                                    DbSql.VALUE(dnskeyId);
-                                    DbSql.VALUE(keysetId);
-                                    DbSql.VALUE(dnsk_add[ii].flags);
-                                    DbSql.VALUE(dnsk_add[ii].protocol);
-                                    DbSql.VALUE(dnsk_add[ii].alg);
-                                    DbSql.VALUE(key);
-                                    if (!DbSql.EXEC()) {
-                                        ret->code = COMMAND_FAILED;
-                                        free(key);
-                                        break;
-                                    }
-                                    free(key);
-                                }
-                                // save to history if no errors
-                                if (ret->code == 0) {
-                                    if (DbSql.SaveKeySetHistory(keysetId))
-                                        ret->code = COMMAND_OK;
-                                }
-                                if (ret->code == COMMAND_OK)
-                                    ntf->Send();
-                            }
-                        }
-                    }
-                    DbSql.QuitTransaction(ret->code);
+    // duplicity test of dsrec_add in given parameters
+    if (!code) {
+        for (int ii = 0; ii < (int)dsrec_add.length(); ii++) {
+            for (int jj = ii + 1; jj < (int)dsrec_add.length(); jj++) {
+                if (testDSRecordDuplicity(dsrec_add[ii], dsrec_add[jj])) {
+                    LOG(WARNING_LOG, "Found DSRecord add duplicity: 1:(%d %d %d '%s' %d) 2:(%d %d %d '%s' %d)",
+                            dsrec_add[ii].keyTag, dsrec_add[ii].alg, dsrec_add[ii].digestType,
+                            (const char *)dsrec_add[ii].digest, dsrec_add[ii].maxSigLife,
+                            dsrec_add[jj].keyTag, dsrec_add[jj].alg, dsrec_add[jj].digestType,
+                            (const char *)dsrec_add[jj].digest, dsrec_add[jj].maxSigLife);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::keyset_dsrecord_add, jj,
+                            REASON_MSG_DUPLICITY_DSRECORD);
+                    break;
                 }
-                ret->svTRID = CORBA::string_dup(DbSql.EndAction(ret->code));
             }
-            ret->msg = CORBA::string_dup(
-                    GetErrorMessage(ret->code, GetRegistrarLang(clientId)));
-            DbSql.Disconnect();
+            LOG(NOTICE_LOG, "ADD keyset DSRecord (%d %d %d '%s' %d)",
+                    dsrec_add[ii].keyTag, dsrec_add[ii].alg, dsrec_add[ii].digestType,
+                    (const char *)dsrec_add[ii].digest, dsrec_add[ii].maxSigLife);
+        }
+    }
+
+    // duplicity test of dsrec_rem in given parameters
+    if (!code) {
+        for (int ii = 0; ii < (int)dsrec_rem.length(); ii++) {
+            for (int jj = ii + 1; jj < (int)dsrec_rem.length(); jj++) {
+                if (testDSRecordDuplicity(dsrec_rem[ii], dsrec_rem[jj])) {
+                    LOG(WARNING_LOG, "Found DSRecord rem duplicity: 1:(%d %d %d '%s' %d) 2:(%d %d %d '%s' %d)",
+                            dsrec_rem[ii].keyTag, dsrec_rem[ii].alg, dsrec_rem[ii].digestType,
+                            (const char *)dsrec_rem[ii].digest, dsrec_rem[ii].maxSigLife,
+                            dsrec_rem[jj].keyTag, dsrec_rem[jj].alg, dsrec_rem[jj].digestType,
+                            (const char *)dsrec_rem[jj].digest, dsrec_rem[jj].maxSigLife);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::keyset_dsrecord_rem, jj,
+                            REASON_MSG_DUPLICITY_DSRECORD);
+                    break;
+                }
+            }
+            LOG(NOTICE_LOG, "REM keyset DSRecord (%d %d %d '%s' %d)",
+                    dsrec_rem[ii].keyTag, dsrec_rem[ii].alg, dsrec_rem[ii].digestType,
+                    (const char *)dsrec_rem[ii].digest, dsrec_rem[ii].maxSigLife);
+        }
+    }
+
+    // duplicity test for dnsk_add in given parameters
+    if (!code) {
+        for (int ii = 0; ii < (int)dnsk_add.length(); ii++) {
+            for (int jj = ii + 1; jj < (int)dnsk_add.length(); jj++) {
+                if (testDNSKeyDuplicity(dnsk_add[ii], dnsk_add[jj])) {
+                    LOG(WARNING_LOG, "Found DNSKey add duplicity: %d x %d (%d %d %d %s)",
+                            ii, jj, dnsk_add[ii].flags, dnsk_add[ii].protocol,
+                            dnsk_add[ii].alg, (const char *)dnsk_add[ii].key);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::keyset_dnskey_add, jj,
+                            REASON_MSG_DUPLICITY_DNSKEY);
+                    break;
+                }
+            }
+            LOG(NOTICE_LOG, "ADD keyset DNSKey (%d %d %d %s)",
+                    dnsk_add[ii].flags, dnsk_add[ii].protocol,
+                    dnsk_add[ii].alg, (const char *)dnsk_add[ii].key);
+        }
+    }
+
+    // duplicity test for dnsk_rem in given parameters
+    if (!code) {
+        for (int ii = 0; ii < (int)dnsk_rem.length(); ii++) {
+            for (int jj = ii + 1; jj < (int)dnsk_rem.length(); jj++) {
+                if (testDNSKeyDuplicity(dnsk_rem[ii], dnsk_rem[jj])) {
+                    LOG(WARNING_LOG, "Found DNSKey rem duplicity: %d x %d (%d %d %d %s)",
+                            ii, jj, dnsk_rem[ii].flags, dnsk_rem[ii].protocol,
+                            dnsk_rem[ii].alg, (const char *)dnsk_rem[ii].key);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::keyset_dnskey_rem, jj,
+                            REASON_MSG_DUPLICITY_DNSKEY);
+                    break;
+                }
+            }
+            LOG(NOTICE_LOG, "REM keyset DNSKey (%d %d %d %s)",
+                    dnsk_rem[ii].flags, dnsk_rem[ii].protocol,
+                    dnsk_rem[ii].alg, (const char *)dnsk_rem[ii].key);
+        }
+    }
+
+    // test dsrecord to add (if same exist for this keyset)
+    if (!code) {
+        for (int i = 0; i < (int)dsrec_add.length(); i++) {
+            int id;
+            id = action.getDB()->GetDSRecordId(
+                    keysetId,
+                    dsrec_add[i].keyTag,
+                    dsrec_add[i].alg,
+                    dsrec_add[i].digestType,
+                    dsrec_add[i].digest,
+                    dsrec_add[i].maxSigLife);
+            // GetDSRecordId returns id number (equal or bigger than zero) if
+            // record is found, otherwise returns -1 (record not found)
+            if (id > 0) {
+                LOG(WARNING_LOG, "Same DSRecord already exist for keyset [%d]: (%d %d %d '%s' %d) with id %d",
+                        keysetId,
+                        dsrec_add[i].keyTag,
+                        dsrec_add[i].alg,
+                        dsrec_add[i].digestType,
+                        (const char *)dsrec_add[i].digest,
+                        dsrec_add[i].maxSigLife,
+                        id);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_dsrecord_add, i,
+                        REASON_MSG_DSRECORD_EXIST);
+                break;
+            }
+        }
+    }
+
+    // test dsrecord to rem (if this dsrecord exist for this keyset)
+    if (!code) {
+        for (int i = 0; i < (int)dsrec_rem.length(); i++) {
+            int id;
+            id = action.getDB()->GetDSRecordId(
+                    keysetId,
+                    dsrec_rem[i].keyTag,
+                    dsrec_rem[i].alg,
+                    dsrec_rem[i].digestType,
+                    dsrec_rem[i].digest,
+                    dsrec_rem[i].maxSigLife);
+            if (id <= 0) {
+                LOG(WARNING_LOG, "This DSRecord not exist for keyset [%d]: (%d %d %d '%s' %d)",
+                        keysetId,
+                        dsrec_rem[i].keyTag,
+                        dsrec_rem[i].alg,
+                        dsrec_rem[i].digestType,
+                        (const char *)dsrec_rem[i].digest,
+                        dsrec_rem[i].maxSigLife);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_dsrecord_rem, i,
+                        REASON_MSG_DSRECORD_NOTEXIST);
+                break;
+            }
+        }
+    }
+
+    // dnsk_add tests - if exact same exist for this keyset
+    if (!code) {
+        for (int ii = 0; ii < (int)dnsk_add.length(); ii++) {
+            bool pass = true;
+            int id;
+            char *key;
+            // keys are inserted into database without whitespaces
+            if ((key = removeWhitespaces(dnsk_add[ii].key)) == NULL) {
+                code = COMMAND_FAILED;
+                LOG(WARNING_LOG, "removeWhitespaces failed");
+                free(key);
+                pass = false;
+                break;
+            }
+            id = action.getDB()->GetDNSKeyId(
+                    keysetId,
+                    dnsk_add[ii].flags,
+                    dnsk_add[ii].protocol,
+                    dnsk_add[ii].alg,
+                    key);
+            free(key);
+            if (id > 0) {
+                LOG(WARNING_LOG, "Same DNSKey already exist for keyset [%d]: (%d %d %d '%s') with id %d",
+                        keysetId, dnsk_add[ii].flags, dnsk_add[ii].protocol, dnsk_add[ii].alg,
+                        (const char *)dnsk_add[ii].key);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_dnskey_add, ii,
+                        REASON_MSG_DNSKEY_EXIST);
+                pass = false;
+                break;
+            }
+        }
+    }
+
+    // test dnskey to rem (if this dnskey exist for this keyset)
+    if (!code) {
+        for (int ii = 0; ii < (int)dnsk_rem.length(); ii++) {
+            int id;
+            char *key;
+            // keys are inserted into database without whitespaces
+            if ((key = removeWhitespaces(dnsk_rem[ii].key)) == NULL) {
+                code = COMMAND_FAILED;
+                LOG(WARNING_LOG, "removeWhitespaces failed");
+                free(key);
+                break;
+            }
+            id = action.getDB()->GetDNSKeyId(
+                    keysetId,
+                    dnsk_rem[ii].flags,
+                    dnsk_rem[ii].protocol,
+                    dnsk_rem[ii].alg,
+                    key);
+            //dnsk_rem[ii].key);
+            if (id <= 0) {
+                LOG(WARNING_LOG, "This DNSKey not exists for keyset [%d] (%d %d %d %s)",
+                        keysetId,
+                        dnsk_rem[ii].flags,
+                        dnsk_rem[ii].protocol,
+                        dnsk_rem[ii].alg,
+                        (const char *)dnsk_rem[ii].key);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_dnskey_rem, ii,
+                        REASON_MSG_DNSKEY_NOTEXIST);
+                free(key);
+                break;
+            }
+            free(key);
+        }
+    }
+
+    // test maximum values - technical contacts
+    if (!code) {
+        if ((action.getDB()->GetKeySetContacts(keysetId) + tech_add.length() - tech_rem.length()) > 10) {
+            LOG(WARNING_LOG, "KeySetUpdate: too may tech contacts (maximum is 10)"
+                    "(existing:%d, to add:%d, to rem:%d)",
+                    action.getDB()->GetKeySetContacts(keysetId),
+                    tech_add.length(),
+                    tech_rem.length());
+            code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+                    ccReg::keyset_tech, 0, REASON_MSG_TECHADMIN_LIMIT);
+        }
+    }
+
+    // test maximum values - dsrecords
+    if (!code) {
+        if ((action.getDB()->GetKeySetDSRecords(keysetId) + dsrec_add.length() - dsrec_rem.length()) > 10) {
+            LOG(WARNING_LOG, "KeySetUpdate: too many ds-records (maximum is 10)"
+                    "(existing:%d, to add:%d, to rem:%d)",
+                    action.getDB()->GetKeySetDSRecords(keysetId),
+                    dsrec_add.length(),
+                    dsrec_rem.length());
+            code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+                    ccReg::keyset_dsrecord, 0, REASON_MSG_DSRECORD_LIMIT);
+        }
+    }
+
+    // test maximum values - dnskeys
+    if (!code) {
+        if ((action.getDB()->GetKeySetDNSKeys(keysetId) + dnsk_add.length() - dnsk_rem.length()) > 10) {
+            LOG(WARNING_LOG, "KeySetUpdate: too many dnskeys (maximum is 10)"
+                    "(existing:%d, to add:%d, to rem:%d)",
+                    action.getDB()->GetKeySetDNSKeys(keysetId),
+                    dnsk_add.length(),
+                    dnsk_rem.length());
+            code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+                    ccReg::keyset_dnskey, 0, REASON_MSG_DNSKEY_LIMIT);
+        }
+    }
+
+    // test minimum value - there must be at least one from the pair dnskey-dsrecord
+    if (!code) {
+        if ((action.getDB()->GetKeySetDSRecords(keysetId) + action.getDB()->GetKeySetDNSKeys(keysetId) +
+                    dsrec_add.length() + dnsk_add.length() - dsrec_rem.length() -
+                    dnsk_rem.length()) <= 0) {
+            LOG(WARNING_LOG, "KeySetUpdate: there must remain one DNSKey or one DSRecord");
+            code = action.setErrorReason(COMMAND_FAILED,
+                    ccReg::keyset_dnskey, 0, REASON_MSG_NO_DNSKEY_DSRECORD);
+            code = COMMAND_FAILED;
+        }
+    }
+
+    if (!code) {
+        // test ADD tech-c
+        for (int i = 0; i < (int)tech_add.length(); i++) {
+            techId = getIdOfContact(action.getDB(), tech_add[i], conf);
+            if (techId < 0) {
+                LOG(WARNING_LOG, "bad format of contact %s", (const char *)tech_add[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_tech_add, i + 1,
+                        REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+            } else if (techId == 0) {
+                LOG(WARNING_LOG, "Contact %s not exist", (const char *)tech_add[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_tech_add, i,
+                        REASON_MSG_TECH_NOTEXIST);
+            } else if (action.getDB()->CheckContactMap("keyset", keysetId, techId, 0)) {
+                LOG(WARNING_LOG, "Tech contact [%s] exist in contact map table",
+                        (const char *)tech_add[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_tech_add, i + 1,
+                        REASON_MSG_TECH_EXIST);
+            } else {
+                techAdd[i] = techId;
+                for (int j = 0; j < i; j++) {
+                    if (techAdd[j] == techId && techAdd[j] > 0) {
+                        techAdd[j] = 0;
+                        LOG(WARNING_LOG, "Tech contact [%s] exist in contact map table",
+                                (const char *)tech_add[i]);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::keyset_tech_add, i + 1,
+                                REASON_MSG_TECH_EXIST);
+                    }
+                }
+            }
+            LOG(NOTICE_LOG, "ADD tech  techid -> %d [%s]",
+                    techId, (const char *)tech_add[i]);
+        }
+    }
+
+    // test REM tech-c
+    if (!code) {
+        for (int i = 0; i < (int)tech_rem.length(); i++) {
+            techId = getIdOfContact(action.getDB(), tech_rem[i], conf);
+            if (techId < 0) {
+                LOG(WARNING_LOG, "bad format of contact %s", (const char *)tech_rem[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_tech_rem, i + 1,
+                        REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+            } else if (techId == 0) {
+                LOG(WARNING_LOG, "Contact %s not exist", (const char *)tech_rem[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_tech_rem, i,
+                        REASON_MSG_TECH_NOTEXIST);
+            } else if (!action.getDB()->CheckContactMap("keyset", keysetId, techId, 0)) {
+                LOG(WARNING_LOG, "Tech contact [%s] does exist in contact map table",
+                        (const char *)tech_rem[i]);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_tech_rem, i + 1,
+                        REASON_MSG_TECH_NOTEXIST);
+            } else {
+                techRem[i] = techId;
+                for (int j = 0; j < i; j++) {
+                    if (techRem[j] == techId && techRem[j] > 0) {
+                        techRem[j] = 0;
+                        LOG(WARNING_LOG, "Contact [%s] duplicity", (const char *)handle);
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                                ccReg::keyset_tech_rem, i,
+                                REASON_MSG_DUPLICITY_CONTACT);
+                    }
+                }
+            }
+            LOG(NOTICE_LOG, "REM tech  techid -> %d [%s]",
+                    techId, (const char *)tech_rem[i]);
+        }
+    }
+
+    // DSRecord member tests
+    if (!code) {
+        for (int i = 0; i < (int)dsrec_add.length(); i++) {
+            // test digest type
+            if (dsrec_add[i].digestType != 1) {
+                LOG(WARNING_LOG, "Bad digest type: %d (must be 1)",
+                        dsrec_add[i].digestType);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_dsrecord_add, i,
+                        REASON_MSG_DSRECORD_BAD_DIGEST_TYPE);
+                break;
+            }
+            // test digest length
+            if (strlen(dsrec_add[i].digest) != 40) {
+                LOG(WARNING_LOG, "Bad digest length: %d (must be 40)",
+                        strlen(dsrec_add[i].digest));
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_dsrecord_add, i,
+                        REASON_MSG_DSRECORD_BAD_DIGEST_LENGTH);
+                break;
+            }
+        }
+    }
+
+    // DNSKey member tests
+    if (!code) {
+        for (int ii = 0; ii < (int)dnsk_add.length(); ii++) {
+            // dnskey flag field test (must be 0, 256, 257)
+            if (!(dnsk_add[ii].flags == 0 || dnsk_add[ii].flags == 256 || dnsk_add[ii].flags == 257)) {
+                LOG(WARNING_LOG,
+                        "dnskey flag is %d (must be 0, 256 or 257)",
+                        dnsk_add[ii].flags);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_dnskey_add, ii,
+                        REASON_MSG_DNSKEY_BAD_FLAGS);
+                break;
+            }
+            // dnskey protocol test (must be 3)
+            if (dnsk_add[ii].protocol != 3) {
+                LOG(WARNING_LOG,
+                        "dnskey protocol is %d (must be 3)",
+                        dnsk_add[ii].protocol);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_dnskey_add, ii,
+                        REASON_MSG_DNSKEY_BAD_PROTOCOL);
+                break;
+            }
+            // dnskey algorithm type test (must be 1,2,3,4,5,252,253,254,255)
+            if (!((dnsk_add[ii].alg >= 1 && dnsk_add[ii].alg <= 5) ||
+                        (dnsk_add[ii].alg >= 252 && dnsk_add[ii].alg <= 255))) {
+                LOG(WARNING_LOG,
+                        "dnskey algorithm is %d (must be 1,2,3,4,5,252,253,254 or 255)",
+                        dnsk_add[ii].alg);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_dnskey_add, ii,
+                        REASON_MSG_DNSKEY_BAD_ALG);
+                break;
+            }
+            // dnskey key test - see isValidBase64 function for details
+            int ret1, ret2;
+            if ((ret1 = isValidBase64((const char *)dnsk_add[ii].key, &ret2)) != BASE64_OK) {
+                if (ret1 == BASE64_BAD_LENGTH) {
+                    LOG(WARNING_LOG, "dnskey key length is wrong (must be dividable by 4)");
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::keyset_dnskey_add, ii,
+                            REASON_MSG_DNSKEY_BAD_KEY_LEN);
+                } if (ret1 == BASE64_BAD_CHAR) {
+                    LOG(WARNING_LOG, "dnskey key contain bad character '%c' at position %d",
+                            ((const char *)dnsk_add[ii].key)[ret2], ret2);
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::keyset_dnskey_add, ii,
+                            REASON_MSG_DNSKEY_BAD_KEY_CHAR);
+                } else {
+                    LOG(WARNING_LOG, "isValidBase64() return unknown value (%d)",
+                            ret1);
+                    code = COMMAND_FAILED;
+                }
+                break;
+            }
+        }
+
+    }
+
+    ///////////////////////////////////////////////////////
+    //
+    //  ** KeySetUpdate() - UPDATE **
+    //
+    ///////////////////////////////////////////////////////
+
+    // if no errors occured run update
+    if (code == 0) {
+        if (action.getDB()->ObjectUpdate(keysetId, action.getRegistrar(), authInfo_chg)) {
+            ntf.reset(new EPPNotifier(
+                          conf.get<bool>("registry.disable_epp_notifier"), 
+                          mm, action.getDB(), action.getRegistrar(), keysetId, regMan.get()));
+
+            for (int i = 0; i < (int)tech_add.length(); i++)
+                ntf->AddTechNew(techAdd[i]);
+
+            // adding tech contacts
+            for (int i = 0; i < (int)tech_add.length(); i++) {
+                LOG(NOTICE_LOG, "INSERT add techid -> %d [%s]",
+                        techAdd[i], (const char *)tech_add[i]);
+                if (!action.getDB()->AddContactMap("keyset", keysetId, techAdd[i])) {
+                    code = COMMAND_FAILED;
+                    break;
+                }
+            }
+
+            // delete tech contacts
+            for (int i = 0; i < (int)tech_rem.length(); i++) {
+                LOG(NOTICE_LOG, "DELETE rem techid -> %d [%s]",
+                        techRem[i], (const char *)tech_rem[i]);
+                if (!action.getDB()->DeleteFromTableMap("keyset", keysetId, techRem[i])) {
+                    code = COMMAND_FAILED;
+                    break;
+                }
+            }
+
+            // test for count of tech contacts after add&rem
+            if (tech_rem.length() > 0) {
+                int techNum = action.getDB()->GetKeySetContacts(keysetId);
+                LOG(NOTICE_LOG, "KeySetUpdate: tech Contacts %d", techNum);
+                if (techNum == 0) {
+                    // mark all rem tech-c as param error
+                    for (int i = 0; i < (int)tech_rem.length(); i++) {
+                        code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
+                                ccReg::keyset_tech_rem, i + 1,
+                                REASON_MSG_CAN_NOT_REMOVE_TECH);
+                    }
+                }
+            }
+
+            // delete dsrecords
+            for (int i = 0; i < (int)dsrec_rem.length(); i++) {
+                LOG(NOTICE_LOG,
+                        "KeySetUpdate: delete DSRecord (keytag:%d,alg:%d,"
+                        "digestType:%d,digest:%s,maxSigLife:%d) from KeySet [%s]",
+                        dsrec_rem[i].keyTag, dsrec_rem[i].alg, dsrec_rem[i].digestType,
+                        (const char *)dsrec_rem[i].digest, dsrec_rem[i].maxSigLife,
+                        (const char *)handle);
+                int dsrecId = action.getDB()->GetDSRecordId(keysetId, dsrec_rem[i].keyTag,
+                        dsrec_rem[i].alg, dsrec_rem[i].digestType,
+                        (const char *)dsrec_rem[i].digest, dsrec_rem[i].maxSigLife);
+                if (dsrecId == -1) {
+                    code = COMMAND_FAILED;
+                    break;
+                }
+                LOG(NOTICE_LOG,
+                        "KeySetUpdate: delete DSRecord id found: %d",
+                        dsrecId);
+                if (!action.getDB()->DeleteFromTable("dsrecord", "id", dsrecId))
+                    code = COMMAND_FAILED;
+            }
+            // delete dnskey(s)
+            for (int ii = 0; ii < (int)dnsk_rem.length(); ii++) {
+                char *key;
+                // keys are inserted into database without whitespaces
+                if ((key = removeWhitespaces(dnsk_rem[ii].key)) == NULL) {
+                    code = COMMAND_FAILED;
+                    LOG(WARNING_LOG, "removeWhitespaces failed");
+                    free(key);
+                    break;
+                }
+                LOG(NOTICE_LOG,
+                        "KeySetUpdate: delete DNSKey (flags:%d,protocol:%d,"
+                        "alg:%d,key:%s from keyset (handle:%d)",
+                        dnsk_rem[ii].flags, dnsk_rem[ii].protocol,
+                        dnsk_rem[ii].alg, (const char *)dnsk_rem[ii].key,
+                        (const char *)handle);
+                int dnskeyId = action.getDB()->GetDNSKeyId(keysetId, dnsk_rem[ii].flags,
+                        dnsk_rem[ii].protocol, dnsk_rem[ii].alg,
+                        key);
+                if (dnskeyId == -1) {
+                    code = COMMAND_FAILED;
+                    free(key);
+                    break;
+                }
+                LOG(NOTICE_LOG, "KeySetUpdate: delete DNSKey id found: %d",
+                        dnskeyId);
+                if (!action.getDB()->DeleteFromTable("dnskey", "id", dnskeyId)) {
+                    LOG(WARNING_LOG, "during deleting dnskeys command failed");
+                    code = COMMAND_FAILED;
+                    free(key);
+                    break;
+                }
+                free(key);
+            }
+
+            // add dsrecords
+            for (int i = 0; i < (int)dsrec_add.length(); i++) {
+                LOG(NOTICE_LOG,
+                        "KeySetUpdate: add DSRecord (keyTag:%d,alg:%d,"
+                        "digestType:%d,digest:%s,maxSigLife:%d) to KeySet [%s]",
+                        dsrec_add[i].keyTag, dsrec_add[i].alg, dsrec_add[i].digestType,
+                        (const char *)dsrec_add[i].digest, dsrec_add[i].maxSigLife,
+                        (const char *)handle);
+                int dsrecId = action.getDB()->GetSequenceID("dsrecord");
+
+                action.getDB()->INSERT("dsrecord");
+                action.getDB()->INTO("id");
+                action.getDB()->INTO("keysetid");
+                action.getDB()->INTO("keytag");
+                action.getDB()->INTO("alg");
+                action.getDB()->INTO("digesttype");
+                action.getDB()->INTO("digest");
+                action.getDB()->INTO("maxsiglife");
+                action.getDB()->VALUE(dsrecId);
+                action.getDB()->VALUE(keysetId);
+                action.getDB()->VALUE(dsrec_add[i].keyTag);
+                action.getDB()->VALUE(dsrec_add[i].alg);
+                action.getDB()->VALUE(dsrec_add[i].digestType);
+                action.getDB()->VALUE(dsrec_add[i].digest);
+                if (dsrec_add[i].maxSigLife == -1)
+                    action.getDB()->VALUENULL();
+                else
+                    action.getDB()->VALUE(dsrec_add[i].maxSigLife);
+                if (!action.getDB()->EXEC()) {
+                    code = COMMAND_FAILED;
+                    break;
+                }
+            }
+
+            // add dnskey(s)
+            for (int ii = 0; ii < (int)dnsk_add.length(); ii++) {
+                char *key;
+                if ((key = removeWhitespaces((const char *)dnsk_add[ii].key)) == NULL) {
+                    LOG(WARNING_LOG, "removeWhitespaces fails (memory problem)");
+                    code = COMMAND_FAILED;
+                    break;
+                }
+                LOG(NOTICE_LOG,
+                        "KeySetUpdate: add DNSKey (flags:%d,protocol:%d,"
+                        "alg:%d,key:%s to keyset (handle:%d)",
+                        dnsk_add[ii].flags, dnsk_add[ii].protocol,
+                        dnsk_add[ii].alg, (const char *)dnsk_add[ii].key,
+                        (const char *)handle);
+                int dnskeyId = action.getDB()->GetSequenceID("dnskey");
+                action.getDB()->INSERT("dnskey");
+                action.getDB()->INTO("id");
+                action.getDB()->INTO("keysetid");
+                action.getDB()->INTO("flags");
+                action.getDB()->INTO("protocol");
+                action.getDB()->INTO("alg");
+                action.getDB()->INTO("key");
+                action.getDB()->VALUE(dnskeyId);
+                action.getDB()->VALUE(keysetId);
+                action.getDB()->VALUE(dnsk_add[ii].flags);
+                action.getDB()->VALUE(dnsk_add[ii].protocol);
+                action.getDB()->VALUE(dnsk_add[ii].alg);
+                action.getDB()->VALUE(key);
+                if (!action.getDB()->EXEC()) {
+                    code = COMMAND_FAILED;
+                    free(key);
+                    break;
+                }
+                free(key);
+            }
+            // save to history if no errors
+            if (code == 0) {
+                if (action.getDB()->SaveKeySetHistory(keysetId))
+                    code = COMMAND_OK;
+            }
+            if (code == COMMAND_OK)
+                ntf->Send();
         }
     }
 
     delete[] techAdd;
     delete[] techRem;
 
-    if (ret->code > COMMAND_EXCEPTION)
-        EppError(ret->code, ret->msg, ret->svTRID, errors);
-    if (ret->code == 0)
-        ServerInternalError("KeySetUpdate");
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
+    if (code == 0) {
+        action.failedInternal("KeysetUpdate");
+    }
 
-    return ret._retn();
+    return action.getRet()._retn();
 }
 
 #define isbase64char(c)     ((c) >= 'a' && (c) <= 'z' || (c) >= 'A' && (c) <= 'Z' \
@@ -7470,91 +7060,72 @@ isValidBase64(const char *str, int *ret)
 }
 
 // primitive list of objects
-ccReg::Response* ccReg_EPP_i::FullList(
-  short act, const char *table, const char *fname, ccReg::Lists_out list,
-  CORBA::Long clientID, const char* clTRID, const char* XML)
+ccReg::Response * 
+ccReg_EPP_i::FullList(short act, const char *table, const char *fname, 
+        ccReg::Lists_out list, CORBA::Long clientID, const char* clTRID, 
+        const char* XML)
 {
-  DB DBsql;
-  int rows =0, i;
-  ccReg::Response_var ret;
-  int regID;
-  int type;
-  char sqlString[128];
+    int rows =0, i;
+    int type;
+    char sqlString[128];
+    short int code = 0;
 
-  ret = new ccReg::Response;
+    list = new ccReg::Lists;
 
-  // default
-  ret->code =0; // default
+    LOG( NOTICE_LOG , "LIST %d  clientID -> %d clTRID [%s] " , act , (int ) clientID , clTRID );
 
-  list = new ccReg::Lists;
+    EPPAction action(this, clientID, act, clTRID, XML);
 
-  LOG( NOTICE_LOG , "LIST %d  clientID -> %d clTRID [%s] " , act , (int ) clientID , clTRID );
-
-  if ( (regID = GetRegistrarID(clientID) ))
-
-    if (DBsql.OpenDatabase(database) ) {
-
-      if ( (DBsql.BeginAction(clientID, act, clTRID, XML) )) {
-
-        // by the object
-        switch (act) {
-          case EPP_ListContact:
+    // by the object
+    switch (act) {
+        case EPP_ListContact:
             type=1;
             break;
-          case EPP_ListNSset:
+        case EPP_ListNSset:
             type=2;
             break;
-          case EPP_ListDomain:
+        case EPP_ListDomain:
             type=3;
             break;
-          case EPP_ListKeySet:
+        case EPP_ListKeySet:
             type=4;
             break;
-          default:
+        default:
             type=0;
-        }
-
-        // list all objects of registrar
-        sprintf(sqlString,
-            "SELECT obr.name FROM  object_registry obr, object o "
-              "WHERE obr.id=o.id AND o.clid=%d AND obr.type=%d", regID, type);
-
-        if (DBsql.ExecSelect(sqlString) ) {
-          rows = DBsql.GetSelectRows();
-
-          LOG( NOTICE_LOG, "Full List: %s  num -> %d ClID %d", table , rows , regID );
-          list->length(rows);
-
-          for (i = 0; i < rows; i ++) {
-            (*list)[i]=CORBA::string_dup(DBsql.GetFieldValue(i, 0) );
-          }
-
-          DBsql.FreeSelect();
-        }
-
-        // command OK
-        if (ret->code == 0)
-          ret->code=COMMAND_OK; // if is OK
-
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) ) ;
-      }
-
-      ret->msg =CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-
-      DBsql.Disconnect();
     }
 
-  if (ret->code == 0)
-    ServerInternalError("FullList");
+    // list all objects of registrar
+    sprintf(sqlString,
+            "SELECT obr.name FROM  object_registry obr, object o "
+            "WHERE obr.id=o.id AND o.clid=%d AND obr.type=%d", action.getRegistrar(), type);
 
-  return ret._retn();
+    if (action.getDB()->ExecSelect(sqlString) ) {
+        rows = action.getDB()->GetSelectRows();
+
+        LOG( NOTICE_LOG, "Full List: %s  num -> %d ClID %d", table , rows , action.getRegistrar() );
+        list->length(rows);
+
+        for (i = 0; i < rows; i ++) {
+            (*list)[i]=CORBA::string_dup(action.getDB()->GetFieldValue(i, 0) );
+        }
+
+        action.getDB()->FreeSelect();
+        code = COMMAND_OK;
+    }
+
+    // command OK
+    if (code == 0) {
+        action.failedInternal("FullList");
+    }
+
+    return action.getRet()._retn();
 }
 
 ccReg::Response* ccReg_EPP_i::ContactList(
   ccReg::Lists_out contacts, CORBA::Long clientID, const char* clTRID,
   const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -7565,6 +7136,7 @@ ccReg::Response* ccReg_EPP_i::NSSetList(
   ccReg::Lists_out nssets, CORBA::Long clientID, const char* clTRID,
   const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -7575,6 +7147,7 @@ ccReg::Response* ccReg_EPP_i::DomainList(
   ccReg::Lists_out domains, CORBA::Long clientID, const char* clTRID,
   const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -7588,6 +7161,7 @@ ccReg_EPP_i::KeySetList(
         const char *clTRID,
         const char *XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -7600,6 +7174,7 @@ ccReg::Response* ccReg_EPP_i::nssetTest(
   const char* handle, CORBA::Short level, const ccReg::Lists& fqdns,
   CORBA::Long clientID, const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -7662,132 +7237,135 @@ ccReg::Response* ccReg_EPP_i::nssetTest(
 }
 
 // function for send authinfo
-ccReg::Response* ccReg_EPP_i::ObjectSendAuthInfo(
-  short act, const char * table, const char *fname, const char *name, CORBA::Long clientID,
-  const char* clTRID, const char* XML)
+ccReg::Response *
+ccReg_EPP_i::ObjectSendAuthInfo(
+        short act, const char * table, const char *fname, const char *name,
+        CORBA::Long clientID, const char* clTRID, const char* XML)
 {
-  DB DBsql;
-  int zone;
-  int id = 0;
-  ccReg::Response_var ret;
-  ccReg::Errors_var errors;
-  char FQDN[164];
-  int regID;
-  ret = new ccReg::Response;
+    int zone;
+    int id = 0;
+    char FQDN[164];
+    short int code = 0;
 
-  // default
-  errors = new ccReg::Errors;
-  errors->length( 0);
-  ret->code =0; // default
+    ParsedAction paction;
+    paction.add(1,(const char*)name);
 
-  ParsedAction paction;
-  paction.add(1,(const char*)name);
-  Database::Manager db(database);
-  std::auto_ptr<Database::Connection> conn;
-  try { conn.reset(db.getConnection()); } catch (...) {}
+    EPPAction action(this, clientID, act, clTRID, XML, &paction);
 
-  //LOG( NOTICE_LOG , "ObjectSendAuthInfo type %d  object [%s]  clientID -> %d clTRID [%s] " , act , name , (int ) clientID , clTRID );
+    Database::Manager db(new Database::ConnectionFactory(database));
+    std::auto_ptr<Database::Connection> conn;
+    try { conn.reset(db.getConnection()); } catch (...) {}
 
-  if ( (regID = GetRegistrarID(clientID) ))
-    if (DBsql.OpenDatabase(database) && conn.get()) {
-      if ( (DBsql.BeginAction(clientID, act, clTRID, XML, &paction) )) {
-        switch (act) {
-          case EPP_ContactSendAuthInfo:
-            if ( (id = getIdOfContact(&DBsql, name, conf) ) < 0)
-              ret->code= SetReasonContactHandle(errors, name,
-                  GetRegistrarLang(clientID) );
-            else if (id == 0)
-              ret->code=COMMAND_OBJECT_NOT_EXIST;
+    LOG( NOTICE_LOG , "ObjectSendAuthInfo type %d  object [%s]  clientID -> %d clTRID [%s] " , act , name , (int ) clientID , clTRID );
+
+    switch (act) {
+        case EPP_ContactSendAuthInfo:
+            if ( (id = getIdOfContact(action.getDB(), name, conf) ) < 0) {
+                LOG(WARNING_LOG, "bad format of contact [%s]", name);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::contact_handle, 1,
+                        REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
+            } else if (id == 0)
+                code=COMMAND_OBJECT_NOT_EXIST;
             break;
-          case EPP_NSSetSendAuthInfo:
-            if ( (id = getIdOfNSSet(&DBsql, name, conf) ) < 0)
-              ret->code=SetReasonNSSetHandle(errors, name,
-                  GetRegistrarLang(clientID) );
-            else if (id == 0)
-              ret->code=COMMAND_OBJECT_NOT_EXIST;
+        case EPP_NSSetSendAuthInfo:
+            if ( (id = getIdOfNSSet(action.getDB(), name, conf) ) < 0) {
+                LOG(WARNING_LOG, "bad format of nsset [%s]", name);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::nsset_handle, 1,
+                        REASON_MSG_BAD_FORMAT_NSSET_HANDLE);
+            } else if (id == 0)
+                code=COMMAND_OBJECT_NOT_EXIST;
             break;
-          case EPP_DomainSendAuthInfo:
-            if ( (zone = getFQDN(FQDN, name) ) <= 0)
-              ret->code=SetReasonDomainFQDN(errors, name, zone,
-                  GetRegistrarLang(clientID) );
-            else {
-              if ( (id = DBsql.GetDomainID(FQDN, GetZoneEnum(zone) ) ) == 0) {
-                LOG( WARNING_LOG , "domain [%s] NOT_EXIST" , name );
-                ret->code= COMMAND_OBJECT_NOT_EXIST;
-              }
+        case EPP_DomainSendAuthInfo:
+            if ( (zone = getFQDN(FQDN, name) ) <= 0) {
+                LOG(WARNING_LOG, "domain in zone %s", name);
+                if (zone == 0) {
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::domain_fqdn, 1,
+                            REASON_MSG_NOT_APPLICABLE_DOMAIN);
+                } else if (zone < 0) {
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                            ccReg::domain_fqdn, 1,
+                            REASON_MSG_BAD_FORMAT_FQDN);
+                }
+            } else {
+                if ( (id = action.getDB()->GetDomainID(FQDN, GetZoneEnum(zone) ) ) == 0) {
+                    LOG( WARNING_LOG , "domain [%s] NOT_EXIST" , name );
+                    code= COMMAND_OBJECT_NOT_EXIST;
+                }
             }
             break;
-          case EPP_KeySetSendAuthInfo:
-            if ((id = getIdOfKeySet(&DBsql, name, conf)) < 0)
-                ret->code = SetReasonKeySetHandle(
-                        errors, name, GetRegistrarLang(clientID));
-            else if (id == 0)
-                ret->code = COMMAND_OBJECT_NOT_EXIST;
+        case EPP_KeySetSendAuthInfo:
+            if ((id = getIdOfKeySet(action.getDB(), name, conf)) < 0) {
+                LOG(WARNING_LOG, "bad format of keyset [%s]", name);
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_handle, 1,
+                        REASON_MSG_BAD_FORMAT_KEYSET_HANDLE);
+            } else if (id == 0)
+                code = COMMAND_OBJECT_NOT_EXIST;
             break;
-        }
-        if (ret->code == 0) {
-          std::auto_ptr<Register::Document::Manager> doc_manager(
-            Register::Document::Manager::create(
-              conf.get<std::string>("registry.docgen_path"),
-              conf.get<std::string>("registry.docgen_template_path"),
-              conf.get<std::string>("registry.fileclient_path"),
-              ns->getHostName()
-            )
-          );
-          std::auto_ptr<Register::PublicRequest::Manager> request_manager(
-            Register::PublicRequest::Manager::create(
-              &db,
-              regMan->getDomainManager(),
-              regMan->getContactManager(),
-              regMan->getNSSetManager(),
-              regMan->getKeySetManager(),
-              mm,
-              doc_manager.get()
-            )
-          );
-          try {
+    }
+    if (code == 0) {
+        std::auto_ptr<Register::Document::Manager> doc_manager(
+                Register::Document::Manager::create(
+                    conf.get<std::string>("registry.docgen_path"),
+                    conf.get<std::string>("registry.docgen_template_path"),
+                    conf.get<std::string>("registry.fileclient_path"),
+                    ns->getHostName()
+                    )
+                );
+        std::auto_ptr<Register::PublicRequest::Manager> request_manager(
+                Register::PublicRequest::Manager::create(
+                    &db,
+                    regMan->getDomainManager(),
+                    regMan->getContactManager(),
+                    regMan->getNSSetManager(),
+                    regMan->getKeySetManager(),
+                    mm,
+                    doc_manager.get()
+                    )
+                );
+        try {
             LOG(
-              NOTICE_LOG , "createRequest objectID %d actionID %d" ,
-              id,DBsql.GetActionID()
-            );
-            Register::PublicRequest::PublicRequest *new_request =
-              request_manager->createRequest(
-                Register::PublicRequest::PRT_AUTHINFO_AUTO_RIF,conn.get()
-              );
-            new_request->setEppActionId(DBsql.GetActionID());
+                    NOTICE_LOG , "createRequest objectID %d actionID %d" ,
+                    id,action.getDB()->GetActionID()
+               );
+            std::auto_ptr<Register::PublicRequest::PublicRequest> new_request(request_manager->createRequest(
+                        Register::PublicRequest::PRT_AUTHINFO_AUTO_RIF,
+                        conn.get()));
+
+            new_request->setEppActionId(action.getDB()->GetActionID());
             new_request->addObject(Register::PublicRequest::OID(id));
             if (!new_request->check()) {
-              LOG(WARNING_LOG, "authinfo request for %s is prohibited",name);
-              ret->code = COMMAND_STATUS_PROHIBITS_OPERATION;
+                LOG(WARNING_LOG, "authinfo request for %s is prohibited",name);
+                code = COMMAND_STATUS_PROHIBITS_OPERATION;
             } else {
-              ret->code=COMMAND_OK;
-              new_request->save(conn.get());
+                code=COMMAND_OK;
+                new_request->save(conn.get());
             }
-          } catch (...) {
+        } catch (...) {
             LOG( WARNING_LOG, "cannot create and process request");
-            ret->code=COMMAND_FAILED;
-          }
+            code=COMMAND_FAILED;
         }
-        ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) ) ;
-      }
-      ret->msg =CORBA::string_dup(GetErrorMessage(ret->code,
-          GetRegistrarLang(clientID) ) );
-      DBsql.Disconnect();
     }
 
-  // EPP exception
-  if (ret->code > COMMAND_EXCEPTION)
-    EppError(ret->code, ret->msg, ret->svTRID, errors);
+    // EPP exception
+    if (code > COMMAND_EXCEPTION) {
+        action.failed(code);
+    }
 
-  if (ret->code == 0)
-    ServerInternalError("ObjectSendAuthInfo");
+    if (code == 0) {
+        action.failedInternal("ObjectSendAuthInfo");
+    }
 
-  return ret._retn();
+    return action.getRet()._retn();
 }
 
 ccReg::Response* ccReg_EPP_i::domainSendAuthInfo(
   const char* fqdn, CORBA::Long clientID, const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -7796,6 +7374,7 @@ ccReg::Response* ccReg_EPP_i::domainSendAuthInfo(
 ccReg::Response* ccReg_EPP_i::contactSendAuthInfo(
   const char* handle, CORBA::Long clientID, const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -7804,6 +7383,7 @@ ccReg::Response* ccReg_EPP_i::contactSendAuthInfo(
 ccReg::Response* ccReg_EPP_i::nssetSendAuthInfo(
   const char* handle, CORBA::Long clientID, const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -7817,6 +7397,7 @@ ccReg_EPP_i::keysetSendAuthInfo(
         const char *clTRID,
         const char *XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -7829,6 +7410,7 @@ ccReg::Response* ccReg_EPP_i::info(
   ccReg::InfoType type, const char* handle, CORBA::Long& count,
   CORBA::Long clientID, const char* clTRID, const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
@@ -7899,6 +7481,7 @@ ccReg::Response* ccReg_EPP_i::getInfoResults(
   ccReg::Lists_out handles, CORBA::Long clientID, const char* clTRID,
   const char* XML)
 {
+  Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 

@@ -20,7 +20,6 @@ ccReg::Filters::Compound_ptr ccReg_Filters_i::add() {
   Logging::Context ctx(base_context_);
 
   TRACE("[CALL] ccReg_Filters_i::add()");
-  it.clearF();
   Database::Filters::FilterFilter *f = new Database::Filters::FilterFilterImpl();
   uf.addFilter(f);
   return it.addE(f); 
@@ -52,10 +51,10 @@ ccReg_Filters_i::getRow(CORBA::Short row)
     
     Registry::TableRow *tr = new Registry::TableRow;
     tr->length(4);
-    (*tr)[0] <<= DUPSTRC(item->getUserId().to_string());
-    (*tr)[1] <<= DUPSTRC(item->getGroupId().to_string());
-    (*tr)[2] <<= DUPSTRC(Conversion<int>::to_string(item->getType()));
-    (*tr)[3] <<= DUPSTRFUN(item->getName);
+    (*tr)[0] <<= C_STR(item->getUserId());
+    (*tr)[1] <<= C_STR(item->getGroupId());
+    (*tr)[2] <<= C_STR((int)item->getType());
+    (*tr)[3] <<= C_STR(item->getName());
     return tr;
   }
   catch (...) {

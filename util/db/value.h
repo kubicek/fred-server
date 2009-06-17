@@ -1,17 +1,17 @@
-/*  
+/*
  * Copyright (C) 2007  CZ.NIC, z.s.p.o.
- * 
+ *
  * This file is part of FRED.
- * 
+ *
  * FRED is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 2 of the License.
- * 
+ *
  * FRED is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with FRED.  If not, see <http://www.gnu.org/licenses/>.
  */
@@ -21,50 +21,63 @@
  *  Implementation of value object.
  */
 
-#ifndef VALUE_HPP_
-#define VALUE_HPP_
+#ifndef VALUE_H_
+#define VALUE_H_
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string>
 
+#include "util.h"
+#include "log/logger.h"
 #include "types/data_types.h"
+#include "types/convert_sql_pod.h"
+#include "types/convert_sql_boost_datetime.h"
+#include "types/convert_sql_db_types.h"
+#include "types/sqlize.h"
 
 
 namespace Database {
 
-#define CONSTRUCTOR_FROM_DEFINED_TYPE(_type, _funct, _quoted)   \
-Value(const _type& _value) : is_null_(false),                   \
-                             value_(_value._funct()),           \
-                             quoted_output_(_quoted) {          \
-}
 
-#define CAST_OPERATOR_FROM_DEFINED_TYPE(_type, _funct)          \
-operator _type() const {                                        \
-  _type cast;                                                   \
-  cast._funct(value_);                                          \
-  return cast;                                                  \
-}
-
-#define CONSTRUCTOR_FROM_POD_TYPE(_type, _funct, _quoted)       \
-Value(const _type& _value) : is_null_(false),                   \
-                             value_(_funct(_value)),            \
-                             quoted_output_(_quoted) {          \
-}
-
-#define CAST_OPERATOR_FROM_POD_TYPE(_type, _funct)              \
-operator _type() const {                                        \
-  return _funct(value_);                                        \
+/**
+ * Macros for defining constructors, cast operators and assignments operator
+ * from other types to string.
+ *
+ * Can be use only for simple conversions - calling function or method on
+ * appropriate type. Special handling must be done manually.
+ */
+#define CONSTRUCTOR(_type, _quoted, _escaped)                \
+Value(const _type& _value) : is_null_(false),                \
+                             value_(sqlize(_value)),         \
+                             quoted_output_(_quoted),        \
+                             escaped_output_(_escaped)       \
+{                                                            \
 }
 
 
-#define HANDLE_TYPE(_type, _to_str_fun, _from_str_fun, _quoted) \
-CONSTRUCTOR_FROM_DEFINED_TYPE(_type, _to_str_fun, _quoted)      \
-CAST_OPERATOR_FROM_DEFINED_TYPE(_type, _from_str_fun)
+#define ASSIGN_OPERATOR(_type, _quoted, _escaped)            \
+Value& operator =(const _type &_value) {                     \
+  value_ = sqlize(_value);                                   \
+  is_null_ = false;                                          \
+  quoted_output_ = _quoted;                                  \
+  escaped_output_ = _escaped;                                \
+  return *this;                                              \
+}
 
-#define HANDLE_POD_TYPE(_type, _to_str, _from_str, _quoted)     \
-CONSTRUCTOR_FROM_POD_TYPE(_type, _to_str, _quoted)              \
-CAST_OPERATOR_FROM_POD_TYPE(_type, _from_str)
+
+#define CAST_OPERATOR(_type, _init)                          \
+operator _type() const {                                     \
+  return is_null_ ? _init : unsqlize<_type>(value_);         \
+}
+
+
+#define HANDLE_TYPE(_type, _init, _quoted, _escaped)         \
+CONSTRUCTOR(_type, _quoted, _escaped)                        \
+ASSIGN_OPERATOR(_type, _quoted, _escaped)                    \
+CAST_OPERATOR(_type, _init)
+
+
 
 /**
  * \class Value
@@ -76,69 +89,137 @@ CAST_OPERATOR_FROM_POD_TYPE(_type, _from_str)
  */
 class Value {
 public:
-  typedef std::string value_type;
-
   /**
    * default constructor for NULL value
    */
-  Value() : is_null_(true),
-            value_("NULL"),
-            quoted_output_(false) {
-  }
-
-
-//  Value(const char* _value) : is_null_(false),
-//                              value_(_value),
-//                              quoted_output_(false) {
-//  }
-
-
-  /**
-   * construct and conversion operator for value_type
-   */
-  Value(const value_type& _value) : is_null_(false),
-                                    value_(_value),
-                                    quoted_output_(true) /* check if changing 'value_type' */ {
-  }
-  operator value_type() const {
-    return value_;
+  Value() 
+      : is_null_(true),
+        value_(),
+        quoted_output_(false),
+        escaped_output_(false) {
   }
 
 
   /**
-   * Database::ID need special handling in constructor
+   * constructor for database result object
    */
-  Value(const Database::ID& _value) : is_null_(false),
-                                      value_(_value.to_string()),
-                                      quoted_output_(false) {
+  Value(const std::string &_value, bool _is_null) 
+      : is_null_(_is_null),
+        value_(_value),
+        quoted_output_(_is_null ? false : true),
+        escaped_output_(quoted_output_) {
+  }
+
+
+  /**
+   * full parameter constructor
+   */
+  Value(const std::string &_value,
+        bool _is_null,
+        bool _quoted,
+        bool _escaped)
+      : is_null_(_is_null),
+        value_(_value),
+        quoted_output_(_quoted),
+        escaped_output_(_escaped) {
+  }
+        
+
+  /**
+   * construct and conversion operator for string values
+   */
+  Value(const std::string& _value)
+      : is_null_(false),
+        value_(_value),
+        quoted_output_(true),
+        escaped_output_(true) {
+  }
+
+
+  Value(const char* _value) 
+      : is_null_(false),
+        value_(_value),
+        quoted_output_(true),
+        escaped_output_(true) {
+  }
+
+
+  operator std::string() const {
+    return (is_null_ ? "" : value_);
+  }
+
+
+  Value& operator =(const std::string &_value) {
+    value_ = _value;
+    is_null_ = false;
+    quoted_output_ = true;
+    escaped_output_ = true;
+    return *this;
+  }
+
+
+  /**
+   * Database::ID need special handling
+   */
+  Value(const Database::ID& _value) 
+      : is_null_(false),
+        value_(sqlize(_value)),
+        quoted_output_(false),
+        escaped_output_(false) {
     /* do extra checking for NULL (zero value is not valid ID) */
     if (_value == 0)
       is_null_ = true;
   }
-  CAST_OPERATOR_FROM_DEFINED_TYPE(Database::ID, from_string)
-// HANDLE_TYPE(ID, to_string, from_string, false)
   
 
-  /**
-   * definitions of construtors and conversion operators to POD types
-   * uses Conversion class
-   */
-  HANDLE_POD_TYPE(short, Conversion<short>::to_string, Conversion<short>::from_string, false)
-  HANDLE_POD_TYPE(int, Conversion<int>::to_string, Conversion<int>::from_string, false)
-  HANDLE_POD_TYPE(long, Conversion<long>::to_string, Conversion<long>::from_string, false)
-  HANDLE_POD_TYPE(long long, Conversion<long long>::to_string, Conversion<long long>::from_string, false)
-  HANDLE_POD_TYPE(unsigned, Conversion<unsigned>::to_string, Conversion<unsigned>::from_string, false)
-  HANDLE_POD_TYPE(unsigned long, Conversion<unsigned long>::to_string, Conversion<unsigned long>::from_string, false)
-  HANDLE_POD_TYPE(unsigned long long, Conversion<unsigned long long>::to_string, Conversion<unsigned long long>::from_string, false)
-  HANDLE_POD_TYPE(bool, Conversion<bool>::to_string, Conversion<bool>::from_string, true)
+  CAST_OPERATOR(Database::ID, Database::ID())
+
 
   /**
-   * definition of constructors and conversion operator for user defined types
-   * uses Conversion class
+   * boost::ptime need special handling
    */
-  HANDLE_TYPE(DateTime, to_string, from_string, true)
-  HANDLE_TYPE(Date, to_string, from_string, true)
-  HANDLE_TYPE(Money, to_string, from_string, true)
+  Value(const ptime &_value) {
+    __init_date_time(_value);
+  }
+
+
+  CAST_OPERATOR(ptime, ptime())
+
+
+  Value& operator =(const ptime &_value) {
+    __init_date_time(_value);
+    return *this;
+  }
+
+
+  /**
+   * boost::date need special handling
+   */
+  Value(const date &_value) {
+    __init_date_time(_value);
+  }
+
+
+  CAST_OPERATOR(date, date())
+
+
+  Value& operator =(const date &_value) {
+    __init_date_time(_value);
+    return *this;
+  }
+
+
+  HANDLE_TYPE(short,              0,          false, false)
+  HANDLE_TYPE(int,                0,          false, false)
+  HANDLE_TYPE(long,               0,          false, false)
+  HANDLE_TYPE(long long,          0,          false, false)
+  HANDLE_TYPE(unsigned,           0,          false, false)
+  HANDLE_TYPE(unsigned long,      0,          false, false)
+  HANDLE_TYPE(unsigned long long, 0,          false, false)
+  HANDLE_TYPE(bool,               0,          true,  false)
+  HANDLE_TYPE(DateTime,           DateTime(), true,  false)
+  HANDLE_TYPE(Date,               Date(),     true,  false)
+  HANDLE_TYPE(Money,              Money(),    true,  false)
 
 
   /* assigment */
@@ -146,13 +227,11 @@ public:
     is_null_ = _other.is_null_;
     value_ = _other.value_;
     quoted_output_ = _other.quoted_output_;
+    escaped_output_ = _other.escaped_output_;
     return *this;
   }
 
 
-  /* value output operator */
-  friend std::ostream& operator<<(std::ostream& _os, const Value& _value);
-  
   /**
    * @return  flag if this value should be quoted in SQL statement or not
    */
@@ -160,29 +239,77 @@ public:
     return quoted_output_;
   }
 
+
+  const std::string str() const {
+    return value_;
+  }
+
+
+  /**
+   * @return  whether is value null or not
+   */
+  bool isnull() const {
+	  return is_null_;
+  }
+
+
+  bool operator !() const {
+	  return isnull();
+  }
+
+
+  /**
+   * to sql string serialization
+   *
+   * @param _esc_func  string escape function pointer
+   */
+  std::string toSql(boost::function<std::string(std::string)> _esc_func) const {
+    if (is_null_) {
+      return "NULL";
+    }
+    else {
+      return (quoted_output_ ? (escaped_output_ ? "E'" : "'") + _esc_func(value_) + "'" : value_);
+    }
+  }
+
+
+  /* value output operator */
+  friend std::ostream& operator<<(std::ostream& _os, const Value& _value);
+
+
+private:
+  /**
+   * common initialization code for boost ptime
+   * and boost date types
+   */
+  template<class T>
+  void __init_date_time(const T _value) {
+    escaped_output_ = false;
+    if (_value.is_special()) {
+      is_null_ = true;
+      quoted_output_ = false;
+    }
+    else {
+      value_ = sqlize(_value);
+      is_null_ = false;
+      quoted_output_ = true;
+    }
+  }
+
+
 protected:
-  bool is_null_;        /**< flag if value is NULL */
-  value_type value_;    /**< value in value_type representation */
-  bool quoted_output_;  /**< SQL value quotation flag */
+  bool        is_null_;        /**< flag if value is NULL */
+  std::string value_;          /**< value in std::string representation */
+  bool        quoted_output_;  /**< SQL value quotation flag */
+  bool        escaped_output_; /**< SQL value escape flag */
 };
 
 
 inline std::ostream& operator<<(std::ostream& _os, const Value& _value) {
-  return (_value.is_null_ ? _os << "NULL" : _os <<  _value.value_);
+  return (_value.is_null_ ? _os << "NULL" : _os << _value.toSql(&Util::escape2));
 }
 
 
-/**
- * TODO: overload stream for query itself (not use .buffer()) and make
- *       new operator here using quoted_output_ in it
- *
- *       something like:
- *
- *       inline Query& operator<<(Query& _q, const Value& _Value) {
- *         return _q << (_value.quoted_output_ ? "'" : "") << _value.value_ << (_value.quoted_output_ ? "'" : "");
- *       }
- */
-
 }
 
-#endif /*VALUE_HPP_*/
+#endif /*VALUE_H_*/

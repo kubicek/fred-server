@@ -1,4 +1,10 @@
 #!/bin/sh
+# fred-server	This is the init script for starting up all FRED
+#		servers. Start and kill priority should be set up to
+#               start/stop after/before postgresql and omniNames
+#
+# chkconfig: - 91 09
+# description: Starts and stops all FRED backend daemon 
 
 if [ -f /lib/lsb/init-functions ]; then
     . /lib/lsb/init-functions
@@ -28,6 +34,28 @@ check_pidfile() {
     ps -p $(cat $1 2>/dev/null) >/dev/null 2>&1
 }
 
+#
+# Store pid of process described by regex $1 into filename $2
+#
+store_pid()
+{
+        RETRY_COUNT=2
+        PID=""
+        while [ $RETRY_COUNT -gt 0 -a "$PID" == "" ]; do
+                PID=$(ps -e -o "pid args" | sed 's/^ *//g' | \
+                grep  "$1" | grep -v grep | cut -f1 -d' ')
+                if [ "$PID" == "" ]; then
+                        RETRY_COUNT=$(($RETRY_COUNT - 1))
+                        sleep 1
+                fi
+        done
+        if [ "$PID" != "" ]; then 
+	    echo $PID > $2; /bin/true; return
+	else 
+	    test -f $2 && rm $2; /bin/false; return
+	fi
+}
+
 fred_start() {
     if [ $DB_INIT -eq 1 -a -x $DB_MANAGER ]
     then
@@ -47,39 +75,34 @@ fred_start() {
 	mkdir -p ${VARRUN_PATH}
     fi
     NUM=0
-    START_SUCCEDED=1
     if check_pidfile ${VARRUN_PATH}/pyfred.pid; then NUM=$(($NUM+1)); else
         @BINDIR@/pyfredctl start >/dev/null 2>&1
 	if [ $? -eq 0 ]; then
-            START_SUCCEDED=0
 	    NUM=$(($NUM+1))
 	fi
     fi
-    if check_pidfile ${VARRUN_PATH}/fred-rifd.pid; then /bin/true; else
+    if check_pidfile ${VARRUN_PATH}/fred-rifd.pid; then NUM=$(($NUM+1)); else
         ${FRED_PATH}/fred-rifd ${OPTIONS}${RIFD_PORT} 2>/dev/null &
-        if [ $? -eq 0 ]; then
-            START_SUCCEDED=0
+        if store_pid "${FRED_PATH}/fred-rifd" ${VARRUN_PATH}/fred-rifd.pid
+	then
 	    NUM=$(($NUM+1))
-	    echo `pidof ${FRED_PATH}/fred-rifd` > ${VARRUN_PATH}/fred-rifd.pid
         fi
     fi
-    if check_pidfile ${VARRUN_PATH}/fred-pifd.pid; then /bin/true; else
+    if check_pidfile ${VARRUN_PATH}/fred-pifd.pid; then NUM=$(($NUM+1)); else
         ${FRED_PATH}/fred-pifd ${OPTIONS}${PIFD_PORT} 2>/dev/null &
-        if [ $? -eq 0 ]; then
-            START_SUCCEDED=0
+        if store_pid "${FRED_PATH}/fred-pifd" ${VARRUN_PATH}/fred-pifd.pid
+	then
 	    NUM=$(($NUM+1))
-	    echo `pidof ${FRED_PATH}/fred-pifd` > ${VARRUN_PATH}/fred-pifd.pid
         fi
     fi
-    if check_pidfile ${VARRUN_PATH}/fred-adifd.pid; then /bin/true; else
+    if check_pidfile ${VARRUN_PATH}/fred-adifd.pid; then NUM=$(($NUM+1)); else
         ${FRED_PATH}/fred-adifd ${OPTIONS}${ADIFD_PORT} 2>/dev/null &
-        if [ $? -eq 0 ]; then
-            START_SUCCEDED=0
+        if store_pid "${FRED_PATH}/fred-adifd" ${VARRUN_PATH}/fred-adifd.pid
+	then
 	    NUM=$(($NUM+1))
-	    echo `pidof ${FRED_PATH}/fred-adifd` > ${VARRUN_PATH}/fred-adifd.pid
         fi
     fi
-    if [ $START_SUCCEDED -eq 0 -a $NUM -eq 4 ]; then
+    if [ $NUM -eq 4 ]; then
         log_success_msg "${MSG_START}"
     else
 	log_failure_msg "${MSG_START}"
@@ -133,6 +156,98 @@ fred_stop() {
     fi
 }
 
+init_cz()
+{
+    ADMCMD=${FRED_PATH}/fred-admin
+    # do nothing if there is already some registrar 
+    $ADMCMD --registrar_list | grep registrar > /dev/null
+    if [ $? -eq 0 ]; then exit 1; fi
+    # add zone .cz 
+    $ADMCMD --zone_add \
+       --zone_fqdn=cz \
+       --ex_period_min=12 \
+       --ex_period_max=120 \
+       --ttl=18000 \
+       --hostmaster=hostmaster@nic.cz \
+       --refresh=10600 \
+       --update_retr=3600 \
+       --expiry=1209600 \
+       --minimum=7200 \
+       --ns_fqdn=ns.tld.cz
+    # add ENUM zone .0.2.4.e164.arpa
+    $ADMCMD --zone_add \
+       --zone_fqdn=0.2.4.e164.arpa \
+       --ex_period_min=12 \
+       --ex_period_max=120 \
+       --ttl=18000 \
+       --hostmaster=hostmaster@nic.cz \
+       --refresh=10600 \
+       --update_retr=3600 \
+       --expiry=1209600 \
+       --minimum=7200 \
+       --ns_fqdn=a.ns.nic.cz
+    # add nameservers for .cz
+    $ADMCMD --zone_ns_add \
+       --zone_fqdn=cz --ns_fqdn=ns.tld.cz --addr=217.31.196.10
+    $ADMCMD --zone_ns_add \
+       --zone_fqdn=cz --ns_fqdn=ns2.nic.fr
+    $ADMCMD --zone_ns_add \
+        --zone_fqdn=cz --ns_fqdn=ns1.tld.cz --addr=195.66.241.202
+    $ADMCMD --zone_ns_add \
+        --zone_fqdn=cz --ns_fqdn=nss.tld.cz --addr=217.31.200.10
+    $ADMCMD --zone_ns_add \
+        --zone_fqdn=cz --ns_fqdn=ns-cz.ripe.net
+    $ADMCMD --zone_ns_add \
+        --zone_fqdn=cz --ns_fqdn=sunic.sunet.se
+    $ADMCMD --zone_ns_add \
+        --zone_fqdn=cz --ns_fqdn=ns-ext.vix.com
+    # add nameservers for .0.2.4.e164.arpa
+    $ADMCMD --zone_ns_add \
+        --zone_fqdn=0.2.4.e164.arpa --ns_fqdn=a.ns.nic.cz
+    $ADMCMD --zone_ns_add \
+        --zone_fqdn=0.2.4.e164.arpa --ns_fqdn=b.ns.cznic.org
+    $ADMCMD --zone_ns_add \
+        --zone_fqdn=0.2.4.e164.arpa --ns_fqdn=c.ns.nic.cz
+    $ADMCMD --zone_ns_add \
+        --zone_fqdn=0.2.4.e164.arpa --ns_fqdn=e.ns.nic.cz
+    # add some testing registrars
+    $ADMCMD --registrar_add \
+        --handle=REG-FRED_A \
+        --country=CZ \
+        --organization="Testing registrar A" \
+        --reg_name="Company l.t.d." \
+        --url=www.nic.cz
+    $ADMCMD --registrar_add \
+        --handle=REG-FRED_B \
+        --country=CZ \
+        --organization="Testing registrar B" \
+        --reg_name="Company l.t.d." \
+        --url=www.nic.cz
+    # add EPP autentication data to these testin registrars 
+    $ADMCMD --registrar_acl_add \
+        --handle=REG-FRED_A \
+        --certificate="39:D1:0C:CA:05:3A:CC:C0:0B:EC:6F:3F:81:0D:C7:9E" \
+        --password=passwd
+    $ADMCMD --registrar_acl_add \
+        --handle=REG-FRED_B \
+        --certificate="39:D1:0C:CA:05:3A:CC:C0:0B:EC:6F:3F:81:0D:C7:9E" \
+        --password=passwd
+    # add EPP access to both zones to both registrars
+    $ADMCMD --registrar_add_zone \
+        --zone_fqdn=0.2.4.e164.arpa --handle=REG-FRED_A \
+        --from_date="2007-01-01"
+    $ADMCMD --registrar_add_zone \
+        --zone_fqdn=cz --handle=REG-FRED_A \
+        --from_date="2007-01-01"
+    $ADMCMD --registrar_add_zone \
+        --zone_fqdn=0.2.4.e164.arpa --handle=REG-FRED_B \
+        --from_date="2007-01-01"
+    $ADMCMD --registrar_add_zone \
+        --zone_fqdn=cz --handle=REG-FRED_B \
+        --from_date="2007-01-01"
+    exit 0
+}
+
 case "$1" in
     start)
 	fred_start
@@ -147,9 +262,12 @@ case "$1" in
     status)
         fred_status
         ;;
+    init_cz)
+        init_cz
+        ;;
     *)
 	echo -n "Usage: @SYSCONFDIR@/init.d/fred-server "
-	echo "{start|stop|restart|status}"
+	echo "{start|stop|restart|status|init_cz}"
 	exit 1
 esac
 

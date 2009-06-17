@@ -27,7 +27,7 @@
 #include "object_impl.h"
 #include "sql.h"
 #include "old_utils/dbsql.h"
-#include "db/manager.h"
+#include "db_settings.h"
 #include "model/model_filters.h"
 #include "log/logger.h"
 
@@ -533,8 +533,8 @@ public:
         << "JOIN object_history t_5 ON (t_2.historyid = t_5.historyid) "
         << "JOIN object_registry t_1 ON (t_5.id = t_1.id) "
         << "JOIN contact_history t_4 ON (t_2.registrant = t_4.id) "
-        << "JOIN object_registry t_3 ON (t_4.historyid = t_3.historyid) "
-        << "JOIN history h ON (tmp.id = h.id) JOIN action a ON (a.id = h.action) ";
+        << "JOIN object_registry t_3 ON (t_4.historyid = t_3.historyid) ";
+    //    << "JOIN history h ON (tmp.id = h.id) JOIN action a ON (a.id = h.action) ";
     object_info_query.order_by() << "tmp.id";
 
     try {
@@ -716,7 +716,7 @@ public:
           Database::ID domain_id        = *(++col);
           std::string  keyset_handle    = *(++col);
 
-          DomainImpl *domain_ptr = dynamic_cast<DomainImpl *>(findHistoryIDSequence(domain_id));
+          DomainImpl *domain_ptr = dynamic_cast<DomainImpl *>(findHistoryIDSequence(domain_historyid));
           if (domain_ptr)
               domain_ptr->addKeySetHandle(keyset_handle);
       }

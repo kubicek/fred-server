@@ -12,7 +12,6 @@ ccReg::Filters::Compound_ptr ccReg_Contacts_i::add() {
   Logging::Context ctx(base_context_);
 
   TRACE("[CALL] ccReg_Contacts_i::add()");
-  it.clearF();
   Database::Filters::Contact *f = new Database::Filters::ContactHistoryImpl();
   uf.addFilter(f);
   return it.addE(f);
@@ -41,14 +40,14 @@ Registry::TableRow* ccReg_Contacts_i::getRow(CORBA::Short row)
   Registry::TableRow *tr = new Registry::TableRow;
   tr->length(6);
 
-  MAKE_OID(oid_handle, c->getId(), DUPSTRFUN(c->getHandle), FT_CONTACT)
-  MAKE_OID(oid_registrar, c->getRegistrarId(), DUPSTRFUN(c->getRegistrarHandle), FT_REGISTRAR)
+  MAKE_OID(oid_handle, c->getId(), C_STR(c->getHandle()), FT_CONTACT)
+  MAKE_OID(oid_registrar, c->getRegistrarId(), C_STR(c->getRegistrarHandle()), FT_REGISTRAR)
 
   (*tr)[0] <<= oid_handle;
-  (*tr)[1] <<= DUPSTRFUN(c->getName);
-  (*tr)[2] <<= DUPSTRFUN(c->getOrganization);
-  (*tr)[3] <<= DUPSTRDATE(c->getCreateDate);
-  (*tr)[4] <<= DUPSTRDATE(c->getDeleteDate);
+  (*tr)[1] <<= C_STR(c->getName());
+  (*tr)[2] <<= C_STR(c->getOrganization());
+  (*tr)[3] <<= C_STR(c->getCreateDate());
+  (*tr)[4] <<= C_STR(c->getDeleteDate());
   (*tr)[5] <<= oid_registrar;
   return tr;
 }

@@ -26,11 +26,19 @@
 
 // mailer manager
 #include "register/mailer.h"
+#include "notifier_changes.h"
+
+#include "db/manager_old_db.h"
+
 
 #define MAX_SQLSTRING 512
 
-EPPNotifier::EPPNotifier(
-  bool _disable, MailerManager *mailManager, DB *dbs, ID regid, ID objectid)
+EPPNotifier::EPPNotifier(bool _disable, 
+                         MailerManager *mailManager, 
+                         DB *dbs, 
+                         ID regid, 
+                         ID objectid,
+                         Register::Manager *_rm)
 {
   disable = _disable;
   mm=mailManager;
@@ -38,6 +46,10 @@ EPPNotifier::EPPNotifier(
   enum_action=db->GetEPPAction(); // id of the EPP operation
   objectID=objectid;
   registrarID=regid;
+
+  rm_ = _rm;
+
+  messages_ready_ = false;
 
   LOG( DEBUG_LOG ,"EPPNotifier:  object %d  enum_action %d regID %d " , objectID , enum_action , registrarID );
 
@@ -57,28 +69,79 @@ bool EPPNotifier::Send()
 {
   if (!notify.size() || disable)
     return true;
+
+  try {
+    constructMessages();
+  
+    if (mm->checkEmailList(emails)) {
+      LOG(DEBUG_LOG, "EPPNotifier: TO: %s" , emails.c_str() );
+    }
+    else {
+      LOG(DEBUG_LOG, "EPPNotifier: TO: no valid email address found - not sending");
+      return false;
+    }
+
+    // mailer manager send emails
+    mm->sendEmail("", emails, "", getTemplate(), params, handles, attach);
+  }
+  catch (...) {
+    return false;
+  }
+
+  return true;
+}
+
+/* Ticket #1622 */
+void EPPNotifier::constructMessages() {
+  /* check if messages have been constructed already */
+  if (messages_ready_)
+    return;
+
+  /* construct messages */
   unsigned int i, num;
   short type, mod;
   ID cID;
-  Register::Mailer::Parameters params;
-  Register::Mailer::Handles handles;
-  Register::Mailer::Attachments attach;
-  std::stringstream emails;
 
   // 4 parameters  type of the object name  ticket svTRID and  handle of  registrar
   params["ticket"] = db->GetsvTRID();
   std::stringstream registrarInfo;
-  registrarInfo << db->GetValueFromTable(
-    "registrar", "name", "id",registrarID
-  );
+  registrarInfo << db->GetValueFromTable("registrar", "name", "id", registrarID);
   registrarInfo << " ("
-                << db->GetValueFromTable("registrar", "url", "id",registrarID) 
+                << db->GetValueFromTable("registrar", "url", "id",registrarID)
                 << ")";
   params["registrar"] = registrarInfo.str(); // registrar name and url
-  params["handle"] = db->GetValueFromTable("object_registry", "name", "id",
-      objectID); // name of the object
-  params["type"] = db->GetValueFromTable("object_registry", "type", "id",
-      objectID); // type 1 contact 2 nsset 3 domain 4 keyset
+  params["handle"] = db->GetValueFromTable("object_registry", "name", "id", objectID); // name of the object
+  params["type"] = db->GetValueFromTable("object_registry", "type", "id", objectID);   // type 1 contact 2 nsset 3 domain 4 keyset
+
+  if (rm_ && (enum_action == EPP_ContactUpdate ||
+              enum_action == EPP_DomainUpdate  ||
+              enum_action == EPP_NSsetUpdate   ||
+              enum_action == EPP_KeySetUpdate)) {
+    try {
+      Database::OldDBManager dbm(db);
+
+      MessageUpdateChanges changes(&dbm, rm_, objectID, enum_action);
+      MessageUpdateChanges::ChangesMap values = changes.compose();
+
+      params["changes"] = values.size() > 0 ? "1" : "0";
+
+      MessageUpdateChanges::ChangesMap::const_iterator it = values.begin();
+      for (; it != values.end(); ++it) {
+        params["changes." + it->first] = "1";
+        params["changes." + it->first + ".old"] = it->second.first;
+        params["changes." + it->first + ".new"] = it->second.second;
+      }
+    }
+    catch (MessageUpdateChanges::NoChangesFound &ex) {
+      LOGGER(PACKAGE).error(boost::format("EPPNotifier: update changes - no history found (object_id=%1%)") % objectID);
+    }
+    catch (Database::Exception &ex) {
+      LOGGER(PACKAGE).error(boost::format("EPPNotifier: update changes - database error => %1%") % ex.what());
+    }
+    catch (...) {
+      LOGGER(PACKAGE).error("EPPNotifier: update changes - unknown exception");
+    }
+  }
 
   LOG( DEBUG_LOG ,"EPPNotifier: Send object %d  enum_action %d regID %d ticket %s" , objectID , enum_action , registrarID , db->GetsvTRID() );
 
@@ -88,30 +151,24 @@ bool EPPNotifier::Send()
     type = notify[i].type;
     mod = notify[i].modify;
 
-    std::string objectName = db->GetValueFromTable("object_registry", "name",
-        "id", cID);
-    LOG( DEBUG_LOG ,"EPPNotifier: sendTo  %s %s contactID %d [%s]" ,
-        GetContactType( type ) , GetContactModify( mod) , cID , objectName.c_str());
+    std::string objectName = db->GetValueFromTable("object_registry", "name", "id", cID);
+    LOG(DEBUG_LOG, "EPPNotifier: sendTo %s %s contactID %d [%s]",
+        GetContactType(type), GetContactModify(mod), cID, objectName.c_str());
 
     std::string cEmail = db->GetValueFromTable("contact", "email", "id", cID);
-    std::string cNotifyEmail = db->GetValueFromTable("contact", "notifyemail",
-        "id", cID);
-    LOG( DEBUG_LOG ,"EPPNotifier:  email %s notifyEmail %s " , cEmail.c_str(),cNotifyEmail.c_str());
+    std::string cNotifyEmail = db->GetValueFromTable("contact", "notifyemail", "id", cID);
+    LOG(DEBUG_LOG, "EPPNotifier: email %s notifyEmail %s ",
+        cEmail.c_str(), cNotifyEmail.c_str());
 
     if (!cNotifyEmail.empty()) {
-      if (!emails.str().empty())
-        emails << ", ";
-      emails << cNotifyEmail;
+      if (!emails.empty())
+        emails += ", ";
+      emails += cNotifyEmail;
     }
-    emails << " " << extraEmails;
+    emails += " " + extraEmails;
   }
-  LOG( DEBUG_LOG , "EPPNotifier: TO: %s" , emails.str().c_str() );
-  try {
-    // Mailer manager send emailes 
-    mm->sendEmail( "" , emails.str() , "", getTemplate() ,params,handles,attach );
-  }
-  catch (...) {return false;}
-  return true;
+
+  messages_ready_ = true;
 }
 
 void EPPNotifier::AddContactID(
@@ -126,7 +183,7 @@ void EPPNotifier::AddContactID(
   notify.push_back(n);
 }
 
-// addall  tech contact of  nsset  linked with domain with  domainID 
+// addall  tech contact of  nsset  linked with domain with  domainID
 void EPPNotifier::AddNSSetTechByDomain(
   ID domainID)
 {
@@ -168,7 +225,7 @@ EPPNotifier::AddKeySetTech(ID keysetID)
             "SELECT contactid FROM keyset_contact_map WHERE keysetid=%d",
             keysetID);
 
-    if (db->ExecSQL(sqlString)) {
+    if (db->ExecSelect(sqlString)) {
         num = db->GetSelectRows();
         for (i = 0; i < num; i++)
             AddContactID(atoi(db->GetFieldValue(i, 0)), KEY_CONTACT, 0);

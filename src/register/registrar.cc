@@ -29,7 +29,7 @@
 #include "old_utils/dbsql.h"
 #include "old_utils/log.h"
 
-#include "db/manager.h"
+#include "db_settings.h"
 #include "model/model_filters.h"
 #include "log/logger.h"
 
@@ -579,7 +579,6 @@ public:
       tmp->addSelect("id ico dic varsymb vat handle name url organization street1 street2 street3 "
                        "city stateorprovince postalcode country telephone fax email system",
                      rf->joinRegistrarTable());
-      tmp->order_by() << "id";
       uf.addQuery(tmp);
       at_least_one = true;
     }
@@ -1273,11 +1272,46 @@ public:
     r->setHandle(registrarHandle);
     r->save();
   }
-  virtual void addRegistrarZone(const std::string& registrarHandle,
-                                const std::string zone) throw (SQL_ERROR) {
+  virtual void addRegistrarAcl(
+          const std::string &registrarHandle,
+          const std::string &cert,
+          const std::string &pass)
+      throw (SQL_ERROR)
+  {
+      std::stringstream sql;
+      sql << "INSERT INTO registraracl (registrarid, cert, password) "
+          << "SELECT r.id, '" << cert << "','" << pass << "' FROM registrar r "
+          << "WHERE r.handle='" << registrarHandle << "'";
+      if (!db->ExecSQL(sql.str().c_str())) {
+          throw SQL_ERROR();
+      }
+  }
+  virtual Registrar *createRegistrar()
+  {
+      return dynamic_cast<RegistrarImpl *>(new RegistrarImpl(db));
+  }
+
+  virtual void addRegistrarZone(
+          const std::string& registrarHandle,
+          const std::string zone,
+          const Database::Date &fromDate,
+          const Database::Date &toDate) throw (SQL_ERROR) {
+    std::string fromStr;
+    std::string toStr;
+
+    if (fromDate != Database::Date()) {
+        fromStr = "'" + fromDate.to_string() + "'";
+    } else {
+        fromStr = "CURRENT_DATE";
+    }
+    if (toDate != Database::Date()) {
+        toStr = "'" + toDate.to_string() + "'";
+    } else {
+        toStr = "NULL";
+    }
     std::stringstream sql;
-    sql << "INSERT INTO registrarinvoice (registrarid,zone,fromdate) "
-        << "SELECT r.id,z.id,CURRENT_DATE FROM ("
+    sql << "INSERT INTO registrarinvoice (registrarid,zone,fromdate,lastdate) "
+        << "SELECT r.id,z.id," << fromStr << "," << toStr << " FROM ("
         << "SELECT id FROM registrar WHERE handle='" << registrarHandle
         << "') r " << "JOIN (SELECT id FROM zone WHERE fqdn='" << zone
         << "') z ON (1=1) " << "LEFT JOIN registrarinvoice ri ON "

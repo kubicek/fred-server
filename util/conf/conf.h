@@ -22,14 +22,14 @@ public:
 	protected:
 		std::string _what;
 	};
-	
+
 	Conf() {
 	}
-	~Conf() {
+	virtual ~Conf() {
 	}
-		
+
 	void print(std::ostream& _os) const;
-	
+
 	template<class _Tp> const _Tp& get(const std::string& _what) const {
 		try {
 			return po::variables_map::operator[](_what).as<_Tp>();

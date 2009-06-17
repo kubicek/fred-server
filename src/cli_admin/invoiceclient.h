@@ -25,6 +25,7 @@
 #include "corba/admin/admin_impl.h"
 #include "register/register.h"
 #include "old_utils/dbsql.h"
+#include "baseclient.h"
 
 
 #define INVOICE_SHOW_OPTS_NAME          "invoice_show_opts"
@@ -71,15 +72,25 @@
 #define INVOICE_FILE_NAME_NAME          "invoice_file_name"
 #define INVOICE_FILE_NAME_NAME_DESC     "invoice file name"
 
+#define INVOICE_ADD_PREFIX_NAME         "add_prefix"
+#define INVOICE_ADD_PREFIX_NAME_DESC    "add row into the ``invoice_prefix'' table"
+#define INVOICE_ADD_PREFIX_HELP_NAME        "add_prefix_help"
+#define INVOICE_ADD_PREFIX_HELP_NAME_DESC   "help for ``add_prefix''"
+#define INVOICE_PREFIX_ZONE_NAME        "zone"
+#define INVOICE_PREFIX_ZONE_NAME_DESC   "zone id"
+#define INVOICE_PREFIX_TYPE_NAME        "type"
+#define INVOICE_PREFIX_TYPE_NAME_DESC   "type"
+#define INVOICE_PREFIX_YEAR_NAME        "year"
+#define INVOICE_PREFIX_YEAR_NAME_DESC   "year"
+#define INVOICE_PREFIX_PREFIX_NAME      "prefix"
+#define INVOICE_PREFIX_PREFIX_NAME_DESC "prefix"
+
 namespace Admin {
 
-class InvoiceClient {
+class InvoiceClient : public BaseClient {
 private:
-    std::string m_connstring;
-    std::string m_nsAddr;
     CORBA::Long m_clientId;
     DB m_db;
-    Database::Manager *m_dbman;
     ccReg::EPP_var m_epp;
     Config::Conf m_conf;
 
@@ -101,9 +112,11 @@ public:
     void list();
     void list_filters();
     int archive();
+    void add_invoice_prefix();
 
     void list_help();
     void archive_help();
+    void add_invoice_prefix_help();
 };
 
 } // namespace Admin;

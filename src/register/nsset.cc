@@ -25,7 +25,7 @@
 #include "sql.h"
 #include "old_utils/dbsql.h"
 #include "old_utils/util.h"
-#include "db/manager.h"
+#include "db_settings.h"
 #include "model/model_filters.h"
 #include "log/logger.h"
 
@@ -528,7 +528,7 @@ public:
       hosts_query.from() << getTempTableName() << " tmp "
                          << "JOIN host_history t_1 ON (tmp.id = t_1.historyid) "
                          << "LEFT JOIN host_ipaddr_map_history t_2 ON (t_1.historyid = t_2.historyid AND t_1.id = t_2.hostid)";
-      hosts_query.order_by() << "t_1.nssetid, tmp.id, t_1.fqdn";
+      hosts_query.order_by() << "t_1.nssetid, tmp.id, t_1.fqdn, t_2.ipaddr";
       
       Database::Result r_hosts = conn->exec(hosts_query);
       for (Database::Result::Iterator it = r_hosts.begin(); it != r_hosts.end(); ++it) {

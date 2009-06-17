@@ -8,7 +8,7 @@
 #include "object.h"
 #include "types.h"
 #include "exceptions.h" 
-#include "db/manager.h"
+#include "db_settings.h"
 #include "model/model_filters.h"
 
 using namespace boost::posix_time;
@@ -328,8 +328,17 @@ public:
   virtual bool checkHandle(const std::string) const throw (SQL_ERROR) = 0;
   virtual void addRegistrar(const std::string& registrarHandle)
       throw (SQL_ERROR) = 0;
-  virtual void addRegistrarZone(const std::string& registrarHandle,
-      const std::string zone) throw (SQL_ERROR) = 0;
+  virtual Registrar *createRegistrar() = 0;
+  virtual void addRegistrarAcl(
+          const std::string &registrarHandle,
+          const std::string &cert,
+          const std::string &pass)
+      throw (SQL_ERROR) = 0;
+  virtual void addRegistrarZone(
+          const std::string& registrarHandle, 
+          const std::string zone,
+          const Database::Date &fromDate,
+          const Database::Date &toDate) throw (SQL_ERROR) = 0;
   /// Factory method
   static Manager *create(DB *db);
 };

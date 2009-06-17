@@ -12,7 +12,6 @@ ccReg::Filters::Compound_ptr ccReg_Mails_i::add() {
   Logging::Context ctx(base_context_);
 
   TRACE("[CALL] ccReg_Mails_i::add()");
-  it.clearF();
   Database::Filters::Mail *f = new Database::Filters::MailImpl();
   uf.addFilter(f);
   return it.addE(f);
@@ -40,9 +39,9 @@ Registry::TableRow* ccReg_Mails_i::getRow(CORBA::Short _row)
   Registry::TableRow *tr = new Registry::TableRow;
   tr->length(3);
 
-  (*tr)[0] <<= DUPSTRDATE(mail->getCreateTime);
-  (*tr)[1] <<= DUPSTRC(mail->getTypeDesc());
-  (*tr)[2] <<= DUPSTRC(Conversion<long int>::to_string(mail->getStatus()));
+  (*tr)[0] <<= C_STR(mail->getCreateTime());
+  (*tr)[1] <<= C_STR(mail->getTypeDesc());
+  (*tr)[2] <<= C_STR(mail->getStatus());
   return tr;
 }
 

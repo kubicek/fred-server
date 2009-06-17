@@ -3,7 +3,7 @@
 
 #include "common_object.h"
 #include "object.h"
-#include "db/manager.h"
+#include "db_settings.h"
 #include "model/model_filters.h"
 
 namespace Register {

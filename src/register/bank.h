@@ -1,6 +1,8 @@
 #ifndef _BANKING_H_
 #define _BANKING_H_
+
 #include "invoice.h"
+#include "db_settings.h"
 
 namespace Register
 {
@@ -149,3 +151,4 @@ namespace Register
 }
 
 #endif // _BANKING_H_
+

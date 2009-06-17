@@ -22,7 +22,6 @@ ccReg_Registrars_i::add() {
   Logging::Context ctx(base_context_);
 
   TRACE("[CALL] ccReg_Registrars_i::add()");
-  it.clearF();
   Database::Filters::Registrar *f = new Database::Filters::RegistrarImpl(true);
   uf.addFilter(f);
   return it.addE(f); 
@@ -54,13 +53,13 @@ ccReg_Registrars_i::getRow(CORBA::Short row)
   Registry::TableRow *tr = new Registry::TableRow;
   tr->length(5);
 
-  MAKE_OID(oid_handle, r->getId(), DUPSTRFUN(r->getHandle), FT_REGISTRAR)
+  MAKE_OID(oid_handle, r->getId(), C_STR(r->getHandle()), FT_REGISTRAR)
 
-  (*tr)[0] <<= DUPSTRFUN(r->getName); 
+  (*tr)[0] <<= C_STR(r->getName()); 
   (*tr)[1] <<= oid_handle;
-  (*tr)[2] <<= DUPSTRFUN(r->getURL);
-  (*tr)[3] <<= DUPSTRFUN(r->getEmail);
-  (*tr)[4] <<= DUPSTRC(Conversion<long unsigned>::to_string(r->getCredit()));
+  (*tr)[2] <<= C_STR(r->getURL());
+  (*tr)[3] <<= C_STR(r->getEmail());
+  (*tr)[4] <<= C_STR(r->getCredit());
   return tr;
 }
 

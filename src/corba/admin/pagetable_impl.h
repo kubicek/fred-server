@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "common.h"
+#include "str_corbaout.h"
 #include "filter_impl.h"
 #include "corba/mailer_manager.h"
 
@@ -23,7 +24,6 @@
 #include "log/logger.h"
 #include "log/context.h"
 
-#include "db/manager.h"
 #include "model/model_filters.h"
 
 using namespace Database;

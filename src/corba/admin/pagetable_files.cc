@@ -12,7 +12,6 @@ ccReg::Filters::Compound_ptr ccReg_Files_i::add() {
   Logging::Context ctx(base_context_);
 
   TRACE("[CALL] ccReg_Files_i::add()");
-  it.clearF();
   Database::Filters::File *f = new Database::Filters::FileImpl(true);
   uf.addFilter(f);
   return it.addE(f);
@@ -40,10 +39,10 @@ Registry::TableRow* ccReg_Files_i::getRow(CORBA::Short _row)
 
   Registry::TableRow *tr = new Registry::TableRow;
   tr->length(4);
-  (*tr)[0] <<= DUPSTRC(file->getName());
-  (*tr)[1] <<= DUPSTRDATE(file->getCreateTime);
-  (*tr)[2] <<= DUPSTRC(file->getTypeDesc());
-  (*tr)[3] <<= DUPSTRC(Conversion<long unsigned>::to_string(file->getSize()));
+  (*tr)[0] <<= C_STR(file->getName());
+  (*tr)[1] <<= C_STR(file->getCreateTime());
+  (*tr)[2] <<= C_STR(file->getTypeDesc());
+  (*tr)[3] <<= C_STR(file->getSize());
   return tr;
 }
 

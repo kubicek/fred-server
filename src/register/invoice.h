@@ -11,7 +11,7 @@
 #include "exceptions.h"
 #include "documents.h"
 #include "mailer.h"
-#include "db/manager.h"
+#include "db_settings.h"
 #include "model/model_filters.h"
 
 class DB;
@@ -27,7 +27,8 @@ enum MemberType {
   MT_TOTAL,
   MT_CREDIT,
   MT_TYPE,
-  MT_ZONE
+  MT_ZONE,
+  MT_PRICE
 };
 
 /// money type
@@ -258,6 +259,8 @@ public:
   static Manager *create(Database::Manager *_db_manager,
                          Document::Manager *_doc_manager,
                          Mailer::Manager *_mail_manager);
+  virtual bool insertInvoicePrefix(unsigned long long zoneId,
+          int type, int year, unsigned long long prefix) = 0;
 
   
 }; // Manager

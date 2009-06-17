@@ -28,8 +28,7 @@
 
 namespace Admin {
 
-ObjectClient::ObjectClient():
-    m_connstring(""), m_nsAddr("")
+ObjectClient::ObjectClient()
 {
     m_options = new boost::program_options::options_description(
             "Object related options");
@@ -53,11 +52,8 @@ ObjectClient::ObjectClient():
 }
 ObjectClient::ObjectClient(
         std::string connstring,
-        std::string nsAddr):
-    m_connstring(connstring), m_nsAddr(nsAddr)
+        std::string nsAddr) : BaseClient(connstring, nsAddr)
 {
-    m_dbman = new Database::Manager(m_connstring);
-    m_dbman = NULL;
     m_db.OpenDatabase(connstring.c_str());
     m_options = NULL;
     m_optionsInvis = NULL;
@@ -65,7 +61,6 @@ ObjectClient::ObjectClient(
 
 ObjectClient::~ObjectClient()
 {
-    delete m_dbman;
     delete m_options;
     delete m_optionsInvis;
 }
@@ -76,9 +71,7 @@ ObjectClient::init(
         std::string nsAddr,
         Config::Conf &conf)
 {
-    m_connstring = connstring;
-    m_nsAddr = nsAddr;
-    m_dbman = new Database::Manager(m_connstring);
+    BaseClient::init(connstring, nsAddr);
     m_db.OpenDatabase(connstring.c_str());
     m_conf = conf;
 }
@@ -173,11 +166,11 @@ ObjectClient::update_states()
 /** \return 0=OK -1=SQL ERROR -2=no system registrar -3=login failed */
 int
 ObjectClient::deleteObjects(
-        const std::string& typeList)
+        const std::string& typeList, CorbaClient &cc)
 {
     LOGGER("tracer").trace("ObjectClient::deleteObjects");
     ccReg::EPP_var epp = NULL;
-    CorbaClient cc(0, NULL, m_nsAddr, m_conf.get<std::string>(NS_CONTEXT_NAME));
+    // CorbaClient cc(0, NULL, m_nsAddr, m_conf.get<std::string>(NS_CONTEXT_NAME));
     // temporary done by using EPP corba interface
     // should be instead somewhere in register library (object.cc?)
     // get login information for first system registrar
@@ -209,7 +202,7 @@ ObjectClient::deleteObjects(
         "LEFT JOIN domain d ON (d.id=o.id)";
     if (!typeList.empty())
         sql << "WHERE o.type IN (" << typeList << ") ";
-    sql << "ORDER BY s.id ";
+    sql << " ORDER BY CASE WHEN o.type = 3 THEN 1 ELSE 2 END ASC, s.id";
     unsigned int limit = m_conf.get<unsigned int>(OBJECT_DELETE_LIMIT_NAME);
     if (limit > 0)
         sql << "LIMIT " << limit;
@@ -339,7 +332,8 @@ ObjectClient::deleteObjects(
 int
 ObjectClient::delete_candidates()
 {
-    return deleteObjects(m_conf.get<std::string>(OBJECT_DELETE_TYPES_NAME));
+    CorbaClient cc(0, NULL, m_nsAddr, m_conf.get<std::string>(NS_CONTEXT_NAME));
+    return deleteObjects(m_conf.get<std::string>(OBJECT_DELETE_TYPES_NAME), cc);
 }
 
 int
@@ -415,17 +409,16 @@ ObjectClient::regular_procedure()
 
         registerMan->updateObjectStates();
         registerMan->updateObjectStates();
-        notifyMan->notifyStateChanges(
-                m_conf.get<std::string>(OBJECT_NOTIFY_EXCEPT_TYPES_NAME),
-                0, NULL, false);
         pollMan->createStateMessages(
                 m_conf.get<std::string>(OBJECT_POLL_EXCEPT_TYPES_NAME),
                 0, NULL);
-        if ((i = deleteObjects(m_conf.get<std::string>(OBJECT_DELETE_TYPES_NAME))) != 0) {
+        if ((i = deleteObjects(m_conf.get<std::string>(OBJECT_DELETE_TYPES_NAME), *cc)) != 0) {
             LOG(ERROR_LOG, "Admin::ObjectClient::regular_procedure(): Error has occured in deleteObject: %d", i);
-	    return i;
+      	    return i;
         }
-
+        notifyMan->notifyStateChanges(
+                m_conf.get<std::string>(OBJECT_NOTIFY_EXCEPT_TYPES_NAME),
+                0, NULL, true);
         pollMan->createLowCreditMessages();
         notifyMan->generateLetters();
     } catch (ccReg::Admin::SQL_ERROR) {

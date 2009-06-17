@@ -18,18 +18,19 @@
 
 /**
  *  @file connection.h
- *  Interface definition of connection object.
+ *  Interface definition of automanaged connection object
  */
 
-
-#ifndef CONNECTION_HPP_
-#define CONNECTION_HPP_
+#ifndef CONNECTION_H_
+#define CONNECTION_H_
 
 #include <boost/noncopyable.hpp>
 #include <string>
+#include <vector>
 #include "db_exceptions.h"
 #include "result.h"
-#include "query.h"
+#include "statement.h"
+#include "connection_factory.h"
 
 #include "config.h"
 
@@ -37,76 +38,31 @@
 #include "log/logger.h"
 #endif
 
+
 namespace Database {
 
-template<class _Type>
-class Transaction_;
 /**
- * \class Connection_
- * \brief Base template class for represent database connection
- *
- * template for connection object which uses _ConnType class 
- * as a concrete driver.
- *
- * Connection object (which should be used) is defined in \file database.h
- * file.
+ * \class  ConnectionBase_
  */
-template<class _ConnType>
-class Connection_ : private boost::noncopyable {
+template<class connection_driver, class manager_type>
+class ConnectionBase_ {
 public:
-  typedef _ConnType                                  connection_type;
-  typedef typename connection_type::transaction_type transaction_type;
-  typedef typename connection_type::result_type      result_type;
+  typedef connection_driver                        driver_type;
+  typedef typename manager_type::transaction_type  transaction_type;
+  typedef typename manager_type::result_type       result_type;
 
-  friend class Transaction_<transaction_type>;
-
-  class ResultFailed : public Exception {
-  public:
-    ResultFailed(const std::string& _query) : Exception("Result failed: " + _query) { }
-  };
 
   /**
-   * Constructors and destructor
+   * Constructor and destructor
    */
-  Connection_() : opened_(false) {
-  }
-
-  /**
-   * @param _conn_info is connection string used to open database 
-   */
-  Connection_(const std::string& _conn_info,
-              bool _lazy_connect = true) throw (ConnectionFailed) : conn_info_(_conn_info), 
-                                                                    opened_(false) {
-     /* lazy connection open */
-     if (!_lazy_connect) {
-      open(conn_info_);
-      opened_ = true;
-     }
+  ConnectionBase_(connection_driver *_conn) 
+            : conn_(_conn) {
   }
 
 
-  virtual ~Connection_() {
-#ifdef HAVE_LOGGER
-    TRACE("<CALL> Database::~Connection_()");
-#endif
+  virtual ~ConnectionBase_() {
   }
 
-  /**
-   * @param _conn_info is connetion string used to open database
-   */
-  virtual void open(const std::string& _conn_info) throw (ConnectionFailed) {
-    conn_info_ = _conn_info;
-    conn_.close();
-    conn_.open(conn_info_);
-#ifdef HAVE_LOGGER
-    LOGGER(PACKAGE).info(boost::format("connection established; (%1%)") % conn_info_);
-#endif
-  }
-
-
-  virtual void close() {
-    conn_.close();
-  }
 
   /**
    * Query executors
@@ -115,106 +71,257 @@ public:
   /**
    * This call is converted to stringize method call
    *
-   * @param _query object representing query
+   * @param _query object representing query statement
    * @return       result
    */
-  virtual Result_<result_type> exec(Query& _query) throw (ResultFailed) {
-    try {
-      /* check if query is fully constructed */
-      if (!_query.initialized()) {
-        _query.make();
-      }
-      return exec(_query.str());
-    }
-    catch (...) {
-      throw ResultFailed(_query.str());
-    }
+  virtual inline result_type exec(Statement& _stmt) throw (ResultFailed) {
+    return this->exec(_stmt.toSql(boost::bind(&ConnectionBase_<connection_driver, manager_type>::escape, this, _1)));
   }
 
 
   /**
-   * @param _query string representation of query
+   * @param _query string representation of query statement
    * @return       result
    */
-  virtual Result_<result_type> exec(const std::string& _query) throw (ResultFailed) {
+  virtual inline result_type exec(const std::string &_stmt) throw (ResultFailed) {
     try {
-      if (!opened_) {
-        open(conn_info_);
-        opened_ = true;
-      }
 #ifdef HAVE_LOGGER
-      LOGGER(PACKAGE).debug(boost::format("exec query [%1%]") % _query);
+      LOGGER(PACKAGE).debug(boost::format("exec query [%1%]") % _stmt);
 #endif
-      return Result_<result_type>(conn_.exec(_query));
+      return result_type(conn_->exec(_stmt));
+    }
+    catch (ResultFailed &rf) {
+      throw;
     }
     catch (...) {
-      throw ResultFailed(_query);
+      throw ResultFailed(_stmt);
     }
   }
 
-
+  
   /**
    * Reset connection to state after connect
    */
-  virtual void reset() {
-    conn_.reset(conn_info_);
+  virtual inline void reset() {
+    conn_->reset();
   }
 
 
-private:
-  connection_type conn_;      /**< connection driver */
-  std::string     conn_info_; /**< connection string used to open connection */
-  bool            opened_;    /**< whether is connection opened or not (for lazy connect) */
+  /**
+   * String escape method by specific connection_driver
+   */
+  virtual inline std::string escape(const std::string &_in) const {
+    return conn_->escape(_in);
+  }
+
+
+  /**
+   * @return  true if there is active transaction on connection
+   *          false otherwise
+   */
+  virtual inline bool inTransaction() const {
+    return conn_->inTransaction();
+  }
+
+
+protected:
+  connection_driver       *conn_;    /**< connection_driver instance */
 };
 
 
 
 /**
- * \class Transaction_ 
- * \brief Base template class representing local transaction
+ * \class  Connection_
+ * \brief  Standard connection proxy class
  */
-template<class _Type>
-class Transaction_ {
+template<class connection_driver, class manager_type>
+class Connection_ : public ConnectionBase_<connection_driver, manager_type> {
 public:
-  typedef _Type                                       transaction_type;
-  typedef typename transaction_type::connection_type  connection_type;
-  typedef typename connection_type::result_type       result_type;
-	
-  Transaction_(Connection_<connection_type> &_conn) : conn_(_conn),
-                                                      success_(false) {
-    Query _q(transaction_.start());
-    exec(_q);
+  typedef ConnectionBase_<connection_driver, manager_type>   super;
+  typedef typename super::driver_type                        driver_type;
+  typedef typename super::result_type                        result_type;
+  typedef typename super::transaction_type                   transaction_type;
+
+
+  /**
+   * Conectructors
+   */
+  Connection_() : super(0), trans_(0) {
   }
 
 
-	virtual ~Transaction_() {
-    if (!success_) {
-      Query _q = transaction_.rollback();
-      exec(_q);
+  Connection_(const std::string &_conn_info,
+              bool _lazy_connect = true) throw (ConnectionFailed)
+            : super(0),
+              trans_(0),
+              conn_info_(_conn_info) {
+
+    /* lazy connection open */
+    if (!_lazy_connect) {
+      open(conn_info_);
     }
   }
 
 
-	void commit() {
-    Query _q = transaction_.commit();
-    exec(_q);
-    success_ = true;
+  Connection_(connection_driver *_conn) : super(_conn), trans_(0) {
+  }
+
+
+  /**
+   * Destructor
+   *
+   * close connection on destruct
+   */
+  virtual ~Connection_() {
+    close();
+  }
+
+
+  /**
+   * Open connection with specific connection string
+   */
+  virtual void open(const std::string &_conn_info) throw (ConnectionFailed) {
+    close();
+    this->conn_info_ = _conn_info;
+    /* TODO: this should be done by manager_type! */
+    this->conn_ = new connection_driver(conn_info_);
+#ifdef HAVE_LOGGER
+    LOGGER(PACKAGE).info(boost::format("connection established; (%1%)") % conn_info_);
+#endif
+  }
+
+
+  /**
+   * Close connection
+   */
+  virtual inline void close() {
+    if (this->conn_) {
+      delete this->conn_;
+      this->conn_ = 0;
+#ifdef HAVE_LOGGER
+      LOGGER(PACKAGE).info(boost::format("connection closed; (%1%)") % conn_info_);
+#endif
+    }
+  }
+
+
+  /**
+   * Exec query statement
+   * 
+   * Need to check if connection was opened - support for lazy connection opening
+   */
+  virtual inline result_type exec(Statement &_stmt) throw (ResultFailed) {
+    return super::exec(_stmt);
+  }
+
+
+  virtual inline result_type exec(const std::string &_stmt) throw (ResultFailed) {
+    if (!this->conn_) {
+      open(conn_info_);
+    }
+    return super::exec(_stmt);
+  }
+
+
+  template<class _transaction_type, class _manager_type>
+  friend class Transaction_;
+
+
+protected:
+  /**
+   * Trasaction support methods
+   */
+  virtual inline void setTransaction(transaction_type *_trans) {
+    trans_ = _trans;
+#ifdef HAVE_LOGGER
+    LOGGER(PACKAGE).debug(boost::format("(%1%) transaction assigned to (%2%) connection") % trans_ % this->conn_);
+#endif
+  }
+
+
+  virtual inline void unsetTransaction() {
+#ifdef HAVE_LOGGER
+    LOGGER(PACKAGE).debug(boost::format("(%1%) transaction released from connection") % trans_);
+#endif
+    trans_ = 0;
+  }
+
+
+  virtual inline transaction_type* getTransaction() const {
+    return trans_;
   }
 
   
-  Result_<result_type> exec(Query &_query) {
-    return conn_.exec(_query);
-  }
+  transaction_type *trans_;  /**< pointer to active transaction */
 
 
 private:
-  Connection_<connection_type> &conn_;
-  transaction_type             transaction_;
-  bool                         success_;
+  std::string conn_info_;    /**< connection string used to open connection */
+};
+
+
+
+/**
+ * \class  TSSConnection_
+ * \brief  Specialized connection proxy class for use with TSSManager_
+ *         (static call in destructor)
+ */
+template<class connection_driver, class manager_type>
+class TSSConnection_ : public ConnectionBase_<connection_driver, manager_type> {
+public:
+  typedef ConnectionBase_<connection_driver, manager_type>   super;
+  typedef typename super::transaction_type                   transaction_type;
+
+
+  /**
+   * Constructor and destructor
+   */
+  TSSConnection_(connection_driver *_conn, transaction_type *&_trans) 
+               : super(_conn) {
+    this->trans_ = &_trans;
+  }
+
+
+  virtual ~TSSConnection_() {
+    manager_type::release();
+  }
+
+
+  template<class _transaction_type, class _manager_type>
+  friend class Transaction_;
+
+
+protected:
+  /**
+   * Trasaction support methods
+   */
+  virtual inline void setTransaction(transaction_type *_trans) {
+    *trans_ = _trans;
+#ifdef HAVE_LOGGER
+    LOGGER(PACKAGE).debug(boost::format("(%1%) transaction assigned to (%2%) connection") % trans_ % this->conn_);
+#endif
+  }
+
+
+  virtual inline void unsetTransaction() {
+#ifdef HAVE_LOGGER
+    LOGGER(PACKAGE).debug(boost::format("(%1%) transaction released from connection") % trans_);
+#endif
+    *trans_ = 0;
+  }
+
+
+  virtual inline transaction_type* getTransaction() const {
+    return *trans_;
+  }
+
+
+  transaction_type **trans_;  /**< pointer to active transaction */
 };
 
 
 }
 
-#endif /*CONNECTION_HPP_*/
+
+#endif /*CONNECTION_H_*/
 

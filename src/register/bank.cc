@@ -20,6 +20,10 @@
 #include "old_utils/dbsql.h"
 #include <boost/date_time/posix_time/time_parsers.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
+#include "types/convert_sql_db_types.h"
+#include "types/sqlize.h"
+#include "types/stringify.h"
+
 
 #define MAKE_TIME_DEF(ROW,COL,DEF)  \
   (boost::posix_time::ptime(db->IsNotNull(ROW,COL) ? \

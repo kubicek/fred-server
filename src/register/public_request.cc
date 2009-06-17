@@ -5,7 +5,10 @@
 #include "public_request.h"
 #include "log/logger.h"
 #include "util.h"
-#include "db/manager.h"
+#include "db_settings.h"
+#include "types/convert_sql_db_types.h"
+#include "types/sqlize.h"
+
 
 namespace Register {
 namespace PublicRequest {
@@ -270,7 +273,7 @@ public:
                                  << "currval('public_request_id_seq')" << ", "
                                  << it->id << ")";
           transaction.exec(insert_object);
-          objects_str += it->id.to_string() + (it == objects_.end() - 1 ? "" : " ");
+          objects_str += sqlize(it->id) + (it == objects_.end() - 1 ? "" : " ");
         }
         
         Database::Sequence pp_seq(*_conn, "public_request_id_seq");
@@ -386,7 +389,6 @@ public:
 
   /// default destination emails for answer are from objects 
   virtual std::string getEmails() const {    
-    Database::Filters::Union uf;
     Database::SelectQuery sql;
     std::string emails;
 
@@ -1044,10 +1046,10 @@ public:
   }
   
   List *loadRequest(Database::ID id) const throw (NOT_FOUND) {
-    Database::Filters::PublicRequestImpl prf;
-    prf.addId().setValue(id);
+    Database::Filters::PublicRequest *prf = new Database::Filters::PublicRequestImpl();
+    prf->addId().setValue(id);
     Database::Filters::Union uf;
-    uf.addFilter(&prf);
+    uf.addFilter(prf);
     List *l = createList();
     l->reload(uf);
     if (l->getCount() != 1) throw NOT_FOUND();

@@ -26,7 +26,6 @@
 #define SEQUENCE_H_
 
 #include <string>
-#include "query.h"
 #include "types/id.h"
 
 namespace Database {
@@ -35,16 +34,21 @@ namespace Database {
  * \class Sequence
  * \brief Implementation of database sequence manipulation
  */
-class Sequence {
+template<class connection_type, class manager_type>
+class Sequence_ {
 public:
+  typedef typename manager_type::result_type   result_type;
+
+
   /**
    * Constructor
    *
    * @param _conn  connection on which sequence will be managed
    * @param _name  database sequence name
    */
-  Sequence(Connection &_conn, const std::string _name) : conn_(_conn),
-                                                         name_(_name) {
+  Sequence_(connection_type &_conn,
+            const std::string _name) : conn_(_conn),
+                                       name_(_name) {
   }
 
   
@@ -52,9 +56,7 @@ public:
    * @return current sequence value
    */
   ID getCurrent() {
-    Query q;
-    q.buffer() << "SELECT currval('" << name_ << "')";
-    return execute_(q);
+    return execute_("SELECT currval('" + name_ + "')");
   }
   
 
@@ -62,19 +64,19 @@ public:
    * @return next sequence value
    */
   ID getNext() {
-    Query q;
-    q.buffer() << "SELECT nextval('" << name_ << "')";
-    return execute_(q);
-  }
-  
-private:
-  ID execute_(Query& _query) {
-    Result result = conn_.exec(_query);
-    return (*(result.begin()))[0];
+    return execute_("SELECT nextval('" + name_ + "')");
   }
 
-  Connection &conn_; /**< connection */
-  std::string name_; /**< sequence name */
+
+private:
+  ID execute_(const std::string& _query) {
+    result_type result = conn_.exec(_query);
+    return result[0][0];
+  }
+
+
+  connection_type &conn_; /**< connection */
+  std::string      name_; /**< sequence name */
 };
 
 }

@@ -626,9 +626,11 @@ const char * DB::GetDomainExDate(
 const char * DB::GetDomainValExDate(
   int id)
 {
-  convert_rfc3339_date(dtStr, GetValueFromTable("enumval", "ExDate",
-      "domainid", id) );
-  return dtStr;
+  // now it is just a date - no conversion needed
+  return GetValueFromTable("enumval", "ExDate", "domainid", id);
+  // convert_rfc3339_date(dtStr, GetValueFromTable("enumval", "ExDate",
+  // "domainid", id) );
+  // return dtStr;
 }
 
 char * DB::GetFieldDateTimeValueName(
@@ -1423,16 +1425,18 @@ double DB::GetSystemKOEF() // return VAT count parametr for count price without 
 int DB::GetBankAccount(
   const char *accountStr, const char *codeStr)
 {
-  char sqlString[128];
+  std::stringstream sqlString;
   int accountID=0;
 
   LOG( LOG_DEBUG ,"GetBankAccount account %s , code %s" , accountStr ,codeStr );
-  sprintf(
-      sqlString,
-      "SELECT id FROM bank_account WHERE account_number=\'%s\' AND bank_code=\'%s\';",
-      accountStr, codeStr);
-
-  if (ExecSelect(sqlString) ) {
+  sqlString
+      << "SELECT id FROM bank_account WHERE trim(leading '0' from account_number)="
+      << "trim(leading '0' from '"
+      << accountStr
+      << "') AND bank_code='"
+      << codeStr
+      << "';";
+  if (ExecSelect(sqlString.str().c_str()) ) {
     if (GetSelectRows() == 1) {
       accountID=atoi(GetFieldValue( 0, 0) );
       LOG( LOG_DEBUG ,"get accountId %d" , accountID );
@@ -1885,7 +1889,7 @@ int DB::MakeFactoring(
         for (i = 0; i < num; i ++) {
           credit = GetInvoiceSumaPrice(invoiceID, aID[i]);
           balance = GetInvoiceBalance(aID[i], credit); // actual available balance
-          if (credit>= 0 && balance >=0) {
+          if (balance >=0) {
             LOG( LOG_DEBUG ,"zalohova FA  %d credit %ld balance %ld" , aID[i] , credit , balance );
             INSERT("invoice_credit_payment_map");
             INTO("invoiceid");
@@ -2535,6 +2539,10 @@ void DB::SQLCat(
   //  test for length buffer
   if (len + length < MAX_SQLBUFFER)
     strcat(sqlBuffer, str);
+  else
+    // if sql buffer would be valid sql query at this place
+    // and something fail to append it could have very bad consequences
+    throw;
 }
 
 void DB::SQLCatLower(

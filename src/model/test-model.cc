@@ -11,15 +11,27 @@
 #include "settings.h"
 #include "keyset_filter.h"
 #include "model_filters.h"
-#include "db/manager.h"
+#include "db/database.h"
 #include "log/logger.h"
+
+namespace Database {
+  typedef Factory::Simple<PSQLConnection> ConnectionFactory;
+  typedef Manager_<ConnectionFactory>     Manager;
+
+  typedef Manager::connection_type        Connection;
+  typedef Manager::transaction_type       Transaction;
+  typedef Manager::result_type            Result;
+  typedef Manager::sequence_type          Sequence;
+  typedef Manager::row_type               Row;
+}
+
 
 using namespace Database;
 using namespace Database::Filters;
 
 Connection* init_connection() {
   std::string conninfo = "host=localhost dbname=fred user=fred";
-  Manager db_manager(conninfo);
+  Manager db_manager(new ConnectionFactory(conninfo));
   Connection *conn = db_manager.getConnection();
   return conn;
 }

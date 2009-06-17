@@ -27,7 +27,6 @@
 
 #include <vector>
 #include <sstream>
-#include "base_exception.h"
 
 namespace Database {
 
@@ -76,7 +75,7 @@ public:
 
 
     field_type operator*() const {
-      return field_type(data_ptr_->value_(row_, col_));
+      return field_type(data_ptr_->value_(row_, col_), data_ptr_->value_is_null_(row_, col_));
     }
 
 
@@ -147,7 +146,7 @@ public:
    * @return    field value at position _n
    */
   field_type operator[](int _n) const {
-    return field_type(result_ptr_->value_(row_, _n));
+    return field_type(result_ptr_->value_(row_, _n), result_ptr_->value_is_null_(row_, _n));
   }
 
 
@@ -156,7 +155,7 @@ public:
    * @return     field value at position _cn
    */
   field_type operator[](const std::string& _cn) const {
-    return field_type(result_ptr_->value_(row_, _cn));
+    return field_type(result_ptr_->value_(row_, _cn), result_ptr_->value_is_null_(row_, _cn));
   }
 
 
@@ -165,7 +164,7 @@ public:
    * @return    field value at position _n
    */
   field_type at(int _n) const {
-    return field_type(result_ptr_->value_(row_, _n));
+    return field_type(result_ptr_->value_(row_, _n), result_ptr_->value_is_null_(row_, _n));
   }
 
 
@@ -174,7 +173,7 @@ public:
    * @return     field value at position _cn
    */
   field_type at(const std::string& _cn) const {
-    return field_type(result_ptr_->value_(row_, _cn));
+    return field_type(result_ptr_->value_(row_, _cn), result_ptr_->value_is_null_(row_, _cn));
   }
 
 

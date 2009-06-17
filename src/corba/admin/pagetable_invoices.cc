@@ -12,7 +12,6 @@ ccReg::Filters::Compound_ptr ccReg_Invoices_i::add() {
   Logging::Context ctx(base_context_);
 
   TRACE("[CALL] ccReg_Invoices_i::add()");
-  it.clearF();
   Database::Filters::Invoice *filter = new Database::Filters::InvoiceImpl();
   uf.addFilter(filter);
   return it.addE(filter);
@@ -48,19 +47,20 @@ Registry::TableRow* ccReg_Invoices_i::getRow(CORBA::Short row)
   tr->length(9);
   Register::Invoicing::Type invoice_type = inv->getType();
   std::string credit = (invoice_type == Register::Invoicing::IT_DEPOSIT ? formatMoney(inv->getCredit()) : "");
-  
-  MAKE_OID(oid_registrar, inv->getClient()->getId(), DUPSTRFUN(inv->getClient()->getHandle), FT_REGISTRAR)
+  std::string itype  = (invoice_type == Register::Invoicing::IT_DEPOSIT ? "DEPOSIT" : "ACCOUNT");
+
+  MAKE_OID(oid_registrar, inv->getClient()->getId(), C_STR(inv->getClient()->getHandle()), FT_REGISTRAR)
   MAKE_OID(oid_pdf, inv->getFilePDF(), "", FT_FILE)
   MAKE_OID(oid_xml, inv->getFileXML(), "", FT_FILE)
 
 
-  (*tr)[0] <<= DUPSTRDATE(inv->getCrTime);
-  (*tr)[1] <<= DUPSTRC(Conversion<long long unsigned>::to_string(inv->getNumber()));
-  (*tr)[2] <<= oid_registrar; 
-  (*tr)[3] <<= DUPSTRC(formatMoney(inv->getPrice()));
-  (*tr)[4] <<= DUPSTRC(credit);
-  (*tr)[5] <<= DUPSTR(invoice_type == Register::Invoicing::IT_DEPOSIT ? "DEPOSIT" : "ACCOUNT");
-  (*tr)[6] <<= DUPSTRC(inv->getZoneName());
+  (*tr)[0] <<= C_STR(inv->getCrTime());
+  (*tr)[1] <<= C_STR(inv->getNumber());
+  (*tr)[2] <<= oid_registrar;
+  (*tr)[3] <<= formatMoney(inv->getPrice()).c_str();
+  (*tr)[4] <<= C_STR(credit);
+  (*tr)[5] <<= C_STR(itype);
+  (*tr)[6] <<= C_STR(inv->getZoneName());
   (*tr)[7] <<= oid_pdf;
   (*tr)[8] <<= oid_xml;
   return tr;
@@ -84,7 +84,7 @@ void ccReg_Invoices_i::sortByColumn(CORBA::Short _column, CORBA::Boolean _dir) {
       invoice_list_->sort(Register::Invoicing::MT_REGISTRAR, _dir);
       break;
     case 3:
-      invoice_list_->sort(Register::Invoicing::MT_TOTAL, _dir);
+      invoice_list_->sort(Register::Invoicing::MT_PRICE, _dir);
       break;
     case 4:
       invoice_list_->sort(Register::Invoicing::MT_CREDIT, _dir);

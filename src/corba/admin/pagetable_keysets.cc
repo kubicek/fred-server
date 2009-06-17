@@ -16,7 +16,6 @@ ccReg_KeySets_i::add()
   Logging::Context ctx(base_context_);
 
     TRACE("[CALL] ccReg_KeySets_i::add()");
-    it.clearF();
     Database::Filters::KeySet *f = new Database::Filters::KeySetHistoryImpl();
     uf.addFilter(f);
     return it.addE(f);
@@ -49,12 +48,12 @@ ccReg_KeySets_i::getRow(CORBA::Short row)
     Registry::TableRow *tr = new Registry::TableRow;
     tr->length(4);
 
-    MAKE_OID(oid_handle, k->getId(), DUPSTRFUN(k->getHandle), FT_KEYSET)
-    MAKE_OID(oid_registrar, k->getRegistrarId(), DUPSTRFUN(k->getRegistrarHandle), FT_REGISTRAR)
+    MAKE_OID(oid_handle, k->getId(), C_STR(k->getHandle()), FT_KEYSET)
+    MAKE_OID(oid_registrar, k->getRegistrarId(), C_STR(k->getRegistrarHandle()), FT_REGISTRAR)
 
     (*tr)[0] <<= oid_handle;
-    (*tr)[1] <<= DUPSTRDATE(k->getCreateDate);
-    (*tr)[2] <<= DUPSTRDATE(k->getDeleteDate);
+    (*tr)[1] <<= C_STR(k->getCreateDate());
+    (*tr)[2] <<= C_STR(k->getDeleteDate());
     (*tr)[3] <<= oid_registrar;
     return tr;
 }

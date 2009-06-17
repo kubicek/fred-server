@@ -22,8 +22,7 @@
 
 namespace Admin {
 
-InvoiceClient::InvoiceClient():
-    m_connstring(""), m_nsAddr("")
+InvoiceClient::InvoiceClient()
 {
     m_options = new boost::program_options::options_description(
             "Invoice related options");
@@ -32,7 +31,8 @@ InvoiceClient::InvoiceClient():
         addOpt(INVOICE_LIST_NAME)
         addOpt(INVOICE_LIST_FILTERS_NAME)
         addOpt(INVOICE_ARCHIVE_NAME)
-        addOpt(INVOICE_LIST_HELP_NAME);
+        addOpt(INVOICE_LIST_HELP_NAME)
+        addOpt(INVOICE_ADD_PREFIX_NAME);
 
     m_optionsInvis = new boost::program_options::options_description(
             "Invoice related sub options");
@@ -50,14 +50,16 @@ InvoiceClient::InvoiceClient():
         addOptStr(INVOICE_OBJECT_NAME_NAME)
         addOptStr(INVOICE_ADV_NUMBER_NAME)
         addOptUInt(INVOICE_FILE_ID_NAME)
-        addOptStr(INVOICE_FILE_NAME_NAME);
+        addOptStr(INVOICE_FILE_NAME_NAME)
+        addOptUInt(INVOICE_PREFIX_ZONE_NAME)
+        addOptUInt(INVOICE_PREFIX_TYPE_NAME)
+        addOptUInt(INVOICE_PREFIX_YEAR_NAME)
+        addOptType(INVOICE_PREFIX_PREFIX_NAME, unsigned long long);
 }
 InvoiceClient::InvoiceClient(
         std::string connstring,
-        std::string nsAddr):
-    m_connstring(connstring), m_nsAddr(nsAddr)
+        std::string nsAddr) : BaseClient(connstring, nsAddr)
 {
-    m_dbman = new Database::Manager(m_connstring);
     m_db.OpenDatabase(connstring.c_str());
     m_options = NULL;
     m_optionsInvis = NULL;
@@ -65,7 +67,6 @@ InvoiceClient::InvoiceClient(
 
 InvoiceClient::~InvoiceClient()
 {
-    delete m_dbman;
     delete m_options;
     delete m_optionsInvis;
 }
@@ -76,9 +77,7 @@ InvoiceClient::init(
         std::string nsAddr,
         Config::Conf &conf)
 {
-    m_connstring = connstring;
-    m_nsAddr = nsAddr;
-    m_dbman = new Database::Manager(m_connstring);
+    BaseClient::init(connstring, nsAddr);
     m_db.OpenDatabase(connstring.c_str());
     m_conf = conf;
 }
@@ -418,6 +417,41 @@ InvoiceClient::archive()
 }
 
 void
+InvoiceClient::add_invoice_prefix()
+{
+    std::auto_ptr<Register::Document::Manager> docMan(
+            Register::Document::Manager::create(
+                m_conf.get<std::string>(REG_DOCGEN_PATH_NAME),
+                m_conf.get<std::string>(REG_DOCGEN_TEMPLATE_PATH_NAME),
+                m_conf.get<std::string>(REG_FILECLIENT_PATH_NAME),
+                m_nsAddr)
+            );
+    CorbaClient cc(0, NULL, m_nsAddr, m_conf.get<std::string>(NS_CONTEXT_NAME));
+    MailerManager mailMan(cc.getNS());
+    std::auto_ptr<Register::Invoicing::Manager> invMan(
+            Register::Invoicing::Manager::create(
+                &m_db,
+                docMan.get(),
+                &mailMan)
+            );
+    unsigned int zoneId = m_conf.get<unsigned int>(INVOICE_PREFIX_ZONE_NAME);
+    unsigned int type = m_conf.get<unsigned int>(INVOICE_PREFIX_TYPE_NAME);
+    if (type > 1) {
+        std::cerr << "Type can be either 0 or 1." << std::endl;
+        return;
+    }
+    unsigned int year;
+    if (m_conf.hasOpt(INVOICE_PREFIX_YEAR_NAME)) {
+        year = m_conf.get<unsigned int>(INVOICE_PREFIX_YEAR_NAME);
+    } else {
+        Database::Date now(Database::NOW);
+        year = now.get().year();
+    }
+    unsigned long long prefix = m_conf.get<unsigned long long>(INVOICE_PREFIX_PREFIX_NAME);
+    invMan->insertInvoicePrefix(zoneId, type, year, prefix);
+}
+
+void
 InvoiceClient::list_help()
 {
     std::cout <<
@@ -449,6 +483,22 @@ InvoiceClient::archive_help()
         "** Invoice archive **\n\n"
         "  $ " << g_prog_name << " --" << INVOICE_ARCHIVE_NAME << " \\\n"
         "    --" << INVOICE_DONT_SEND_NAME << " \n"
+        << std::endl;
+}
+
+void
+InvoiceClient::add_invoice_prefix_help()
+{
+    std::cout <<
+        "** Invoice add prefix **\n\n"
+        "  $ " << g_prog_name << " --" << INVOICE_ADD_PREFIX_NAME << " \\\n"
+        "    --" << INVOICE_PREFIX_ZONE_NAME << "=<zone_id> \\\n"
+        "    --" << INVOICE_PREFIX_TYPE_NAME << "=<type> \\\n"
+        "    [--" << INVOICE_PREFIX_YEAR_NAME << "=<year>] \\\n"
+        "    --" << INVOICE_PREFIX_PREFIX_NAME << "=<prefix_number>\n"
+        << std::endl <<
+        "Type is either 0 (for the deposit invoice) or 1 (for account invoice).\n"
+        "Default value for the year is the current year.\n"
         << std::endl;
 }
 

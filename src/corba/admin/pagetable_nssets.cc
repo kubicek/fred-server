@@ -12,7 +12,6 @@ ccReg::Filters::Compound_ptr ccReg_NSSets_i::add() {
   Logging::Context ctx(base_context_);
 
   TRACE("[CALL] ccReg_NSSets_i::add()");
-  it.clearF();
   Database::Filters::NSSet *f = new Database::Filters::NSSetHistoryImpl();
   uf.addFilter(f);
   return it.addE(f); 
@@ -43,12 +42,12 @@ ccReg_NSSets_i::getRow(CORBA::Short row)
   Registry::TableRow *tr = new Registry::TableRow;
   tr->length(4);
 
-  MAKE_OID(oid_handle, n->getId(), DUPSTRFUN(n->getHandle), FT_NSSET)
-  MAKE_OID(oid_registrar, n->getRegistrarId(), DUPSTRFUN(n->getRegistrarHandle), FT_REGISTRAR)
+  MAKE_OID(oid_handle, n->getId(), C_STR(n->getHandle()), FT_NSSET)
+  MAKE_OID(oid_registrar, n->getRegistrarId(), C_STR(n->getRegistrarHandle()), FT_REGISTRAR)
 
   (*tr)[0] <<= oid_handle;
-  (*tr)[1] <<= DUPSTRDATE(n->getCreateDate);
-  (*tr)[2] <<= DUPSTRDATE(n->getDeleteDate);
+  (*tr)[1] <<= C_STR(n->getCreateDate());
+  (*tr)[2] <<= C_STR(n->getDeleteDate());
   (*tr)[3] <<= oid_registrar; 
   return tr;
 }

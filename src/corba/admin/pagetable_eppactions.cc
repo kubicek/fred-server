@@ -12,7 +12,6 @@ ccReg::Filters::Compound_ptr ccReg_EPPActions_i::add() {
   Logging::Context ctx(base_context_);
 
   TRACE("[CALL] ccReg_EPPActions_i::add()");
-  it.clearF();
   Database::Filters::EppAction *f = new Database::Filters::EppActionImpl();
   uf.addFilter(f);
   return it.addE(f);
@@ -42,15 +41,15 @@ Registry::TableRow* ccReg_EPPActions_i::getRow(CORBA::Short row)
     Registry::TableRow *tr = new Registry::TableRow;
     tr->length(7);
 
-    MAKE_OID(oid_registrar, a->getRegistrarId(), DUPSTRFUN(a->getRegistrarHandle), FT_REGISTRAR)
+    MAKE_OID(oid_registrar, a->getRegistrarId(), C_STR(a->getRegistrarHandle()), FT_REGISTRAR)
 
-    (*tr)[0] <<= DUPSTRFUN(a->getServerTransactionId);
-    (*tr)[1] <<= DUPSTRFUN(a->getClientTransactionId);
-    (*tr)[2] <<= DUPSTRFUN(a->getTypeName);
-    (*tr)[3] <<= DUPSTRFUN(a->getHandle);
+    (*tr)[0] <<= C_STR(a->getServerTransactionId());
+    (*tr)[1] <<= C_STR(a->getClientTransactionId());
+    (*tr)[2] <<= C_STR(a->getTypeName());
+    (*tr)[3] <<= C_STR(a->getHandle());
     (*tr)[4] <<= oid_registrar;
-    (*tr)[5] <<= DUPSTRDATE(a->getStartTime);
-    (*tr)[6] <<= DUPSTRFUN(a->getResultStatus);
+    (*tr)[5] <<= C_STR(a->getStartTime());
+    (*tr)[6] <<= C_STR(a->getResultStatus());
     return tr;
   }
   catch (...) {

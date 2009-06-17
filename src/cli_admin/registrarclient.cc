@@ -20,19 +20,30 @@
 #include "commonclient.h"
 #include "registrarclient.h"
 
+#include <string>
+#include <vector>
+
 namespace Admin {
 
-RegistrarClient::RegistrarClient():
-    m_connstring(""), m_nsAddr("")
+RegistrarClient::RegistrarClient()
 {
     m_options = new boost::program_options::options_description(
             "Registrar related options");
     m_options->add_options()
         addOpt(REGISTRAR_LIST_NAME)
         addOpt(REGISTRAR_ZONE_ADD_NAME)
+        addOpt(REGISTRAR_ZONE_NS_ADD_NAME)
         addOpt(REGISTRAR_REGISTRAR_ADD_NAME)
+        addOpt(REGISTRAR_REGISTRAR_ACL_ADD_NAME)
         addOpt(REGISTRAR_REGISTRAR_ADD_ZONE_NAME)
-        addOpt(REGISTRAR_SHOW_OPTS_NAME);
+        addOpt(REGISTRAR_PRICE_ADD_NAME)
+        addOpt(REGISTRAR_SHOW_OPTS_NAME)
+        addOpt(REGISTRAR_ZONE_ADD_HELP_NAME)
+        addOpt(REGISTRAR_REGISTRAR_ADD_HELP_NAME)
+        addOpt(REGISTRAR_REGISTRAR_ADD_ZONE_HELP_NAME)
+        addOpt(REGISTRAR_ZONE_NS_ADD_HELP_NAME)
+        addOpt(REGISTRAR_REGISTRAR_ACL_ADD_HELP_NAME)
+        addOpt(REGISTRAR_PRICE_ADD_HELP_NAME);
 
     m_optionsInvis = new boost::program_options::options_description(
             "Registrar related sub options");
@@ -44,15 +55,51 @@ RegistrarClient::RegistrarClient():
         add_EMAIL()
         add_COUNTRY()
         addOptStr(REGISTRAR_ZONE_FQDN_NAME)
-        addOptStr(REGISTRAR_HANDLE_NAME);
+        addOptStr(REGISTRAR_HANDLE_NAME)
+        addOptInt(REGISTRAR_EX_PERIOD_MIN_NAME)
+        addOptInt(REGISTRAR_EX_PERIOD_MAX_NAME)
+        addOptInt(REGISTRAR_TTL_NAME)
+        addOptStr(REGISTRAR_HOSTMASTER_NAME)
+        addOptInt(REGISTRAR_UPDATE_RETR_NAME)
+        addOptInt(REGISTRAR_REFRESH_NAME)
+        addOptInt(REGISTRAR_EXPIRY_NAME)
+        addOptInt(REGISTRAR_MINIMUM_NAME)
+        addOptStr(REGISTRAR_NS_FQDN_NAME)
+        addOptStr(REGISTRAR_ADDR_NAME)
+        addOptStr(REGISTRAR_ADD_HANDLE_NAME)
+        addOptStr(REGISTRAR_ICO_NAME)
+        addOptStr(REGISTRAR_DIC_NAME)
+        addOptStr(REGISTRAR_VAR_SYMB_NAME)
+        addOptStr(REGISTRAR_ADD_NAME_NAME)
+        addOptStr(REGISTRAR_ORGANIZATION_NAME)
+        addOptStr(REGISTRAR_STREET1_NAME)
+        addOptStr(REGISTRAR_STREET2_NAME)
+        addOptStr(REGISTRAR_STREET3_NAME)
+        addOptStr(REGISTRAR_CITY_NAME)
+        addOptStr(REGISTRAR_STATEORPROVINCE_NAME)
+        addOptStr(REGISTRAR_POSTALCODE_NAME)
+        addOptStr(REGISTRAR_TELEPHONE_NAME)
+        addOptStr(REGISTRAR_FAX_NAME)
+        addOptStr(REGISTRAR_EMAIL_NAME)
+        addOptStr(REGISTRAR_URL_NAME)
+        addOpt(REGISTRAR_SYSTEM_NAME)
+        addOpt(REGISTRAR_NO_VAT_NAME)
+        addOptStr(REGISTRAR_CERT_NAME)
+        addOptStr(REGISTRAR_PASSWORD_NAME)
+        addOptStr(REGISTRAR_FROM_DATE_NAME)
+        addOptStr(REGISTRAR_TO_DATE_NAME)
+        addOpt(REGISTRAR_CREATE_OPERATION_NAME)
+        addOpt(REGISTRAR_RENEW_OPERATION_NAME)
+        addOptStr(REGISTRAR_VALID_FROM_NAME)
+        addOptStr(REGISTRAR_VALID_TO_NAME)
+        addOptInt(REGISTRAR_PRICE_NAME)
+        addOptInt(REGISTRAR_PERIOD_NAME);
 }
 
 RegistrarClient::RegistrarClient(
         std::string connstring,
-        std::string nsAddr):
-    m_connstring(connstring), m_nsAddr(nsAddr)
+        std::string nsAddr) : BaseClient(connstring, nsAddr)
 {
-    m_dbman = new Database::Manager(m_connstring);
     m_db.OpenDatabase(connstring.c_str());
     m_options = NULL;
     m_optionsInvis = NULL;
@@ -60,7 +107,6 @@ RegistrarClient::RegistrarClient(
 
 RegistrarClient::~RegistrarClient()
 {
-    delete m_dbman;
     delete m_options;
     delete m_optionsInvis;
 }
@@ -71,9 +117,7 @@ RegistrarClient::init(
         std::string nsAddr,
         Config::Conf &conf)
 {
-    m_connstring = connstring;
-    m_nsAddr = nsAddr;
-    m_dbman = new Database::Manager(m_connstring);
+    BaseClient::init(connstring, nsAddr);
     m_db.OpenDatabase(connstring.c_str());
     m_conf = conf;
 }
@@ -105,7 +149,7 @@ RegistrarClient::list()
             Register::Registrar::Manager::create(&m_db));
 
     Database::Filters::Registrar *regFilter;
-    regFilter = new Database::Filters::RegistrarImpl();
+    regFilter = new Database::Filters::RegistrarImpl(true);
 
     if (m_conf.hasOpt(ID_NAME))
         regFilter->addId().setValue(
@@ -178,25 +222,121 @@ RegistrarClient::list()
     delete unionFilter;
 }
 
+#define SET_IF_PRESENT(var, type, name)                     \
+    if (m_conf.hasOpt(name)) {                              \
+        var = m_conf.get<type>(name);                       \
+    }
 int
 RegistrarClient::zone_add()
 {
     std::auto_ptr<Register::Zone::Manager> zoneMan(
             Register::Zone::Manager::create(&m_db));
     std::string fqdn = m_conf.get<std::string>(REGISTRAR_ZONE_FQDN_NAME);
+    int exPeriodMin = 12;
+    int exPeriodMax = 120;
+    int ttl = 18000;
+    std::string hostmaster = "hostmaster@localhost";
+    int updateRetr = 3600;
+    int refresh = 16000;
+    int expiry = 1209600;
+    int minimum = 7200;
+    std::string nsFqdn("localhost");
+
+    SET_IF_PRESENT(exPeriodMin, int, REGISTRAR_EX_PERIOD_MIN_NAME);
+    SET_IF_PRESENT(exPeriodMax, int, REGISTRAR_EX_PERIOD_MAX_NAME);
+    SET_IF_PRESENT(ttl, int, REGISTRAR_TTL_NAME);
+    SET_IF_PRESENT(hostmaster, std::string, REGISTRAR_HOSTMASTER_NAME);
+    SET_IF_PRESENT(updateRetr, int, REGISTRAR_UPDATE_RETR_NAME);
+    SET_IF_PRESENT(refresh, int, REGISTRAR_REFRESH_NAME);
+    SET_IF_PRESENT(expiry, int, REGISTRAR_EXPIRY_NAME);
+    SET_IF_PRESENT(minimum, int, REGISTRAR_MINIMUM_NAME);
+    SET_IF_PRESENT(nsFqdn, std::string, REGISTRAR_NS_FQDN_NAME);
     try {
-        zoneMan->addZone(fqdn);
+        zoneMan->addZone(fqdn, exPeriodMin, exPeriodMax, ttl, hostmaster,
+                refresh, updateRetr, expiry, minimum, nsFqdn);
     } catch (Register::ALREADY_EXISTS) {
-        std::cerr << "Zone '" << fqdn << "' already exists in configuratin" << std::endl;
+        std::cerr << "Zone '" << fqdn << "' already exists" << std::endl;
     }
     return 0;
 }
+int
+RegistrarClient::zone_ns_add()
+{
+    std::auto_ptr<Register::Zone::Manager> zoneMan(
+            Register::Zone::Manager::create(&m_db));
+    std::string zone = m_conf.get<std::string>(REGISTRAR_ZONE_FQDN_NAME);
+    std::string fqdn = m_conf.get<std::string>(REGISTRAR_NS_FQDN_NAME);
+    std::string addr;
+    if (m_conf.hasOpt(REGISTRAR_ADDR_NAME)) {
+        addr = m_conf.get<std::string>(REGISTRAR_ADDR_NAME);
+    } else {
+        addr = "";
+    }
+    try {
+        zoneMan->addZoneNs(zone, fqdn, addr);
+    } catch (...) {
+        std::cerr << "An error has occured" << std::endl;
+        return 1;
+    }
+    return 0;
+}
+#undef SET_IF_PRESENT
+#define SET_IF_PRESENT(setter, name)                        \
+    if (m_conf.hasOpt(name)) {                              \
+        registrar->setter(m_conf.get<std::string>(name));   \
+    }
 int
 RegistrarClient::registrar_add()
 {
     std::auto_ptr<Register::Registrar::Manager> regMan(
             Register::Registrar::Manager::create(&m_db));
-    regMan->addRegistrar(m_conf.get<std::string>(REGISTRAR_HANDLE_NAME));
+    std::auto_ptr<Register::Registrar::Registrar> registrar(
+            regMan->createRegistrar());
+    registrar->setHandle(m_conf.get<std::string>(REGISTRAR_ADD_HANDLE_NAME));
+    registrar->setCountry(m_conf.get<std::string>(REGISTRAR_COUNTRY_NAME));
+    SET_IF_PRESENT(setIco, REGISTRAR_ICO_NAME);
+    SET_IF_PRESENT(setDic, REGISTRAR_DIC_NAME);
+    SET_IF_PRESENT(setVarSymb, REGISTRAR_VAR_SYMB_NAME);
+    SET_IF_PRESENT(setName, REGISTRAR_ADD_NAME_NAME);
+    SET_IF_PRESENT(setOrganization, REGISTRAR_ORGANIZATION_NAME);
+    SET_IF_PRESENT(setStreet1, REGISTRAR_STREET1_NAME);
+    SET_IF_PRESENT(setStreet2, REGISTRAR_STREET2_NAME);
+    SET_IF_PRESENT(setStreet3, REGISTRAR_STREET3_NAME);
+    SET_IF_PRESENT(setCity, REGISTRAR_CITY_NAME);
+    SET_IF_PRESENT(setProvince, REGISTRAR_STATEORPROVINCE_NAME);
+    SET_IF_PRESENT(setPostalCode, REGISTRAR_POSTALCODE_NAME);
+    SET_IF_PRESENT(setTelephone, REGISTRAR_TELEPHONE_NAME);
+    SET_IF_PRESENT(setFax, REGISTRAR_FAX_NAME);
+    SET_IF_PRESENT(setEmail, REGISTRAR_EMAIL_NAME);
+    SET_IF_PRESENT(setURL, REGISTRAR_URL_NAME);
+    if (m_conf.hasOpt(REGISTRAR_SYSTEM_NAME)) {
+        registrar->setSystem(true);
+    } else {
+        registrar->setSystem(false);
+    }
+    if (m_conf.hasOpt(REGISTRAR_NO_VAT_NAME)) {
+        registrar->setVat(false);
+    } else {
+        registrar->setVat(true);
+    }
+    registrar->save();
+    return 0;
+}
+#undef SET_IF_PRESENT
+int
+RegistrarClient::registrar_acl_add()
+{
+    std::auto_ptr<Register::Registrar::Manager> regMan(
+            Register::Registrar::Manager::create(&m_db));
+    std::string handle = m_conf.get<std::string>(REGISTRAR_ADD_HANDLE_NAME);
+    std::string cert = m_conf.get<std::string>(REGISTRAR_CERT_NAME);
+    std::string pass = m_conf.get<std::string>(REGISTRAR_PASSWORD_NAME);
+    try {
+        regMan->addRegistrarAcl(handle, cert, pass);
+    } catch (...) {
+        std::cerr << "An error has occured" << std::endl;
+        return 1;
+    }
     return 0;
 }
 int
@@ -205,8 +345,46 @@ RegistrarClient::registrar_add_zone()
     std::auto_ptr<Register::Registrar::Manager> regMan(
             Register::Registrar::Manager::create(&m_db));
     std::string zone = m_conf.get<std::string>(REGISTRAR_ZONE_FQDN_NAME);
-    std::string registrar = m_conf.get<std::string>(REGISTRAR_HANDLE_NAME);
-    regMan->addRegistrarZone(registrar, zone);
+    std::string registrar = m_conf.get<std::string>(REGISTRAR_ADD_HANDLE_NAME);
+    Database::Date fromDate;
+    Database::Date toDate;
+    if (m_conf.hasOpt(REGISTRAR_FROM_DATE_NAME)) {
+        fromDate.from_string(m_conf.get<std::string>(REGISTRAR_FROM_DATE_NAME));
+    }
+    if (m_conf.hasOpt(REGISTRAR_TO_DATE_NAME)) {
+        toDate.from_string(m_conf.get<std::string>(REGISTRAR_TO_DATE_NAME));
+    }
+    regMan->addRegistrarZone(registrar, zone, fromDate, toDate);
+    return 0;
+}
+
+int
+RegistrarClient::price_add()
+{
+    std::auto_ptr<Register::Zone::Manager> zoneMan(
+            Register::Zone::Manager::create(&m_db));
+    std::string zone = m_conf.get<std::string>(REGISTRAR_ZONE_FQDN_NAME);
+    Database::DateTime validFrom(Database::NOW);
+    if (m_conf.hasOpt(REGISTRAR_VALID_FROM_NAME)) {
+        validFrom.from_string(m_conf.get<std::string>(REGISTRAR_VALID_FROM_NAME));
+    }
+    Database::DateTime validTo;
+    if (m_conf.hasOpt(REGISTRAR_VALID_TO_NAME)) {
+        validTo.from_string(m_conf.get<std::string>(REGISTRAR_VALID_TO_NAME));
+    }
+    Database::Money price(m_conf.get<int>(REGISTRAR_PRICE_NAME) );
+    int period = 12;
+    if (m_conf.hasOpt(REGISTRAR_PERIOD_NAME)) {
+        period = m_conf.get<int>(REGISTRAR_PERIOD_NAME);
+    }
+    if (m_conf.hasOpt(REGISTRAR_CREATE_OPERATION_NAME)) {
+        zoneMan->addPrice(zone, Register::Zone::CREATE, validFrom,
+                validTo, price, period);
+    }
+    if (m_conf.hasOpt(REGISTRAR_RENEW_OPERATION_NAME)) {
+        zoneMan->addPrice(zone, Register::Zone::RENEW, validFrom,
+                validTo, price, period);
+    }
     return 0;
 }
 
@@ -215,8 +393,29 @@ RegistrarClient::zone_add_help()
 {
     std::cout <<
         "** Add new zone **\n\n"
-        "  $ " << g_prog_name << " --" << REGISTRAR_ZONE_ADD_NAME
-               << " --" << REGISTRAR_ZONE_FQDN_NAME << "=<zone_fqdn>\n"
+        "  $ " << g_prog_name << " --" << REGISTRAR_ZONE_ADD_NAME << " \\\n"
+        "    --" << REGISTRAR_ZONE_FQDN_NAME << "=<zone_fqdn> \\\n"
+        "    [--" << REGISTRAR_EX_PERIOD_MIN_NAME << "=<ex_period_min>] \\\n"
+        "    [--" << REGISTRAR_EX_PERIOD_MAX_NAME << "=<ex_period_max>] \\\n"
+        "    [--" << REGISTRAR_TTL_NAME << "=<ttl>] \\\n"
+        "    [--" << REGISTRAR_HOSTMASTER_NAME << "=<hostmaster>] \\\n"
+        "    [--" << REGISTRAR_UPDATE_RETR_NAME << "=<update_retr>] \\\n"
+        "    [--" << REGISTRAR_REFRESH_NAME << "=<refresh>] \\\n"
+        "    [--" << REGISTRAR_EXPIRY_NAME << "=<expiry>] \\\n"
+        "    [--" << REGISTRAR_MINIMUM_NAME << "=<minimum>] \\\n"
+        "    [--" << REGISTRAR_NS_FQDN_NAME << "=<ns_fqdn>]\n"
+        << std::endl;
+}
+
+void
+RegistrarClient::zone_ns_add_help()
+{
+    std::cout <<
+        "** Add new nameserver to zone**\n\n"
+        "  $ " << g_prog_name << " --" << REGISTRAR_ZONE_NS_ADD_NAME << " \\\n"
+        "    --" << REGISTRAR_ZONE_FQDN_NAME << "=<zone_fqdn> \\\n"
+        "    --" << REGISTRAR_NS_FQDN_NAME << "=<ns_fqdn> \\\n"
+        "    --" << REGISTRAR_ADDR_NAME << "=<addr>\n"
         << std::endl;
 }
 
@@ -225,8 +424,37 @@ RegistrarClient::registrar_add_help()
 {
     std::cout <<
         "** Add new registrar **\n\n"
-        "  $ " << g_prog_name << " --" << REGISTRAR_REGISTRAR_ADD_NAME
-               << " --" << REGISTRAR_HANDLE_NAME << "=<registrar_handle>\n"
+        "  $ " << g_prog_name << " --" << REGISTRAR_REGISTRAR_ADD_NAME << " \\\n"
+        "    --" << REGISTRAR_ADD_HANDLE_NAME << "=<registrar_handle> \\\n"
+        "    --" << REGISTRAR_COUNTRY_NAME << "=<country_code> \\\n"
+        "    [--" << REGISTRAR_ICO_NAME << "=<ico>] \\\n"
+        "    [--" << REGISTRAR_DIC_NAME << "=<dic>] \\\n"
+        "    [--" << REGISTRAR_VAR_SYMB_NAME << "=<var_symbol>] \\\n"
+        "    [--" << REGISTRAR_ADD_NAME_NAME << "=<name>] \\\n"
+        "    [--" << REGISTRAR_ORGANIZATION_NAME << "=<organizatin>] \\\n"
+        "    [--" << REGISTRAR_STREET1_NAME << "=<street1>] \\\n"
+        "    [--" << REGISTRAR_STREET2_NAME << "=<street2>] \\\n"
+        "    [--" << REGISTRAR_STREET3_NAME << "=<street3>] \\\n"
+        "    [--" << REGISTRAR_CITY_NAME << "=<city>] \\\n"
+        "    [--" << REGISTRAR_STATEORPROVINCE_NAME << "=<state_or_province>] \\\n"
+        "    [--" << REGISTRAR_POSTALCODE_NAME << "=<postal_code>] \\\n"
+        "    [--" << REGISTRAR_TELEPHONE_NAME << "=<telephone>] \\\n"
+        "    [--" << REGISTRAR_FAX_NAME << "=<fax>] \\\n"
+        "    [--" << REGISTRAR_EMAIL_NAME << "=<email>] \\\n"
+        "    [--" << REGISTRAR_URL_NAME << "=<url>] \\\n"
+        "    [--" << REGISTRAR_NO_VAT_NAME << "] \\\n"
+        "    [--" << REGISTRAR_SYSTEM_NAME << "]\n"
+        << std::endl;
+}
+void
+RegistrarClient::registrar_acl_add_help()
+{
+    std::cout << 
+        "** Add new certificate add password to registrar **\n\n"
+        "  $ " << g_prog_name << " --" << REGISTRAR_REGISTRAR_ACL_ADD_NAME << " \\\n"
+        "    --" << REGISTRAR_ADD_HANDLE_NAME << "=<handle> \\\n"
+        "    --" << REGISTRAR_CERT_NAME << "=<certificate> \\\n"
+        "    --" << REGISTRAR_PASSWORD_NAME << "=<password>\n"
         << std::endl;
 }
 void
@@ -236,8 +464,28 @@ RegistrarClient::registrar_add_zone_help()
         "** Add registrar to zone **\n\n"
         "  $ " << g_prog_name << " --" << REGISTRAR_REGISTRAR_ADD_ZONE_NAME << " \\\n"
         "    --" << REGISTRAR_ZONE_FQDN_NAME << "=<zone_fqdn> \\\n"
-        "    --" << REGISTRAR_HANDLE_NAME << "=<registrar_handle>\n"
+        "    --" << REGISTRAR_ADD_HANDLE_NAME << "=<registrar_handle> \\\n"
+        "    [--" << REGISTRAR_FROM_DATE_NAME << "=<valid_from_date>] \\\n"
+        "    [--" << REGISTRAR_TO_DATE_NAME << "=<valid_to_date>]\n"
         << std::endl;
+}
+void
+RegistrarClient::price_add_help()
+{
+    std::cout <<
+        "** Add new price for the zone **\n\n"
+        "  $ " << g_prog_name << " --" << REGISTRAR_PRICE_ADD_NAME << " \\\n"
+        "    --" << REGISTRAR_CREATE_OPERATION_NAME << " | \\\n"
+        "    --" << REGISTRAR_RENEW_OPERATION_NAME << " \\\n"
+        "    --" << REGISTRAR_ZONE_FQDN_NAME << "=<zone_fqdn> \\\n"
+        "    [--" << REGISTRAR_VALID_FROM_NAME << "=<valid_from_timestamp>] \\\n"
+        "    [--" << REGISTRAR_VALID_TO_NAME << "=<valid_to_timestamp>] \\\n"
+        "    --" << REGISTRAR_PRICE_NAME << "=<price> \\\n"
+        "    [--" << REGISTRAR_PERIOD_NAME << "=<period>]\n"
+        << std::endl;
+    std::cout <<
+        "Default value for the ``valid from'' is NOW and NULL for ``valid_to''.\n"
+        "Default pediod is 12 (it means twelve months).\n";
 }
 
 } // namespace Admin;

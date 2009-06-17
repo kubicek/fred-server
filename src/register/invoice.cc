@@ -30,6 +30,10 @@
 #include "common_impl.h"
 #include "old_utils/dbsql.h" 
 #include "invoice.h"
+#include "log/logger.h"
+#include "types/convert_sql_db_types.h"
+#include "types/sqlize.h"
+
 #include "documents.h"
 #include "sql.h"
 
@@ -131,6 +135,8 @@ public:
   virtual Money
       getCreditByZone(const std::string& registrarHandle, TID zone) const
           throw (SQL_ERROR);
+  virtual bool insertInvoicePrefix(unsigned long long zoneId,
+          int type, int year, unsigned long long prefix);
 }; // ManagerImpl
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -812,7 +818,7 @@ SubjectImpl
 #define TAG(tag,f) TAGSTART(tag) \
                        << "<![CDATA[" << f << "]]>" << TAGEND(tag)
 #define OUTMONEY(f) (f)/100 << "." << \
-                        std::setfill('0') << std::setw(2) << (f)%100
+                        std::setfill('0') << std::setw(2) << abs(f)%100
 // builder that export xml of invoice into given stream
 class ExporterXML : public Exporter {
   std::ostream& out;
@@ -1004,6 +1010,7 @@ public:
   COMPARE_CLASS_IMPL(InvoiceImpl, Credit)
   COMPARE_CLASS_IMPL(InvoiceImpl, Type)
   COMPARE_CLASS_IMPL(InvoiceImpl, ZoneName)
+  COMPARE_CLASS_IMPL(InvoiceImpl, Price)
   
   
   // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -1074,6 +1081,9 @@ public:
           break;
         case MT_ZONE:
           stable_sort(data_.begin(), data_.end(), CompareZoneName(_asc));
+          break;
+        case MT_PRICE:
+          stable_sort(data_.begin(), data_.end(), ComparePrice(_asc));
           break;
       }
     }
@@ -1556,6 +1566,7 @@ public:
       TID generation; ///< filled if source is invoice generation
       TID invoice; ///< filled if successful generation or advance invoice
       TID mail; ///< id of generated email
+      std::string zoneFqdn;
       
       const char *getTemplateName() {
         if (!generation) return "invoice_deposit";
@@ -1564,7 +1575,8 @@ public:
       }
       
       Item(const std::string& _registrarEmail, date _from, date _to,
-           TID _filePDF, TID _fileXML, TID _generation, TID _invoice, TID _mail) :
+           TID _filePDF, TID _fileXML, TID _generation, TID _invoice, TID _mail,
+           const std::string& _zoneFqdn) :
                registrarEmail(_registrarEmail), 
                from(_from), 
                to(_to),
@@ -1572,7 +1584,8 @@ public:
                fileXML(_fileXML),
                generation(_generation), 
                invoice(_invoice), 
-               mail(_mail) {
+               mail(_mail),
+               zoneFqdn(_zoneFqdn) {
       }
     };
     
@@ -1613,6 +1626,7 @@ public:
         dateBuffer.str("");
         dateBuffer << it->to;
         params["todate"] = dateBuffer.str();
+        params["zone"] = it->zoneFqdn;
         Mailer::Handles handles;
         // TODO: include domain or registrar handles??
         Mailer::Attachments attach;
@@ -1635,16 +1649,19 @@ public:
     void load() throw (SQL_ERROR) {
       std::stringstream sql;
       sql << "SELECT r.email, g.fromdate, g.todate, "
-      << "i.file, i.fileXML, g.id, i.id "
+      << "i.file, i.fileXML, g.id, i.id, z.fqdn "
       << "FROM registrar r, invoice i "
       << "LEFT JOIN invoice_generation g ON (g.invoiceid=i.id) "
-      << "LEFT JOIN invoice_mails im ON (im.invoiceid=i.id)"
+      << "LEFT JOIN invoice_mails im ON (im.invoiceid=i.id) "
+      << "LEFT JOIN zone z ON (z.id = i.zone) "
       << "WHERE i.registrarid=r.id "
       << "AND im.mailid ISNULL "
       << "UNION "
-      << "SELECT r.email, g.fromdate, g.todate, NULL, NULL, g.id, NULL "
+      << "SELECT r.email, g.fromdate, g.todate, NULL, NULL, g.id, "
+      << "NULL, z.fqdn "
       << "FROM registrar r, invoice_generation g "
       << "LEFT JOIN invoice_mails im ON (im.genid=g.id) "
+      << "LEFT JOIN zone z ON (z.id = g.zone) "
       << "WHERE g.registrarid=r.id AND g.invoiceid ISNULL "
       << "AND im.mailid ISNULL "
       << "AND NOT(r.email ISNULL OR TRIM(r.email)='')";
@@ -1658,7 +1675,8 @@ public:
               STR_TO_ID(db->GetFieldValue(i,4)),
               STR_TO_ID(db->GetFieldValue(i,5)),
               STR_TO_ID(db->GetFieldValue(i,6)),
-              (TID)0
+              (TID)0,
+              db->GetFieldValue(i, 7)
           ));
       db->FreeSelect();
     }
@@ -1735,6 +1753,25 @@ public:
     db->FreeSelect();
     return result;
   }
+  bool ManagerImpl::insertInvoicePrefix(unsigned long long zoneId,
+          int type, int year, unsigned long long prefix) 
+  {
+      TRACE("Invoicing::ManagerImpl::insertInvoicePrefix(...)");
+      std::stringstream query;
+      query << "INSERT INTO invoice_prefix (zone, typ, year, prefix) VALUES"
+          << "(" << zoneId << ", "
+          << type << ", "
+          << year << ", "
+          << prefix << ");";
+      try {
+          if (!db->ExecSQL(query.str().c_str())) {
+              return false;
+          }
+      } catch (...) {
+          return false;
+      }
+      return true;
+  }
   
   Manager* Manager::create(DB *db, Document::Manager *docman, Mailer::Manager *mailman) {
     return new ManagerImpl(db,docman,mailman);
@@ -1745,6 +1782,7 @@ public:
                            Mailer::Manager *_mail_manager) {
     return new ManagerImpl(_db_manager, _doc_manager, _mail_manager);
   }
+
   
 }; // Invoicing
 }; // Register

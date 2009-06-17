@@ -1,5 +1,8 @@
+#include <iomanip>
+
 #include "money.h"
-#include "conversions.h"
+#include "stringify.h"
+
 
 namespace Database {
 
@@ -8,12 +11,12 @@ namespace Database {
  */
 
 void Money::from_string(const std::string& _value) {
-  value_ = Conversion<value_type>::from_string(_value);
+  value_ = unstringify<value_type>(_value);
 }
 
 
 const std::string Money::to_string() const {
-  return Conversion<value_type>::to_string(value_);
+  return stringify(value_);
 }
 
 
@@ -24,6 +27,14 @@ const std::string Money::to_string() const {
 std::ostream& operator<<(std::ostream &_os, const Money& _v) {
   return _os << _v.value_;
 }
+
+std::istream& operator>>(std::istream &_is, Money& _v) {
+    std::string tmp;
+    _is >> tmp;
+    _v.from_string(tmp);
+    return _is;
+}
+
 
 
 /*
