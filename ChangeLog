@@ -1,0 +1,173 @@
+2008-06-26 Jaromir Talir, Jiri Sadek (version 1.10.0)
+
+    * querying invoices, mails, files
+    
+    * adding filters to domains
+    
+    * fixing state change poll messages 
+
+2008-06-12 Jiri Sadek (version 1.9.3)
+  
+    * bugfix - database connection leaking
+
+2008-06-11 Jaromir Talir (version 1.9.2)
+  
+    * bugfix - emails with request for authinfo was sent to bad address
+
+2008-06-05 Jaromir Talir (version 1.9.1)
+
+    * public request system fixes
+       - epp delele operation blocked on serverUpdateProhibited
+       - fixed type in mail with answer
+       - speedup of status update 
+
+2008-06-04 Jiri Sadek
+
+    * logging into syslog by default
+    
+    * date interval filtering fixed
+    
+    * compliation warning cleaned
+
+2008-05-30 Jaromir Talir (version 1.9.0)
+
+    * new public request module
+
+    * complete new architecture of server
+
+    * backend admin interface features
+
+    * enhanced build system
+
+2008-05-16 Jaromir Talir (version 1.8.3)
+
+    * almost full IDN support
+      - encodeIDN, decodeIDN function in zone manager
+      - parametrized check of domain fqdn (allow xn-- at the start of domain)
+      - whois and admin backend translate utf8 string into and from ascii form   
+
+    * disabling default generation of poll messages about delete cont/nsset
+ 
+    * optimizing query for objects to delete
+
+    * fixing type of object in notificiation email about delete of nsset
+
+2008-03-25 Jaromir Talir (version 1.8.2)
+
+    * object delete procedure and notification made parametrized
+
+    * admin command --zone_add fill records in zone_soa and zone_ns tables 
+
+    * changed mailer_manager and tech_check resolving of corba object (managed 
+    by pyfred) when needed not in initialization - removes dependency on
+    starting order of fred-rifd and pyfred servers
+
+    * fixing date in notification of technical contact about removal from zone 
+
+    * update contact notification is now sent to old notify adress as well
+    
+    * really small bugfixes 
+      - fixing creation of path to xslt templates
+      - fixing return value during action element insertion
+      - fixing missing disconnection of database session in adif backend 
+
+    * invoicing bugfixes
+      - uninitialized determination value
+      - language of PDF based on country instead of vat application
+
+2008-02-25 Jaromir Talir (version 1.8.1)
+	
+    * changing admin session handling
+      - every session has separate session object
+      - simple garbage collector for session with 30 minut of inactivity
+
+2008-02-09 Jaromir Talir (version 1.8.0)
+
+    * adding parameter to fred-admin
+      - registrar creation
+      - zone creation
+      - zone registrar access creation
+
+    * repairing queries into action table
+      - removing LEFT JOINS
+      - parsing EPP commands into action_elements table
+      - fixing date time querying of actions
+      - better wildcard handling
+
+    * dns hostname check agains enum_tld tables
+
+    * credit discovering supported in admin interface 
+
+    * letter generation supported in admin interface
+ 
+    * initial sorting support (domains by exdate)
+
+    * more columns and faster load in admin invoice list
+    
+    * locking of EPP command (*new configuration option*) 
+    
+    * rpm building support
+     
+    * complete refactoring of build scripts .am and .ac
+    
+    * invoicing improvements
+	   - use english PDF template for foreign registrars
+	   - new option in fred-admin --invoice_dont_send to disable mailing
+	   - export partial VAT in xml (for new PDF format)
+       - speedup (call ANALYZE)
+
+2007-11-16 Jaromir Talir (version 1.7.6)
+
+    * object state requests can be added through fred-admin
+
+    * emails with notification about expiration have registrar name instead
+      of registrar handle
+
+    * postgresql NOTICE messages on client side disabled
+
+    * regular daily periodical procedure implemented in fred-admin 
+ 
+    * removal of unused code expiration (fred-expiration) and whois 
+
+    * overlapping zones supported
+
+    * info request optimalization
+
+    * nsset create and update fixes
+      - better hostname control (refactored to use registry library)
+      - check of hostname duplicity in request
+      - check for count of dns was outside Action (returned no SVTRID)
+
+    * hack in timezone conversion removed
+
+    * notification fixes
+      - pdf letters generation
+      - sql fixes in email notification
+
+    * lot of banking and invoicing fixes 
+      - GPC parser
+      - database sequence management
+      - invoicing by zone
+      - rounding bug in float->int conversion
+      - change type long -> long long for extra long invoice numbers
+      - support for export to accounting company 
+
+1.7.3	
+	* remove libdaemon
+
+1.6.4
+	* invoice mailing ignore registrars without email
+	* repair version numbers of transform poll messages
+	* bug in initialization in unix whois server
+1.6.3
+	* bug in update of disclose flags fixed
+	* bug in update of address fixed
+	* faulty namespace version in poll message corrected
+
+1.6.2
+	* disclose flags for vat, notifyEmail and ident
+	* temporary contact handling
+	* new logging infrastructure (without libdaemon)
+	* new config options (restricted_handles,disable_epp_notifier)
+	* reconnect in every login to admin interface
+	* sql optimalization
