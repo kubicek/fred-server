@@ -1,7 +1,7 @@
 #include "pagetable_domains.h"
 
-ccReg_Domains_i::ccReg_Domains_i(Register::Domain::List *_dl) :
-  dl(_dl) {
+ccReg_Domains_i::ccReg_Domains_i(Register::Domain::List *_dl, const Settings *_ptr) : dl(_dl) {
+  uf.settings(_ptr);
 }
 
 ccReg_Domains_i::~ccReg_Domains_i() {
@@ -9,106 +9,118 @@ ccReg_Domains_i::~ccReg_Domains_i() {
 }
 
 ccReg::Filters::Compound_ptr ccReg_Domains_i::add() {
+  Logging::Context ctx(base_context_);
+
   TRACE("[CALL] ccReg_Domains_i::add()");
   it.clearF();
-  DBase::Filters::Domain *f = new DBase::Filters::DomainHistoryImpl();
+  Database::Filters::Domain *f = new Database::Filters::DomainHistoryImpl();
   uf.addFilter(f);
   return it.addE(f);
 }
 
 void ccReg_Domains_i::reload() {
+  Logging::Context ctx(base_context_);
+
   TRACE("[CALL] ccReg_Domains_i::reload()");
-//  dl->makeRealCount();
-  dl->reload2(uf, dbm);
+  dl->reload(uf, dbm);
+  dl->deleteDuplicatesId();
 }
 
-ccReg::Table::ColumnHeaders* ccReg_Domains_i::getColumnHeaders() {
+Registry::Table::ColumnHeaders* ccReg_Domains_i::getColumnHeaders() {
+  Logging::Context ctx(base_context_);
+
   TRACE("[CALL] ccReg_Domains_i::getColumnHeaders()");
-  ccReg::Table::ColumnHeaders *ch = new ccReg::Table::ColumnHeaders();
+  Registry::Table::ColumnHeaders *ch = new Registry::Table::ColumnHeaders();
   ch->length(11);
-  COLHEAD(ch, 0, "FQDN", CT_DOMAIN_HANDLE);
-  COLHEAD(ch, 1, "Create date", CT_OTHER);
-  COLHEAD(ch, 2, "Delete date", CT_OTHER);
-  COLHEAD(ch, 3, "Registrant", CT_CONTACT_HANDLE);
-  COLHEAD(ch, 4, "Registrant name", CT_OTHER);
-  COLHEAD(ch, 5, "Registrar", CT_REGISTRAR_HANDLE);
-  COLHEAD(ch, 6, "In zone", CT_OTHER);
+  COLHEAD(ch, 0, "FQDN",            CT_OID);
+  COLHEAD(ch, 1, "Registrant",      CT_OID);
+  COLHEAD(ch, 2, "Registrant name", CT_OTHER);
+  COLHEAD(ch, 3, "Registrant organization", CT_OTHER);
+  COLHEAD(ch, 4, "Registrar",       CT_OID);
+  COLHEAD(ch, 5, "In zone",         CT_OTHER);
+  COLHEAD(ch, 6, "Create date",     CT_OTHER);
   COLHEAD(ch, 7, "Expiration date", CT_OTHER);
-  COLHEAD(ch, 8, "Out Zone date", CT_OTHER);
-  COLHEAD(ch, 9, "Cancel date", CT_OTHER);
-  COLHEAD(ch, 10, "Validation", CT_OTHER);
+  COLHEAD(ch, 8, "Out Zone date",   CT_OTHER);
+  COLHEAD(ch, 9, "Delete date",     CT_OTHER);
+  COLHEAD(ch, 10, "Validation",     CT_OTHER);
   return ch;
 }
 
-ccReg::TableRow* ccReg_Domains_i::getRow(CORBA::Short row)
+Registry::TableRow* ccReg_Domains_i::getRow(CORBA::Short row)
     throw (ccReg::Table::INVALID_ROW) {
+  Logging::Context ctx(base_context_);
+
   const Register::Domain::Domain *d = dl->getDomain(row);
   if (!d)
     throw ccReg::Table::INVALID_ROW();
-  ccReg::TableRow *tr = new ccReg::TableRow;
+  Registry::TableRow *tr = new Registry::TableRow;
   tr->length(11);
-  (*tr)[0] = DUPSTRFUN(d->getFQDN); // fqdn
-  (*tr)[1] = DUPSTRDATE(d->getCreateDate); // crdate
-  (*tr)[2] = DUPSTRDATED(d->getDeleteDate); // zruseni ??
-  (*tr)[3] = DUPSTRFUN(d->getRegistrantHandle); // registrant handle
-  (*tr)[4] = DUPSTRFUN(d->getRegistrantName); // registrant name
-  (*tr)[5] = DUPSTRFUN(d->getRegistrarHandle); // registrar handle 
-  (*tr)[6] = DUPSTR(d->getZoneStatus() == 1 ? "IN" : "OUT"); // zone generation 
-  (*tr)[7] = DUPSTRDATED(d->getExpirationDate); // expiration date 
-  (*tr)[8] = DUPSTRDATED(d->getOutZoneDate); // vyrazeni z dns
-  (*tr)[9] = DUPSTRDATED(d->getCancelDate); // vyrazeni z dns
-  (*tr)[10] = DUPSTRDATED(d->getValExDate); // validace
+  
+  MAKE_OID(oid_fqdn, d->getId(), DUPSTRFUN(d->getFQDN), FT_DOMAIN)
+  MAKE_OID(oid_registrant, d->getRegistrantId(), DUPSTRFUN(d->getRegistrantHandle), FT_CONTACT)
+  MAKE_OID(oid_registrar, d->getRegistrarId(), DUPSTRFUN(d->getRegistrarHandle), FT_REGISTRAR)
+
+  (*tr)[0]  <<= oid_fqdn;                                       // fqdn
+  (*tr)[1]  <<= oid_registrant;                                 // registrant handle
+  (*tr)[2]  <<= DUPSTRFUN(d->getRegistrantName);                // registrant name
+  (*tr)[3]  <<= DUPSTRFUN(d->getRegistrantOrganization);        // registrant organization
+  (*tr)[4]  <<= oid_registrar;                                  // registrar handle 
+  (*tr)[5]  <<= DUPSTR(d->getZoneStatus() == 1 ? "IN" : "OUT"); // zone generation 
+  (*tr)[6]  <<= DUPSTRDATE(d->getCreateDate);                   // crdate
+  (*tr)[7]  <<= DUPSTRDATED(d->getExpirationDate);              // expiration date
+  (*tr)[8]  <<= DUPSTRDATE(d->getOutZoneDate);                  // vyrazeni z dns
+  (*tr)[9]  <<= DUPSTRDATE(d->getCancelDate);                   // delete from register
+  (*tr)[10] <<= DUPSTRDATED(d->getValExDate);                   // validace
   return tr;
 }
 
 void ccReg_Domains_i::sortByColumn(CORBA::Short column, CORBA::Boolean dir) {
+  Logging::Context ctx(base_context_);
+
   TRACE(boost::format("[CALL] ccReg_Domains_i::sortByColumn(%1%, %2%)") % column % dir);
+  /* save sort state */
+  ccReg_PageTable_i::sortByColumn(column, dir);
+
   switch (column) {
   case 0:
     dl->sort(Register::Domain::MT_FQDN, dir);
-    sorted_by_ = 0;
     break;      
   case 1:
-    dl->sort(Register::Domain::MT_CRDATE, dir);
-    sorted_by_ = 1;
+    dl->sort(Register::Domain::MT_REGISTRANT_HANDLE, dir);
     break;
   case 2:
-    dl->sort(Register::Domain::MT_ERDATE, dir);
-    sorted_by_ = 2;
+    dl->sort(Register::Domain::MT_REGISTRANT_NAME, dir);
     break;
   case 3:
-    dl->sort(Register::Domain::MT_REGISTRANT_HANDLE, dir);
-    sorted_by_ = 3;
+    dl->sort(Register::Domain::MT_REGISTRANT_ORG, dir);
     break;
   case 4:
-    dl->sort(Register::Domain::MT_REGISTRANT_NAME, dir);
-    sorted_by_ = 4;
+    dl->sort(Register::Domain::MT_REGISTRAR_HANDLE, dir);
     break;
   case 5:
-    dl->sort(Register::Domain::MT_REGISTRAR_HANDLE, dir);
-    sorted_by_ = 5;
+    dl->sort(Register::Domain::MT_ZONE_STATUS, dir);
     break;
   case 6:
-    dl->sort(Register::Domain::MT_ZONE_STATUS, dir);
-    sorted_by_ = 6;
+    dl->sort(Register::Domain::MT_CRDATE, dir);
     break;
   case 7:
     dl->sort(Register::Domain::MT_EXDATE, dir);
-    sorted_by_ = 7;
     break;
   case 8:
     dl->sort(Register::Domain::MT_OUTZONEDATE, dir);
-    sorted_by_ = 8;
     break;
   case 9:
     dl->sort(Register::Domain::MT_CANCELDATE, dir);
-    sorted_by_ = 9;
+    // dl->sort(Register::Domain::MT_CANCELDATE, dir);
+    // dl->sort(Register::Domain::MT_ERDATE, dir);
     break;
   }
 }
 
 ccReg::TID ccReg_Domains_i::getRowId(CORBA::Short row)
     throw (ccReg::Table::INVALID_ROW) {
+  Logging::Context ctx(base_context_);
+
   const Register::Domain::Domain *d = dl->getDomain(row);
   if (!d)
     throw ccReg::Table::INVALID_ROW();
@@ -120,14 +132,20 @@ char* ccReg_Domains_i::outputCSV() {
 }
 
 CORBA::Short ccReg_Domains_i::numRows() {
+  Logging::Context ctx(base_context_);
+
   return dl->getCount();
 }
 
 CORBA::Short ccReg_Domains_i::numColumns() {
+  Logging::Context ctx(base_context_);
+
   return 11;
 }
 
 void ccReg_Domains_i::clear() {
+  Logging::Context ctx(base_context_);
+
   TRACE("[CALL] ccReg_Domains_i::clear()");
   dl->clearFilter();
   
@@ -136,23 +154,31 @@ void ccReg_Domains_i::clear() {
 }
 
 CORBA::ULongLong ccReg_Domains_i::resultSize() {
+  Logging::Context ctx(base_context_);
+
   TRACE("[CALL] ccReg_Domains_i::resultSize()");
   return dl->getRealCount(uf);
 }
 
 void ccReg_Domains_i::loadFilter(ccReg::TID _id) {
+  Logging::Context ctx(base_context_);
+
   TRACE(boost::format("[CALL] ccReg_Domains_i::loadFilter(%1%)") % _id);
   ccReg_PageTable_i::loadFilter(_id);
 
-  DBase::Filters::Union::iterator uit = uf.begin();
+  Database::Filters::Union::iterator uit = uf.begin();
   for (; uit != uf.end(); ++uit) {
-    DBase::Filters::Domain *tmp = dynamic_cast<DBase::Filters::Domain* >(*uit);
-    it.addE(tmp);
-    TRACE(boost::format("[IN] ccReg_Domains_i::loadFilter(%1%): loaded filter content = %2%") % _id % tmp->getContent());
+    Database::Filters::Domain *tmp = dynamic_cast<Database::Filters::Domain* >(*uit);
+    if (tmp) {
+      it.addE(tmp);
+      TRACE(boost::format("[IN] ccReg_Domains_i::loadFilter(%1%): loaded filter content = %2%") % _id % tmp->getContent());
+    }
   }
 }
 
 void ccReg_Domains_i::saveFilter(const char* _name) {
+  Logging::Context ctx(base_context_);
+
   TRACE(boost::format("[CALL] ccReg_Domains_i::saveFilter('%1%')") % _name);
 
   std::auto_ptr<Register::Filter::Manager>
@@ -161,6 +187,8 @@ void ccReg_Domains_i::saveFilter(const char* _name) {
 }
 
 Register::Domain::Domain* ccReg_Domains_i::findId(ccReg::TID _id) {
+  Logging::Context ctx(base_context_);
+
   try {
     Register::Domain::Domain *domain = dynamic_cast<Register::Domain::Domain* >(dl->findId(_id));
     if (domain) {
@@ -172,3 +200,10 @@ Register::Domain::Domain* ccReg_Domains_i::findId(ccReg::TID _id) {
     return 0;
   }
 }
+
+CORBA::Boolean ccReg_Domains_i::numRowsOverLimit() {
+  Logging::Context ctx(base_context_);
+
+  return dl->isLimited(); 
+}
+

@@ -11,7 +11,7 @@
 #include "exceptions.h"
 #include "documents.h"
 #include "mailer.h"
-#include "db/dbs.h"
+#include "db/manager.h"
 #include "model/model_filters.h"
 
 class DB;
@@ -37,6 +37,8 @@ enum Type {
   IT_DEPOSIT, ///< depositing invoice
   IT_ACCOUNT ///< accounting invoice
 };
+std::string Type2Str(Type _type);
+
 /// subject of invoicing (supplier or client)
 class Subject {
 protected:
@@ -95,10 +97,13 @@ public:
   /// creation time of source invoice
   virtual boost::posix_time::ptime getCrTime() const = 0;
 };
+
 enum PaymentActionType {
   PAT_CREATE_DOMAIN,
   PAT_RENEW_DOMAIN
 };
+std::string PaymentActionType2Str(PaymentActionType type);
+
 class PaymentAction : virtual public Payment {
 protected:
   virtual ~PaymentAction() {
@@ -157,6 +162,8 @@ public:
   virtual const std::string& getVarSymbol() const = 0;
   virtual TID getFilePDF() const = 0;
   virtual TID getFileXML() const = 0;
+  virtual std::string getFileNamePDF() const = 0;
+  virtual std::string getFileNameXML() const = 0;
   virtual unsigned getSourceCount() const = 0;
   virtual const PaymentSource *getSource(unsigned idx) const = 0;
   virtual unsigned getActionCount() const = 0;
@@ -184,7 +191,7 @@ public:
   /// reload invoices with selected filter
   virtual void reload() throw (SQL_ERROR) = 0;
   /// new reload method
-  virtual void reload(DBase::Filters::Union& _uf, DBase::Manager *_db_manager) = 0;
+  virtual void reload(Database::Filters::Union& _uf, Database::Manager *_db_manager) = 0;
   /// subsequential reload will not load any action 
   virtual void setPartialLoad(bool partialLoad) = 0;
   /// return invoice by index
@@ -248,7 +255,7 @@ public:
                          Document::Manager *docman,
                          Mailer::Manager *mailman);
   
-  static Manager *create(DBase::Manager *_db_manager,
+  static Manager *create(Database::Manager *_db_manager,
                          Document::Manager *_doc_manager,
                          Mailer::Manager *_mail_manager);
 

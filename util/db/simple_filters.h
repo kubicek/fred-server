@@ -13,11 +13,11 @@
 #include "boost/date_time/c_local_time_adjustor.hpp"
 
 #include "simple_filter.h"
-#include "dbexceptions.h"
 #include "log/logger.h"
 #include "util.h"
+#include "base_exception.h"
 
-namespace DBase {
+namespace Database {
 namespace Filters {
 
 // TODO Null value
@@ -25,8 +25,16 @@ template<class Tp> class Interval : public Simple {
 public:
   Interval(const Column& _col, const Tp& _value_beg, const Tp& _value_end,
       const std::string& _conj = SQL_OP_AND) :
-    Simple(_conj), column(_col), value_beg(_value_beg), value_end(_value_end) {
+    Simple(_conj), column(_col), value_beg(_value_beg), value_end(_value_end), beg_set(false),
+    end_set(false) {
   }
+
+  Interval(const Column& _col, const std::string& _conj = SQL_OP_AND) : Simple(_conj),
+                                                                        column(_col),
+                                                                        beg_set(false),
+                                                                        end_set(false) {
+  }
+
   virtual ~Interval() {
   }
 
@@ -34,28 +42,52 @@ public:
     TRACE("[CALL] Interval::setValueBeg()");
     active = true;
     value_beg = _value;
+    beg_set = true;
   }
 
   virtual void setValueEnd(const Tp& _value) {
     TRACE("[CALL] Interval::setValueEnd()");
     active = true;
     value_end = _value;
+    end_set = true;
+  }
+
+  virtual void setValue(const Tp& _beg, const Tp& _end) {
+    TRACE("[CALL] Interval::setValue()");
+    active = true;
+    value_beg = _beg;
+    value_end = _end;
+    beg_set = end_set = true;
+  }
+
+  virtual Tp getValueBeg() const {
+    return value_beg;
+  }
+
+  virtual Tp getValueEnd() const {
+    return value_end;
   }
 
   Interval<Tp>* clone() const {
     return 0;
   }
 
-  virtual void serialize(DBase::SelectQuery& _sq) {
+  virtual void serialize(Database::SelectQuery& _sq, const Settings *_settings) {
     std::stringstream &prep = _sq.where_prepared_string();
     std::vector<std::string> &store = _sq.where_prepared_values();
 
     prep << getConjuction() << "( ";
-    prep << column.str() << SQL_OP_GE << "'%" << store.size() + 1 << "%'";
-    store.push_back(Util::stream_cast<std::string>(value_beg));
-    prep << SQL_OP_AND << column.str() << SQL_OP_LT << "'" << store.size() + 1
-        << "' )";
-    store.push_back(Util::stream_cast<std::string>(value_end));
+    if (beg_set) {
+      prep << column.str() << SQL_OP_GE << "'%" << store.size() + 1 << "%'";
+      store.push_back(Conversion<Tp>::to_string(value_beg));
+    }
+    if (beg_set && end_set) {
+      prep << SQL_OP_AND;
+    }
+    if (end_set) {
+      prep << column.str() << SQL_OP_LT << "'%" << store.size() + 1 << "%' )";
+      store.push_back(Conversion<Tp>::to_string(value_end));
+    }
   }
 
   friend class boost::serialization::access;
@@ -71,6 +103,8 @@ protected:
   Column column;
   Tp value_beg;
   Tp value_end;
+  bool beg_set;
+  bool end_set;
 };
 
 template<class DTp> class _BaseDTInterval : public Simple {
@@ -109,19 +143,19 @@ public:
     }
   }
 
-  virtual void serialize(DBase::SelectQuery& _sq) {
+  virtual void serialize(Database::SelectQuery& _sq, const Settings *_settings) {
     TRACE("[CALL] _BaseDTInterval::serialize()");
     std::stringstream &prep = _sq.where_prepared_string();
     std::vector<std::string> &store = _sq.where_prepared_values();
     const DTp& t_value = value.getValue();
 
     if (value.isNull()) {
-      LOGGER("tracer").trace("[IN] _BaseDTInterval::serialize(): value is 'NULL'");
+      LOGGER(PACKAGE).trace("[IN] _BaseDTInterval::serialize(): value is 'NULL'");
       prep << getConjuction() << "( ";
       prep << column.str() << SQL_OP_IS << value;
       prep << " )";
     } else {
-      LOGGER("tracer").trace(boost::format("[IN] _BaseDTInterval::serialize(): value is normal (special_flag='%1%')")
+      LOGGER(PACKAGE).trace(boost::format("[IN] _BaseDTInterval::serialize(): value is normal (special_flag='%1%')")
           % t_value.getSpecial());
       
       std::string second_operator = (t_value.getSpecial() == INTERVAL ? SQL_OP_LE : SQL_OP_LT); 
@@ -153,7 +187,7 @@ public:
   }
 
 public:
-  _BaseDTInterval(const Column& _col, const DBase::Null<DTp>& _value,
+  _BaseDTInterval(const Column& _col, const Database::Null<DTp>& _value,
       const std::string& _conj = SQL_OP_AND) :
     Simple(_conj), column(_col), value(_value) {
   }
@@ -166,7 +200,7 @@ public:
 
 protected:
   Column column;
-  DBase::Null<DTp> value;
+  Database::Null<DTp> value;
 };
 
 #define BOOST_SERIALIZATION_BASE_TEMPLATE(name, base)               \
@@ -176,7 +210,7 @@ protected:
 template<> class Interval<DateTimeInterval> :
   public _BaseDTInterval<DateTimeInterval> {
 public:
-  Interval(const Column& _col, const DBase::Null<DateTimeInterval>& _value,
+  Interval(const Column& _col, const Database::Null<DateTimeInterval>& _value,
       const std::string& _conj = SQL_OP_AND) :
     _BaseDTInterval<DateTimeInterval>(_col, _value, _conj) {
   }
@@ -187,32 +221,12 @@ public:
   Interval() {
   }
   
-  void setValue(const DateTimeInterval& _value) {
-    TRACE("[CALL] Inteval<DateTime>::setValue()");
-
-    if (_value.isSpecial()) {
-      value = _value;
-    }
-    else {
-      using namespace boost::posix_time;
-      using namespace boost::gregorian;
-      
-      typedef boost::date_time::eu_dst_trait<date> eu_dst_traits;
-      typedef boost::date_time::dst_calc_engine<date, time_duration, eu_dst_traits> calc_engine; 
-      typedef boost::date_time::local_adjustor<ptime, 1, calc_engine> adjustor;
-      
-      ptime beg = _value.get().begin();
-      ptime end = _value.get().end();    
-      beg = adjustor::local_to_utc(beg);
-      end = adjustor::local_to_utc(end);
-      
-      value = DateTimeInterval(time_period(beg, end));
-    }
-    
+  void setNULL() {
+    value = Database::Null<DateTimeInterval>();
     active = true;
   }
   
-  void serialize(DBase::SelectQuery& _sq) {
+  void serialize(Database::SelectQuery& _sq, const Settings *_settings) {
     TRACE("[CALL] Interval<DateTime>::serialize()");
     std::stringstream &prep = _sq.where_prepared_string();
     const DateTimeInterval& t_value = value.getValue();
@@ -221,7 +235,7 @@ public:
         && t_value.isSpecial() 
         && (t_value.getSpecial() != DAY && t_value.getSpecial() != INTERVAL)) {
       
-      LOGGER("tracer").trace(boost::format("[IN] Interval<DateTime>::serialize(): value is special (special_flag='%1%')")
+      LOGGER(PACKAGE).trace(boost::format("[IN] Interval<DateTime>::serialize(): value is special (special_flag='%1%')")
           % t_value.getSpecial());
       
       std::stringstream beg, end;
@@ -230,7 +244,9 @@ public:
       if (t_value.getSpecial() < PAST_HOUR) {
         beg << "date_trunc('" << what << "', current_timestamp + interval '"
             << t_value.getSpecialOffset() << " " << what <<"')";
-        end << beg.str() << " + interval '1 "<< what << "'";
+        end << "(" << beg.str() << " + interval '1 "<< what << "')";
+        beg << value_post_;
+        end << value_post_;
       } else {
         if (t_value.getSpecialOffset() < 0) {
           beg << "current_timestamp + interval '" << t_value.getSpecialOffset()
@@ -249,7 +265,36 @@ public:
       prep << " )";
     }
     else {
-      _BaseDTInterval<DateTimeInterval>::serialize(_sq);
+      /* notice: took from parent class and added time conversion */
+      std::vector<std::string> &store = _sq.where_prepared_values();
+  
+      if (value.isNull()) {
+        LOGGER(PACKAGE).trace("[IN] _BaseDTInterval::serialize(): value is 'NULL'");
+        prep << getConjuction() << "( ";
+        prep << column.str() << SQL_OP_IS << value;
+        prep << " )";
+      } else {
+        LOGGER(PACKAGE).trace(boost::format("[IN] _BaseDTInterval::serialize(): value is normal (special_flag='%1%')")
+            % t_value.getSpecial());
+        
+        std::string second_operator = (t_value.getSpecial() == INTERVAL ? SQL_OP_LE : SQL_OP_LT); 
+        bool b = false;
+  
+        if (!t_value.begin().is_special()) {
+          prep << getConjuction() << "( ";
+          prep << column.str() << SQL_OP_GE << "('%" << store.size() + 1 << "% Europe/Prague' AT TIME ZONE 'UTC')" + value_post_;
+          store.push_back(t_value.begin().str());
+          b = true;
+        }
+        if (!t_value.end().is_special()) {
+          prep << (b ? SQL_OP_AND : getConjuction() + "( ") << column.str()
+              << second_operator << "('%" << store.size() + 1 << "% Europe/Prague' AT TIME ZONE 'UTC')" + value_post_;
+          prep << " )";
+          store.push_back(t_value.end().str());
+        } else if (b) {
+          prep << " )";
+        }
+      }
     }
   }
 
@@ -264,7 +309,7 @@ public:
 
 template<> class Interval<DateInterval> : public _BaseDTInterval<DateInterval> {
 public:
-  Interval(const Column& _col, const DBase::Null<DateInterval>& _value,
+  Interval(const Column& _col, const Database::Null<DateInterval>& _value,
       const std::string& _conj = SQL_OP_AND) :
     _BaseDTInterval<DateInterval>(_col, _value, _conj) {
   }
@@ -274,8 +319,13 @@ public:
   
   Interval() {
   }
+  
+  void setNULL() {
+    value = Database::Null<DateInterval>();
+    active = true;
+  }
 
-  void serialize(DBase::SelectQuery& _sq) {
+  void serialize(Database::SelectQuery& _sq, const Settings *_settings) {
     TRACE("[CALL] Interval<Date>::serialize()");
     std::stringstream &prep = _sq.where_prepared_string();
     const DateInterval& t_value = value.getValue();
@@ -284,7 +334,7 @@ public:
         && t_value.isSpecial() 
         && (t_value.getSpecial() != DAY && t_value.getSpecial() != INTERVAL)) {
       
-      LOGGER("tracer").trace(boost::format("[IN] Interval<Date>::serialize(): value is special (special_flag='%1%')")
+      LOGGER(PACKAGE).trace(boost::format("[IN] Interval<Date>::serialize(): value is special (special_flag='%1%')")
           % t_value.getSpecial());
       
       std::stringstream beg, end;
@@ -293,7 +343,9 @@ public:
       if (t_value.getSpecial() < PAST_HOUR) {
         beg << "date_trunc('" << what << "', current_date + interval '"
             << t_value.getSpecialOffset() << " " << what <<"')";
-        end << beg.str() << " + interval '1 "<< what << "'";
+        end << "(" << beg.str() << " + interval '1 "<< what << "')";
+        beg << value_post_;
+        end << value_post_;
       } else {
         if (t_value.getSpecialOffset() < 0) {
           beg << "(current_date + interval '" << t_value.getSpecialOffset()
@@ -312,7 +364,7 @@ public:
       prep << " )";
     }
     else {
-      _BaseDTInterval<DateInterval>::serialize(_sq);
+      _BaseDTInterval<DateInterval>::serialize(_sq, _settings);
     }
   }
   
@@ -325,6 +377,8 @@ public:
   }
 };
 
+
+template<class Tp> class ValueModifier;
 template<class Tp> class Value : public Simple {
 public:
   Value(const Column& _col, const Null<Tp>& _value,
@@ -346,10 +400,21 @@ public:
     op = _op;
   }
 
+  void setNULL() {
+    value = Database::Null<Tp>();
+    active = true;
+  }
+  
   virtual void setValue(const Null<Tp>& _value) {
     TRACE("[CALL] Value<Tp>::setValue()");
     active = true;
     value = _value;
+
+    if (!modifiers_.empty()) {
+      for (unsigned i = 0; i < modifiers_.size(); ++i) {
+        modifiers_[i]->modify(*this);
+      }
+    }
   }
 
   virtual const Null<Tp>& getValue() const {
@@ -360,7 +425,7 @@ public:
     return 0;
   }
 
-  virtual void serialize(DBase::SelectQuery& _sq) {
+  virtual void serialize(Database::SelectQuery& _sq, const Settings *_settings) {
     std::stringstream &prep = _sq.where_prepared_string();
     std::vector<std::string> &store = _sq.where_prepared_values();
 
@@ -369,7 +434,8 @@ public:
       prep << SQL_OP_IS << value;
     } else {
       prep << op << "'%" << store.size() + 1 << "%'";
-      store.push_back(Util::stream_cast<std::string>(value.getValue()));
+      store.push_back(Conversion<Tp>::to_string(value.getValue()));
+      // store.push_back(Util::stream_cast<std::string>(value.getValue()));
     }
     prep << " )";
   }
@@ -383,10 +449,16 @@ public:
     _ar & BOOST_SERIALIZATION_NVP(value);
   }
 
+  void addModifier(ValueModifier<Tp> *_modifier) {
+    modifiers_.push_back(_modifier);
+  }
+
 protected:
   Column column;
   std::string op;
-  DBase::Null<Tp> value;
+  Database::Null<Tp> value;
+
+  std::vector<ValueModifier<Tp> *> modifiers_;
 };
 
 template<> class Value<std::string> : public Simple {
@@ -425,7 +497,7 @@ public:
     return 0;
   }
 
-  virtual void serialize(DBase::SelectQuery& _sq) {
+  virtual void serialize(Database::SelectQuery& _sq, const Settings *_settings) {
     std::stringstream &prep = _sq.where_prepared_string();
     std::vector<std::string> &store = _sq.where_prepared_values();
 
@@ -440,7 +512,7 @@ public:
         store.push_back(v);
       }
       else {
-        prep << op << "'%" << store.size() + 1 << "%'";
+        prep << op << " " << value_pre_ << "'%" << store.size() + 1 << "%'" << value_post_;
         store.push_back(v);
       }
     }
@@ -459,7 +531,7 @@ public:
 protected:
   Column column;
   std::string op;
-  DBase::Null<std::string> value;
+  Database::Null<std::string> value;
 };
 
 template<class Tp> class Null : public Simple {
@@ -472,13 +544,46 @@ public:
   virtual ~Null() {
   }
 
-  virtual void serialize(DBase::SelectQuery& _sq) {
+  virtual void serialize(Database::SelectQuery& _sq, const Settings *_settings) {
     _sq.where_prepared_string() << getConjuction() << column.str() << SQL_OP_IS
         << "NULL";
   }
 protected:
   Column column;
-  DBase::Null<Tp> value;
+  Database::Null<Tp> value;
+};
+
+
+template<class Tp>
+class Modifier {
+public:
+  Modifier(const Tp& _value) : value_cmp_(_value) {
+  }
+
+protected:
+  Tp value_cmp_;
+};
+
+template<class Tp>
+class ValueModifier : public Modifier<Tp> {
+public:
+  ValueModifier(const Tp& _value,
+                const Tp& _to_value, 
+                const std::string& _to_operator) : Modifier<Tp>(_value),
+                                                   to_value_(_to_value),
+                                                   to_operator_(_to_operator) {
+  }
+
+  void modify(Value<Tp>& _filter) {
+    if (_filter.getValue().getValue() == this->value_cmp_) {
+      _filter.setOperator(to_operator_);
+      _filter.setValue(to_value_);
+    }
+  }
+
+private:
+  Tp to_value_;
+  std::string to_operator_;
 };
 
 }

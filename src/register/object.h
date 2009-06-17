@@ -11,7 +11,7 @@
 #include <map>
 
 #include "common_object.h"
-#include "db/dbs.h"
+#include "db/manager.h"
 
 using namespace boost::posix_time;
 using namespace boost::gregorian;
@@ -23,10 +23,6 @@ struct NameIdPair {
   std::string name;
   TID id;
 };
-
-/// name, id pair - replacement for NameIdPair structure
-typedef std::pair<std::string, DBase::ID> OID;
-
 
 /// status attributes
 class StatusDesc {
@@ -69,12 +65,17 @@ protected:
   }
 
 public:
+  virtual TID getId() const = 0;
   /// Return id of status 
   virtual TID getStatusId() const = 0;
   /// Return timestamp when object entered this state
   virtual ptime getFrom() const = 0;
   /// Return timestamp when object leaved this state
   virtual ptime getTo() const = 0;
+  /// Return object history id from state was active
+  virtual Register::TID getHistoryIdFrom() const = 0;
+  /// Return object history id to state was active
+  virtual Register::TID getHistoryIdTo() const = 0;
 };
 
 
@@ -83,14 +84,20 @@ class Object : virtual public CommonObject {
 public:
   virtual ~Object() {
   }
+
+  virtual Database::ID getHistoryId() const = 0;
+  virtual Database::ID getActionId() const = 0; 
+  virtual Database::DateTime getActionStartTime() const = 0;
+  virtual void setAction(const Database::ID& _id, const Database::DateTime& _start_time) = 0;
+
   /// Return time of object registration
   virtual ptime getCreateDate() const = 0;
   /// Return time of last transfer
   virtual ptime getTransferDate() const = 0;
   /// Return time of last update
   virtual ptime getUpdateDate() const = 0;
-  /// Return time of object delete
-  virtual date getDeleteDate() const = 0;
+  /// Return time of object delete - database field erdate
+  virtual ptime getDeleteDate() const = 0;
   /// Return handle of dedicated registrar
   virtual const std::string& getRegistrarHandle() const = 0;
   /// Return id of dedicated registrar
@@ -144,6 +151,8 @@ public:
   virtual void addStateFilter(TID state, bool stateIsOn) = 0;
   /// clear filter for one of states
   virtual void clearStateFilter(TID state) = 0;
+  /// delete duplicate records with same ID
+  virtual void deleteDuplicatesId() = 0;
 };
 
 }

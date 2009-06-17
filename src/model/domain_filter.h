@@ -8,8 +8,9 @@
 #include "object_filter.h"
 #include "contact_filter.h"
 #include "nsset_filter.h"
+#include "keyset_filter.h"
 
-namespace DBase {
+namespace Database {
 namespace Filters {
 
 class Domain : virtual public Object {
@@ -18,23 +19,28 @@ public:
   }
 
   virtual Table& joinDomainTable() = 0;
-  virtual Value<DBase::ID>& addId() = 0;
-  virtual Value<DBase::ID>& addNSSetId() = 0;
-  virtual Value<DBase::ID>& addZoneId() = 0;
-  virtual Value<DBase::ID>& addRegistrantId() = 0;
-  virtual Interval<DBase::DateInterval>& addExpirationDate() = 0;
-  virtual Interval<DBase::DateInterval>& addOutZoneDate() = 0;
-  virtual Interval<DBase::DateInterval>& addCancelDate() = 0;
+  virtual Value<Database::ID>& addId() = 0;
+  virtual Value<std::string>& addFQDN() = 0;
+  virtual Value<Database::ID>& addNSSetId() = 0;
+  virtual Value<Database::ID>& addKeySetId() = 0;
+  virtual Value<Database::ID>& addZoneId() = 0;
+  virtual Value<Database::ID>& addRegistrantId() = 0;
+  virtual Interval<Database::DateInterval>& addExpirationDate() = 0;
+  virtual Interval<Database::DateInterval>& addOutZoneDate() = 0;
+  virtual Interval<Database::DateInterval>& addCancelDate() = 0;
   virtual Contact& addRegistrant() = 0;
   virtual Contact& addAdminContact() = 0;
   virtual Contact& addTempContact() = 0;
   virtual NSSet& addNSSet() = 0;
+  virtual KeySet& addKeySet() = 0;
 
   friend class boost::serialization::access;
   template<class Archive> void serialize(Archive& _ar,
       const unsigned int _version) {
     _ar & BOOST_SERIALIZATION_BASE_OBJECT_NVP(Object);
   }
+  
+  static Domain* create();
 };
 
 class DomainImpl : public ObjectImpl, virtual public Domain {
@@ -42,24 +48,28 @@ public:
   DomainImpl();
   virtual ~DomainImpl();
 
-  virtual ObjectType getType() {
+  virtual ObjectType getType() const {
     return TDOMAIN;
   }
 
   Table& joinDomainTable();
   virtual void _joinPolymorphicTables();
 
-  virtual Value<DBase::ID>& addId();
-  virtual Value<DBase::ID>& addNSSetId();
-  virtual Value<DBase::ID>& addZoneId();
-  virtual Value<DBase::ID>& addRegistrantId();
-  virtual Interval<DBase::DateInterval>& addExpirationDate();
-  virtual Interval<DBase::DateInterval>& addOutZoneDate();
-  virtual Interval<DBase::DateInterval>& addCancelDate();
+  virtual Value<std::string>& addHandle();
+  virtual Value<Database::ID>& addId();
+  virtual Value<std::string>& addFQDN();
+  virtual Value<Database::ID>& addNSSetId();
+  virtual Value<Database::ID>& addKeySetId();
+  virtual Value<Database::ID>& addZoneId();
+  virtual Value<Database::ID>& addRegistrantId();
+  virtual Interval<Database::DateInterval>& addExpirationDate();
+  virtual Interval<Database::DateInterval>& addOutZoneDate();
+  virtual Interval<Database::DateInterval>& addCancelDate();
   virtual Contact& addRegistrant();
   virtual Contact& addAdminContact();
   virtual Contact& addTempContact();
   virtual NSSet& addNSSet();
+  virtual KeySet& addKeySet();
 
   friend class boost::serialization::access;
   template<class Archive> void serialize(Archive& _ar,
@@ -76,24 +86,28 @@ public:
   DomainHistoryImpl();
   virtual ~DomainHistoryImpl();
 
-  virtual ObjectType getType() {
+  virtual ObjectType getType() const {
     return TDOMAIN;
   }
 
   Table& joinDomainTable();
   virtual void _joinPolymorphicTables();
 
-  virtual Value<DBase::ID>& addId();
-  virtual Value<DBase::ID>& addNSSetId();
-  virtual Value<DBase::ID>& addZoneId();
-  virtual Value<DBase::ID>& addRegistrantId();
-  virtual Interval<DBase::DateInterval>& addExpirationDate();
-  virtual Interval<DBase::DateInterval>& addOutZoneDate();
-  virtual Interval<DBase::DateInterval>& addCancelDate();
+  virtual Value<std::string>& addHandle();
+  virtual Value<Database::ID>& addId();
+  virtual Value<std::string>& addFQDN();
+  virtual Value<Database::ID>& addNSSetId();
+  virtual Value<Database::ID>& addKeySetId();
+  virtual Value<Database::ID>& addZoneId();
+  virtual Value<Database::ID>& addRegistrantId();
+  virtual Interval<Database::DateInterval>& addExpirationDate();
+  virtual Interval<Database::DateInterval>& addOutZoneDate();
+  virtual Interval<Database::DateInterval>& addCancelDate();
   virtual Contact& addRegistrant();
   virtual Contact& addAdminContact();
   virtual Contact& addTempContact();
   virtual NSSet& addNSSet();
+  virtual KeySet &addKeySet();
 
   friend class boost::serialization::access;
   template<class Archive> void serialize(Archive& _ar,

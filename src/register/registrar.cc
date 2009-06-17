@@ -29,7 +29,7 @@
 #include "old_utils/dbsql.h"
 #include "old_utils/log.h"
 
-#include "db/dbs.h"
+#include "db/manager.h"
 #include "model/model_filters.h"
 #include "log/logger.h"
 
@@ -118,7 +118,7 @@ class RegistrarImpl : public Register::CommonObjectImpl,
   unsigned long credit; ///< DB: registrar.credit
   bool changed; ///< object was changed, need sync to database
   ACLList acl; ///< access control
-  std::map<DBase::ID, unsigned long> zone_credit_map;
+  std::map<Database::ID, unsigned long> zone_credit_map;
 
 public:
   RegistrarImpl(DB *_db) :
@@ -319,11 +319,11 @@ public:
     return credit;
   }
   
-  virtual unsigned long getCredit(DBase::ID _zone_id) {
+  virtual unsigned long getCredit(Database::ID _zone_id) {
     return zone_credit_map[_zone_id];
   }
   
-  virtual void setCredit(DBase::ID _zone_id, unsigned long _credit) {
+  virtual void setCredit(Database::ID _zone_id, unsigned long _credit) {
     zone_credit_map[_zone_id] = _credit;
     credit += _credit;
   }
@@ -515,6 +515,7 @@ public:
     sql << "GROUP BY r.id,r.handle,r.name,r.url,r.organization,"
         << "r.street1,r.street2,r.street3,r.city,r.stateorprovince,"
         << "r.postalcode,r.country,r.telephone,r.fax,r.email,r.system ";
+    sql << "ORDER BY r.id ";
     if (!db->ExecSelect(sql.str().c_str()))
       throw SQL_ERROR();
     for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++) {
@@ -545,70 +546,77 @@ public:
     }
     db->FreeSelect();
     sql.str("");
-    sql << "SELECT registrarid,cert,password " << "FROM registraracl";
+    sql << "SELECT registrarid,cert,password " << "FROM registraracl ORDER BY registrarid";
     if (!db->ExecSelect(sql.str().c_str()))
       throw SQL_ERROR();
+
+    resetIDSequence();
     for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++) {
       // find associated registrar
       unsigned registrarId = STR_TO_ID(db->GetFieldValue(i, 0));
-      try {
-        RegistrarImpl *r = dynamic_cast<RegistrarImpl* >(findId(registrarId));
+      RegistrarImpl *r = dynamic_cast<RegistrarImpl* >(findIDSequence(registrarId));
+      if (r) {
         r->putACL(0, db->GetFieldValue(i, 1), db->GetFieldValue(i, 2));
-      }
-      catch (Register::NOT_FOUND) {
-        continue;
       }
     }
     db->FreeSelect();
   }
-  virtual void reload2(DBase::Filters::Union &uf, DBase::Manager *dbm) {
-    TRACE("[CALL] RegistrarListImpl::reload2()");
+  virtual void reload(Database::Filters::Union &uf, Database::Manager *dbm) {
+    TRACE("[CALL] RegistrarListImpl::reload()");
     clear();
     uf.clearQueries();
 
-    DBase::SelectQuery info_query;
-
-    std::auto_ptr<DBase::Filters::Iterator> fit(uf.createIterator());
+    bool at_least_one = false;
+    Database::SelectQuery info_query;
+    std::auto_ptr<Database::Filters::Iterator> fit(uf.createIterator());
     for (fit->first(); !fit->isDone(); fit->next()) {
-      DBase::Filters::Registrar *rf =
-          dynamic_cast<DBase::Filters::Registrar*>(fit->get());
+      Database::Filters::Registrar *rf =
+          dynamic_cast<Database::Filters::Registrar*>(fit->get());
       if (!rf)
         continue;
-      DBase::SelectQuery *tmp = new DBase::SelectQuery();
+
+      Database::SelectQuery *tmp = new Database::SelectQuery();
       tmp->addSelect("id ico dic varsymb vat handle name url organization street1 street2 street3 "
                        "city stateorprovince postalcode country telephone fax email system",
                      rf->joinRegistrarTable());
       tmp->order_by() << "id";
       uf.addQuery(tmp);
+      at_least_one = true;
     }
-    info_query.limit(5000);
+    if (!at_least_one) {
+      LOGGER(PACKAGE).error("wrong filter passed for reload!");
+      return;
+    }
+
+    info_query.limit(load_limit_);
     uf.serialize(info_query);
     try {
-      std::auto_ptr<DBase::Connection> conn(dbm->getConnection());
-      std::auto_ptr<DBase::Result> r_info(conn->exec(info_query));
-      std::auto_ptr<DBase::ResultIterator> it(r_info->getIterator());
-      for (it->first(); !it->isDone(); it->next()) {
-        DBase::ID rid = it->getNextValue();
-        std::string ico = it->getNextValue();
-        std::string dic = it->getNextValue();
-        std::string var_symb = it->getNextValue();
-        bool vat = ((std::string)it->getNextValue() == "t");
-        std::string handle = it->getNextValue();
-        std::string name = it->getNextValue();
-        std::string url = it->getNextValue();
-        std::string organization = it->getNextValue();
-        std::string street1 = it->getNextValue();
-        std::string street2 = it->getNextValue();
-        std::string street3 = it->getNextValue();
-        std::string city = it->getNextValue();
-        std::string province = it->getNextValue();
-        std::string postal_code = it->getNextValue();
-        std::string country = it->getNextValue();
-        std::string telephone = it->getNextValue();
-        std::string fax = it->getNextValue();
-        std::string email = it->getNextValue();
-        bool system = ((std::string)it->getNextValue() == "t");
-        unsigned long credit = 0;
+      std::auto_ptr<Database::Connection> conn(dbm->getConnection());
+      Database::Result r_info = conn->exec(info_query);
+      for (Database::Result::Iterator it = r_info.begin(); it != r_info.end(); ++it) {
+        Database::Row::Iterator col = (*it).begin();
+
+        Database::ID  rid          = *col;
+        std::string   ico          = *(++col);
+        std::string   dic          = *(++col);
+        std::string   var_symb     = *(++col);
+        bool          vat          = *(++col);
+        std::string   handle       = *(++col);
+        std::string   name         = *(++col);
+        std::string   url          = *(++col);
+        std::string   organization = *(++col);
+        std::string   street1      = *(++col);
+        std::string   street2      = *(++col);
+        std::string   street3      = *(++col);
+        std::string   city         = *(++col);
+        std::string   province     = *(++col);
+        std::string   postal_code  = *(++col);
+        std::string   country      = *(++col);
+        std::string   telephone    = *(++col);
+        std::string   fax          = *(++col);
+        std::string   email        = *(++col);
+        bool          system       = *(++col);
+        unsigned long credit       = 0;
 
         data_.push_back(new RegistrarImpl(
                 db,
@@ -635,53 +643,55 @@ public:
                 credit));
       }
 
-      DBase::SelectQuery credit_query;
+      if (data_.empty())
+        return;
+      
+      Database::SelectQuery credit_query;
       credit_query.select() << "zone, registrarid, COALESCE(SUM(credit), 0)";
       credit_query.from() << "invoice";
       credit_query.group_by() << "registrarid, zone";
       credit_query.order_by() << "registrarid";
 
-      std::auto_ptr<DBase::Result> r_credit(conn->exec(credit_query));
-      std::auto_ptr<DBase::ResultIterator> cit(r_credit->getIterator());
-      for (cit->first(); !cit->isDone(); cit->next()) {
-        DBase::ID zone_id = cit->getNextValue();
-        DBase::ID registrar_id = cit->getNextValue();
-        unsigned long credit = cit->getNextValue();
+      resetIDSequence();
+      Database::Result r_credit = conn->exec(credit_query);
+      for (Database::Result::Iterator it = r_credit.begin(); it != r_credit.end(); ++it) {
+        Database::Row::Iterator col = (*it).begin();
+
+        Database::ID  zone_id      = *col;
+        Database::ID  registrar_id = *(++col);
+        unsigned long credit       = *(++col);
         
-        try {
-          RegistrarImpl *registrar_ptr = dynamic_cast<RegistrarImpl* >(findId(registrar_id));
+        RegistrarImpl *registrar_ptr = dynamic_cast<RegistrarImpl* >(findIDSequence(registrar_id));
+        if (registrar_ptr) {
           registrar_ptr->setCredit(zone_id, credit);
-        }
-        catch (Register::NOT_FOUND) {
-          continue;
         }
       }
       
-      DBase::SelectQuery acl_query;
+      resetIDSequence();
+      Database::SelectQuery acl_query;
       acl_query.select() << "id, registrarid, cert, password ";
       acl_query.from() << "registraracl";
       acl_query.order_by() << "registrarid";
       
-      std::auto_ptr<DBase::Result> r_acl(conn->exec(acl_query));
-      std::auto_ptr<DBase::ResultIterator> ait(r_acl->getIterator());
-      for (ait->first(); !ait->isDone(); ait->next()) {
-        DBase::ID acl_id = ait->getNextValue();
-        DBase::ID registrar_id = ait->getNextValue();
-        std::string cert_md5 = ait->getNextValue();
-        std::string password = ait->getNextValue();
+      Database::Result r_acl = conn->exec(acl_query);
+      for (Database::Result::Iterator it = r_acl.begin(); it != r_acl.end(); ++it) {
+        Database::Row::Iterator col = (*it).begin();
 
-        try {
-          RegistrarImpl *registrar_ptr = dynamic_cast<RegistrarImpl* >(findId(registrar_id));
+        Database::ID acl_id       = *col;
+        Database::ID registrar_id = *(++col);
+        std::string  cert_md5     = *(++col);
+        std::string  password     = *(++col);
+
+        RegistrarImpl *registrar_ptr = dynamic_cast<RegistrarImpl* >(findIDSequence(registrar_id));
+        if (registrar_ptr) {
           registrar_ptr->putACL(acl_id, cert_md5, password);
         }
-        catch (Register::NOT_FOUND) {
-          continue;
-        }
-
-      }      
+      }
+      /* checks if row number result load limit is active and set flag */ 
+      CommonListImpl::reload();
     }
-    catch (DBase::Exception& ex) {
-      LOGGER("db").error(boost::format("%1%") % ex.what());
+    catch (Database::Exception& ex) {
+      LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
     }
   }
 //  virtual const Registrar* get(unsigned idx) const {
@@ -703,16 +713,16 @@ public:
     } 
   }
   
-//  Registrar* findId(DBase::ID _id) const throw (Register::NOT_FOUND) {
+//  Registrar* findId(Database::ID _id) const throw (Register::NOT_FOUND) {
 //    RegistrarListType::const_iterator it = std::find_if(data_.begin(),
 //                                                        data_.end(),
 //                                                        CheckId(_id));
 //    if (it != data_.end()) {
-//      LOGGER("register").debug(boost::format("object list hit! object id=%1% found")
+//      LOGGER(PACKAGE).debug(boost::format("object list hit! object id=%1% found")
 //          % _id);
 //      return *it;
 //    }
-//    LOGGER("register").debug(boost::format("object list miss! object id=%1% not found")
+//    LOGGER(PACKAGE).debug(boost::format("object list miss! object id=%1% not found")
 //        % _id);
 //    throw Register::NOT_FOUND();
 //  }
@@ -762,10 +772,13 @@ class EPPActionImpl : public CommonObjectImpl,
   ptime startTime;
   std::string serverTransactionId;
   std::string clientTransactionId;
-  std::string message;
   unsigned result;
+  TID registrarId;
   std::string registrarHandle;
   std::string handle;
+  std::string message;
+  std::string message_out;
+  
 public:
   EPPActionImpl(TID _id,
                 TID _sessionId,
@@ -774,14 +787,17 @@ public:
                 ptime _startTime,
                 const std::string& _serverTransactionId,
                 const std::string& _clientTransactionId,
-                const std::string& _message,
                 unsigned _result,
+                TID _registrarId,
                 const std::string& _registrarHandle,
-                const std::string& _handle) :
+                const std::string& _handle,
+                const std::string& _message = std::string(),
+                const std::string& _message_out = std::string()) :
     CommonObjectImpl(_id), sessionId(_sessionId), type(_type), typeName(_typeName),
         startTime(_startTime), serverTransactionId(_serverTransactionId),
-        clientTransactionId(_clientTransactionId), message(_message),
-        result(_result), registrarHandle(_registrarHandle), handle(_handle) {
+        clientTransactionId(_clientTransactionId), result(_result), registrarId(_registrarId),
+        registrarHandle(_registrarHandle), handle(_handle), 
+        message(_message), message_out(_message_out) {
   }
   
   virtual TID getSessionId() const {
@@ -802,14 +818,20 @@ public:
   virtual const std::string& getClientTransactionId() const {
     return clientTransactionId;
   }
-  virtual const std::string& getEPPMessage() const {
+  virtual const std::string& getEPPMessageIn() const {
     return message;
+  }
+  virtual const std::string& getEPPMessageOut() const {
+    return message_out;
   }
   virtual unsigned getResult() const {
     return result;
   }
   virtual std::string getResultStatus() const {
     return (result < 2000 && result) ? "OK" : "FAILED";
+  }
+  virtual TID getRegistrarId() const {
+    return registrarId;
   }
   virtual const std::string& getRegistrarHandle() const {
     return registrarHandle;
@@ -827,16 +849,24 @@ public:
  */
 
 #undef COMPARE_CLASS_IMPL
-#define COMPARE_CLASS_IMPL(_object_type, _by_what)                     \
-class EPPActionCompare##_by_what {                                     \
-public:                                                                \
-  EPPActionCompare##_by_what(bool _asc) : m_asc(_asc) { }              \
-  bool operator()(Register::CommonObject *_left, Register::CommonObject *_right) const {   \
-    bool result = (dynamic_cast<_object_type* >(_left)->get##_by_what() <= dynamic_cast<_object_type* >(_right)->get##_by_what()); \
-    return (m_asc && result) || (!m_asc && !result);                   \
-}                                                                      \
-private:                                                               \
-  bool m_asc;                                                          \
+#define COMPARE_CLASS_IMPL(_object_type, _by_what)                        \
+class EPPActionCompare##_by_what {                                        \
+public:                                                                   \
+  EPPActionCompare##_by_what(bool _asc) : asc_(_asc) { }                  \
+  bool operator()(Register::CommonObject *_left,                          \
+                  Register::CommonObject *_right) const {                 \
+    _object_type *l_casted = dynamic_cast<_object_type *>(_left);         \
+    _object_type *r_casted = dynamic_cast<_object_type *>(_right);        \
+    if (l_casted == 0 || r_casted == 0) {                                 \
+      /* this should never happen */                                      \
+      throw std::bad_cast();                                              \
+    }                                                                     \
+                                                                          \
+    bool result = l_casted->get##_by_what() <= r_casted->get##_by_what(); \
+    return (asc_ && result) || (!asc_ && !result);  	                    \
+}                                                                         \
+private:                                                                  \
+  bool asc_;                                                              \
 };
 
 
@@ -928,12 +958,12 @@ public:
     clear();
     std::ostringstream sql;
     sql << "SELECT a.id,a.clientid,a.action,ea.status,a.startdate,"
-        << "a.servertrid,a.clienttrid,";
+        << "a.servertrid,a.clienttrid, a.response,r.id,r.handle,MIN(al.value) ";
     if (partialLoad)
-      sql << "'',";
+      sql << ",'','' ";
     else
-      sql << "ax.xml,";
-    sql << "a.response,r.handle,MIN(al.value) " << "FROM action a "
+      sql << ",ax.xml,ax.xml_out ";
+    sql << "FROM action a "
         << "JOIN enum_action ea ON (a.action=ea.id) "
         << "JOIN enum_error er ON (a.response=er.id) "
         << "JOIN login l ON (l.id=a.clientid) "
@@ -960,7 +990,7 @@ public:
     sql << "GROUP BY a.id,a.clientid,a.action,ea.status,a.startdate,"
         << "a.servertrid,a.clienttrid,a.response,r.handle ";
     if (!partialLoad)
-      sql << ",ax.xml ";
+      sql << ",ax.xml,ax.xml_out ";
     sql << "LIMIT 1000";
     if (!db->ExecSelect(sql.str().c_str()))
       throw SQL_ERROR();
@@ -973,10 +1003,12 @@ public:
           ptime(time_from_string(db->GetFieldValue(i,4))),
           db->GetFieldValue(i,5),
           db->GetFieldValue(i,6),
-          DB_NULL_STR(i,7),
-          DB_NULL_INT(i,8),
+          DB_NULL_INT(i,7),
+          STR_TO_ID(db->GetFieldValue(i,8)),
           DB_NULL_STR(i,9),
-          DB_NULL_STR(i,10)
+          DB_NULL_STR(i,10),
+          DB_NULL_STR(i,11),
+          DB_NULL_STR(i,12)
       ));
     }
     db->FreeSelect();
@@ -1011,81 +1043,104 @@ public:
     result = EARF_ALL;
     partialLoad = false;
   }
-  virtual void reload2(DBase::Filters::Union &uf, DBase::Manager *dbm) {
-    TRACE("[CALL] EPPActionListImpl::reload2()");
+  virtual void reload(Database::Filters::Union &uf, Database::Manager *dbm) {
+    TRACE("[CALL] EPPActionListImpl::reload()");
     clear();
     uf.clearQueries();
 
     // TEMP: should be cached for quicker
-    std::map<DBase::ID, std::string> registrars_table;
+    std::map<Database::ID, std::string> registrars_table;
 
-    DBase::SelectQuery id_query;
-    DBase::Filters::Union::iterator fit = uf.begin();
+    bool at_least_one = false;
+    Database::SelectQuery id_query;
+    Database::Filters::Union::iterator fit = uf.begin();
     for (; fit != uf.end(); ++fit) {
-      DBase::Filters::EppAction *eaf =
-          dynamic_cast<DBase::Filters::EppAction*>(*fit);
+      Database::Filters::EppAction *eaf =
+          dynamic_cast<Database::Filters::EppAction*>(*fit);
       if (!eaf)
         continue;
-      DBase::SelectQuery *tmp = new DBase::SelectQuery();
+
+      Database::SelectQuery *tmp = new Database::SelectQuery();
       tmp->addSelect("id", eaf->joinActionTable());
       uf.addQuery(tmp);
+      at_least_one = true;
     }
-    id_query.limit(5000);
+    if (!at_least_one) {
+      LOGGER(PACKAGE).error("wrong filter passed for reload!");
+      return;
+    }
+
+    id_query.limit(load_limit_);
     uf.serialize(id_query);
 
-    DBase::InsertQuery tmp_table_query =
-        DBase::InsertQuery("tmp_eppaction_filter_result", id_query);
-    LOGGER("db").debug(boost::format("temporary table '%1%' generated sql = %2%")
+    Database::InsertQuery tmp_table_query = Database::InsertQuery("tmp_eppaction_filter_result", id_query);
+    LOGGER(PACKAGE).debug(boost::format("temporary table '%1%' generated sql = %2%")
         % "tmp_eppaction_filter_result" % tmp_table_query.str());
 
-    DBase::SelectQuery object_info_query;
+    Database::SelectQuery object_info_query;
     object_info_query.select()
         << "t_1.id, t_1.clientid, t_1.action, t_2.status, t_1.startdate, "
         << "t_1.servertrid, t_1.clienttrid, t_1.response, "
         << "t_4.registrarid, MIN(t_5.value)";
+    if (!partialLoad) {
+      object_info_query.select() << ", t_6.xml, t_6.xml_out";
+    }
+    else {
+      object_info_query.select() << ", '', ''";
+    }
     object_info_query.from() << "tmp_eppaction_filter_result tmp "
-        << "JOIN action t_1 ON(tmp.id = t_1.id) "
-        << "JOIN enum_action t_2 ON (t_1.action = t_2.id) "
-        << "JOIN enum_error t_3 ON (t_1.response = t_3.id) "
-        << "JOIN login t_4 ON (t_1.clientid = t_4.id) "
-        << "LEFT JOIN action_elements t_5 ON (t_1.id = t_5.actionid)";
+                             << "JOIN action t_1 ON(tmp.id = t_1.id) "
+                             << "JOIN enum_action t_2 ON (t_1.action = t_2.id) "
+                             << "LEFT JOIN enum_error t_3 ON (t_1.response = t_3.id) "
+                             << "LEFT JOIN login t_4 ON (t_1.clientid = t_4.id) "
+                             << "LEFT JOIN action_elements t_5 ON (t_1.id = t_5.actionid)";
+    if (!partialLoad)
+      object_info_query.from() << "LEFT JOIN action_xml t_6 ON (t_1.id = t_6.actionid) ";
+
     object_info_query.order_by() << "tmp.id";
     object_info_query.group_by() << "t_1.id, t_1.clientid, t_1.action, "
-        << "tmp.id, t_2.status, t_1.startdate, t_1.servertrid, t_1.clienttrid, "
-        << "t_1.response, t_4.registrarid";
+                                 << "tmp.id, t_2.status, t_1.startdate, t_1.servertrid, t_1.clienttrid, "
+                                 << "t_1.response, t_4.registrarid";
+    if (!partialLoad) {
+      object_info_query.group_by() << ", t_6.xml, t_6.xml_out";
+    }
 
     try {
-      std::auto_ptr<DBase::Connection> conn(dbm->getConnection());
+      std::auto_ptr<Database::Connection> conn(dbm->getConnection());
 
-      DBase::Query create_tmp_table("SELECT create_tmp_table('" + std::string("tmp_eppaction_filter_result") + "')");
-      std::auto_ptr<DBase::Result> r_create_tmp_table(conn->exec(create_tmp_table));
+      Database::Query create_tmp_table("SELECT create_tmp_table('" + std::string("tmp_eppaction_filter_result") + "')");
+      conn->exec(create_tmp_table);
       conn->exec(tmp_table_query);
 
       // TEMP: should be cached somewhere
-      DBase::Query registrars_query("SELECT id, handle FROM registrar");
-      std::auto_ptr<DBase::Result> r_registrars(conn->exec(registrars_query));
-      std::auto_ptr<DBase::ResultIterator> rit(r_registrars->getIterator());
-      for (rit->first(); !rit->isDone(); rit->next()) {
-        DBase::ID id = rit->getNextValue();
-        std::string handle = rit->getNextValue();
+      Database::Query registrars_query("SELECT id, handle FROM registrar");
+      Database::Result r_registrars = conn->exec(registrars_query);
+      Database::Result::Iterator it = r_registrars.begin();
+      for (; it != r_registrars.end(); ++it) {
+        Database::Row::Iterator col = (*it).begin();
+
+        Database::ID      id = *col;
+        std::string   handle = *(++col);
         registrars_table[id] = handle;
       }
 
-      std::auto_ptr<DBase::Result> r_info(conn->exec(object_info_query));
-      std::auto_ptr<DBase::ResultIterator> it(r_info->getIterator());
-      for (it->first(); !it->isDone(); it->next()) {
-        DBase::ID aid = it->getNextValue();
-        DBase::ID clid = it->getNextValue();
-        unsigned type = it->getNextValue();
-        std::string type_name = it->getNextValue();
-        DBase::DateTime start_time = it->getNextValue();
-        std::string server_trid = it->getNextValue();
-        std::string client_trid = it->getNextValue();
-        std::string message = "not filled";
-        unsigned result = it->getNextValue();
-        DBase::ID registrar_id = it->getNextValue();
-        std::string registrar_handle = registrars_table[registrar_id];
-        std::string object_handle = it->getNextValue();
+      Database::Result r_info = conn->exec(object_info_query);
+      for (Database::Result::Iterator it = r_info.begin(); it != r_info.end(); ++it) {
+        Database::Row::Iterator col = (*it).begin();
+
+        Database::ID       aid              = *col;
+        Database::ID       clid             = *(++col);
+        unsigned           type             = *(++col);
+        std::string        type_name        = *(++col);
+        Database::DateTime start_time       = *(++col);
+        std::string        server_trid      = *(++col);
+        std::string        client_trid      = *(++col);
+        unsigned           result           = *(++col);
+        Database::ID       registrar_id     = *(++col);
+        std::string        registrar_handle = registrars_table[registrar_id];
+        std::string        object_handle    = *(++col);
+        std::string        message          = *(++col);
+        std::string        message_out      = *(++col);
 
         data_.push_back(
             new EPPActionImpl(
@@ -1096,15 +1151,19 @@ public:
                 start_time,
                 server_trid,
                 client_trid,
-                message,
                 result,
+                registrar_id,
                 registrar_handle,
-                object_handle
+                object_handle,
+                message,
+                message_out
             ));
       }
+      /* checks if row number result load limit is active and set flag */ 
+      CommonListImpl::reload();
     }
-    catch (DBase::Exception& ex) {
-      LOGGER("db").error(boost::format("%1%") % ex.what());
+    catch (Database::Exception& ex) {
+      LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
     }
   }
   virtual void setPartialLoad(bool _partialLoad) {
@@ -1151,32 +1210,23 @@ class ManagerImpl : virtual public Manager {
   DB *db; ///< connection do db
   RegistrarListImpl rl;
   EPPActionListImpl eal;
-  std::vector<std::string> actionTypes;
+  std::vector<EPPActionType> actionTypes;
 public:
   ManagerImpl(DB *_db) :
     db(_db), rl(_db), eal(db) {
-    // TODO SQL load
-    actionTypes.push_back("DomainCreate");
-    actionTypes.push_back("ContactCreate");
-    actionTypes.push_back("NSSetCreate");
-    actionTypes.push_back("ContactUpdate");
-    actionTypes.push_back("DomainUpdate");
-    actionTypes.push_back("NSSetUpdate");
-    actionTypes.push_back("ContactDelete");
-    actionTypes.push_back("DomainDelete");
-    actionTypes.push_back("NSSetDelete");
-    actionTypes.push_back("ContactTransfer");
-    actionTypes.push_back("DomainTransfer");
-    actionTypes.push_back("NSSetTransfer");
-    actionTypes.push_back("ContactCheck");
-    actionTypes.push_back("DomainCheck");
-    actionTypes.push_back("NSSetCheck");
-    actionTypes.push_back("ContactInfo");
-    actionTypes.push_back("DomainInfo");
-    actionTypes.push_back("NSSetInfo");
-    actionTypes.push_back("DomainRenew");
-    actionTypes.push_back("ClientLogin");
-    actionTypes.push_back("ClientLogout");
+    
+    if (!db->ExecSelect("SELECT * FROM enum_action")) {
+      throw SQL_ERROR();
+    }
+    
+    actionTypes.clear();
+    for (unsigned i = 0; i < (unsigned)db->GetSelectRows(); i++) {
+      EPPActionType action;
+      action.id = STR_TO_ID(db->GetFieldValue(i, 0));
+      action.name = db->GetFieldValue(i, 1);
+      actionTypes.push_back(action);
+    }
+    db->FreeSelect();    
   }
   virtual RegistrarList *getList() {
     return &rl;
@@ -1184,10 +1234,14 @@ public:
   virtual EPPActionList *getEPPActionList() {
     return &eal;
   }
+  virtual EPPActionList *createEPPActionList() {
+    return new EPPActionListImpl(db);
+  }
+  
   virtual unsigned getEPPActionTypeCount() {
     return actionTypes.size();
   }
-  virtual const std::string& getEPPActionTypeByIdx(unsigned idx) const
+  virtual const EPPActionType& getEPPActionTypeByIdx(unsigned idx) const
       throw (NOT_FOUND) {
     if (idx >= actionTypes.size())
       throw NOT_FOUND();

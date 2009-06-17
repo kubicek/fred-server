@@ -233,11 +233,11 @@ public:
     const char *table, const char *vname, const char *fname, int numeric);
   int GetSequenceID(
     const char *sequence); // get  id from  sequence 
-  // test   contactid at the table  nsset_contact_map or  domain_contact_map 
+  // test   contactid at the table  nsset_contact_map or  domain_contact_map or keyset_contact_map
   bool CheckContactMap(
     const char * table, int id, int contactid, int role);
-  //  add conaxctID to the table nsset_contact_map or  domain_contact_map
-
+  
+  //  add conaxctID to the table nsset_contact_map or  domain_contact_map or keyset_contact_map
   bool AddContactMap(
     const char * table, int id, int contactid);
 
@@ -255,6 +255,16 @@ public:
   // return  id of domain  ( special for enum )
   int GetDomainID(
     const char *fqdn, bool enum_zone);
+  // return id of keyset
+  int GetKeySetID(const char *handle);
+
+  // return id of dsrecord
+  int GetDSRecordId(int keysetId, int keytag, int alg, int digesttype, const char *digest, int maxsiglife);
+  int GetDSRecordId(int keytag, int alg, int digesttype, const char *digest, int maxsiglife);
+  
+  // return id of dnskey
+  int GetDNSKeyId(int keysetId, int flags, int protocol, int alg, const char *key);
+  int GetDNSKeyId(int flags, int protocol, int alg, const char *key);
 
   //  save update for   object  id  by registrar regID and optionly save authInfo ( password)
   bool ObjectUpdate(
@@ -307,6 +317,10 @@ public:
   int GetNSSetContacts(
     int nssetID);
 
+  int GetKeySetDSRecords(int keysetID);
+  int GetKeySetContacts(int keysetid);
+  int GetKeySetDNSKeys(int keysetID);
+
   int GetRegistrarID(
     const char *handle)
   {
@@ -341,11 +355,12 @@ public:
   int GetClientDomainRegistrant(
     int clID, int contactID);
 
-  // test contacts and nsset relation for linked status
+  // test contacts, nsset and keyset relation for linked status
   bool TestNSSetRelations(
     int id);
   bool TestContactRelations(
     int id);
+  bool TestKeySetRelations(int id);
 
   bool AuthTable(
     const char *table, const char *auth, int id);
@@ -372,6 +387,8 @@ public:
     const char * handle, int days);
   bool TestDomainFQDNHistory(
     const char * fqdn, int days);
+  bool TestKeySetHandleHistory(
+          const char *handle, int days);
 
   // general fuction
   bool TestObjectHistory(
@@ -392,6 +409,9 @@ public:
     int id);
   bool DeleteContactObject(
     int id);
+
+  bool SaveKeySetHistory(int id);
+  bool DeleteKeySetObject(int id);
 
   /// SQL language 
 

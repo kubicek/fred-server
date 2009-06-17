@@ -113,13 +113,23 @@ namespace Register
       Domain::Manager *dm;
       Contact::Manager *cm;
       NSSet::Manager *nm;
+      KeySet::Manager *km;
      public:
       ManagerImpl(
         DB *_db, Domain::Manager *_dm, 
-        NSSet::Manager *_nm, Contact::Manager *_cm
-      ) : db(_db), dm(_dm), cm(_cm), nm(_nm)
+        NSSet::Manager *_nm, Contact::Manager *_cm, KeySet::Manager *_km
+      ) : db(_db), dm(_dm), cm(_cm), nm(_nm), km(_km)
       {}
-      #define LIST(type) (dynamic_cast<type *>(list.get()))
+
+
+      #define LIST_DOWNCAST_AND_CHECK(_type)          \
+      _type *tmp = dynamic_cast<_type* >(list.get()); \
+      if (!tmp) {                                     \
+        throw std::bad_cast();                        \
+      }
+
+      #define LIST_DOWNCAST_CALL(_meth) tmp->_meth;
+
       virtual unsigned long info(
         TID registrar, Type infotype, const std::string& request
       ) throw (SQL_ERROR, INVALID_REGISTRAR)
@@ -130,39 +140,93 @@ namespace Register
         std::auto_ptr<Register::ObjectList> list;        
         switch (infotype) {
           case T_LIST_DOMAINS :
-            list.reset(dm->createList());
-            LIST(Register::Domain::List)->setRegistrarFilter(registrar);
+            {
+              list.reset(dm->createList());
+              LIST_DOWNCAST_AND_CHECK(Register::Domain::List)
+              LIST_DOWNCAST_CALL(setRegistrarFilter(registrar))
+            }
             break;
+
           case T_DOMAINS_BY_NSSET:
-            list.reset(dm->createList());
-            LIST(Register::Domain::List)->setNSSetHandleFilter(request);
+            {
+              list.reset(dm->createList());
+              LIST_DOWNCAST_AND_CHECK(Register::Domain::List)
+              LIST_DOWNCAST_CALL(setNSSetHandleFilter(request))
+            }
             break;
+
           case T_DOMAINS_BY_CONTACT:
-            list.reset(dm->createList());
-            list->setWildcardExpansion(false);
-            LIST(Register::Domain::List)->setRegistrantHandleFilter(request);
-            list->fillTempTable(false);
-            LIST(Register::Domain::List)->setRegistrantHandleFilter("");
-            LIST(Register::Domain::List)->setAdminHandleFilter(request);
-            list->fillTempTable(false);
-            LIST(Register::Domain::List)->setAdminHandleFilter("");
-            LIST(Register::Domain::List)->setTempHandleFilter(request);
+            {
+              list.reset(dm->createList());
+              LIST_DOWNCAST_AND_CHECK(Register::Domain::List)
+
+              list->setWildcardExpansion(false);
+              LIST_DOWNCAST_CALL(setRegistrantHandleFilter(request))
+
+              list->fillTempTable(false);
+              LIST_DOWNCAST_CALL(setRegistrantHandleFilter(""))
+              LIST_DOWNCAST_CALL(setAdminHandleFilter(request))
+              
+              list->fillTempTable(false);
+              LIST_DOWNCAST_CALL(setAdminHandleFilter(""));
+              LIST_DOWNCAST_CALL(setTempHandleFilter(request))
+            }
             break;
+
+          case T_DOMAINS_BY_KEYSET:
+            {
+              list.reset(dm->createList());
+              LIST_DOWNCAST_AND_CHECK(Register::Domain::List)
+              LIST_DOWNCAST_CALL(setKeySetHandleFilter(request))
+            }
+            break;
+
           case T_LIST_NSSETS:
-            list.reset(nm->createList());
-            LIST(Register::NSSet::List)->setRegistrarFilter(registrar);
+            {
+              list.reset(nm->createList());
+              LIST_DOWNCAST_AND_CHECK(Register::NSSet::List)
+              LIST_DOWNCAST_CALL(setRegistrarFilter(registrar))
+            }
             break;
+
+          case T_LIST_KEYSETS:
+            {
+              list.reset(km->createList());
+              LIST_DOWNCAST_AND_CHECK(Register::KeySet::List)
+              LIST_DOWNCAST_CALL(setRegistrarFilter(registrar))
+            }
+            break;
+
           case T_NSSETS_BY_CONTACT:
-            list.reset(nm->createList());
-            LIST(Register::NSSet::List)->setAdminFilter(request);
+            {
+              list.reset(nm->createList());
+              LIST_DOWNCAST_AND_CHECK(Register::NSSet::List)
+              LIST_DOWNCAST_CALL(setAdminFilter(request))
+            }
             break;
+
+          case T_KEYSETS_BY_CONTACT:
+            {
+              list.reset(km->createList());
+              LIST_DOWNCAST_AND_CHECK(Register::KeySet::List)
+              LIST_DOWNCAST_CALL(setAdminFilter(request))
+            }
+            break;
+
           case T_NSSETS_BY_NS:
-            list.reset(nm->createList());
-            LIST(Register::NSSet::List)->setHostNameFilter(request);
+            {
+              list.reset(nm->createList());
+              LIST_DOWNCAST_AND_CHECK(Register::NSSet::List)
+              LIST_DOWNCAST_CALL(setHostNameFilter(request))
+            }
             break;
+
           case T_LIST_CONTACTS:
-            list.reset(cm->createList());
-            LIST(Register::Contact::List)->setRegistrarFilter(registrar);
+            {
+              list.reset(cm->createList());
+              LIST_DOWNCAST_AND_CHECK(Register::Contact::List)
+              LIST_DOWNCAST_CALL(setRegistrarFilter(registrar))
+            }
             break;
         };
         list->setWildcardExpansion(false);
@@ -221,10 +285,10 @@ namespace Register
       }
     };
     Manager *Manager::create(
-      DB *db, Domain::Manager *dm, NSSet::Manager *nm, Contact::Manager *cm
+      DB *db, Domain::Manager *dm, NSSet::Manager *nm, Contact::Manager *cm, KeySet::Manager *km
     )
     {
-      return new ManagerImpl(db,dm,nm,cm);
+      return new ManagerImpl(db,dm,nm,cm, km);
     }
   };
 };

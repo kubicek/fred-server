@@ -21,6 +21,7 @@
 #include "old_utils/dbsql.h"
 #include <boost/date_time/gregorian/gregorian.hpp>
 #include <sstream>
+#include "log/logger.h"
 
 using namespace boost::gregorian;
 
@@ -156,6 +157,12 @@ namespace Register
             sql << "SELECT DISTINCT c.email "
                 << "FROM nsset_contact_map ncm, contact c "
                 << "WHERE ncm.contactid=c.id AND ncm.nssetid=" << objectId;
+            break;
+          case OT_KEYSET:
+            sql << "SELECT DICTINCT c.email "
+                << "FROM keyset_contact_map kcm, contact c "
+                << "WHERE kcm.contactid=c.id AND kcm.keysetid="
+                << objectId;
             break;
         };
         if (!db->ExecSelect(sql.str().c_str())) throw SQL_ERROR();
@@ -386,7 +393,8 @@ namespace Register
 #define SQL_RS(x) ((x) == 1 ? RS_NEW : \
                   ((x) == 2 ? RS_ANSWERED : RS_INVALID))       
 #define SQL_OT(x) ((x) == 3 ? OT_DOMAIN : \
-                  ((x) == 1 ? OT_CONTACT : OT_NSSET))       
+                  ((x) == 1 ? OT_CONTACT : \
+                  ((x) == 2 ? OT_NSSET : OT_KEYSET)))
       virtual void reload() throw (SQL_ERROR)
       {
         clear();
@@ -529,14 +537,14 @@ namespace Register
 	        // TODO: how to handle this?
         }
       }
-      #define OT_ID(x) ((x) == OT_CONTACT ? 1 : (x) == OT_NSSET ? 2 : 3)
+      #define OT_ID(x) ((x) == OT_CONTACT ? 1 : (x) == OT_NSSET ? 2 : (x) == OT_DOMAIN ? 3 : 4)
       void getRequestPDF(
         TID id, const std::string& lang, std::ostream& out
       ) throw (REQUEST_NOT_FOUND, SQL_ERROR, Document::Generator::ERROR)
       {
         if (!docman) {
-          // TODO: log error
-          return;
+            LOGGER(PACKAGE).error("docman is wrong!");
+            return;
         }
         ListImpl l(mm,db);
         l.setIdFilter(id);

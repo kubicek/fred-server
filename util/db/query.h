@@ -10,10 +10,11 @@
 #include <cstring>
 #include <boost/utility.hpp>
 #include <boost/format.hpp>
-#include "sql_helper_objects.h"
-#include "db_value.h"
 
-namespace DBase {
+#include "sql_helper_objects.h"
+#include "value.h"
+
+namespace Database {
 
 /*
  * Base Query class
@@ -87,7 +88,11 @@ public:
 		return order_by_s;
 	}
 	void limit(unsigned _n) {
-		limit_r = _n;
+	  /*
+	   *  HACK: + 1 added to get to know if load limit value is used or not
+	   *  it should be propably at the callee side
+	   */
+		limit_r = _n + 1;
 	}
 	
 	void clear();

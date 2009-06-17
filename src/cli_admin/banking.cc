@@ -26,6 +26,7 @@
 #include "old_utils/dbsql.h"
 #include "old_utils/util.h"
 #include "old_utils/log.h"
+#include "log/logger.h"
 
 // make advane invoice from bank statement
 struct invBANK
@@ -127,12 +128,11 @@ bool factoring_all(const char *database, const char *zone_fqdn,
               }
 
             }
-            delete[] regID;
           }
-
+          delete[] regID;
         }
       } else
-        LOG( LOG_ERR , "unkow zone %s\n" , zone_fqdn );
+        LOG( LOG_ERR , "unkown zone %s\n" , zone_fqdn );
 
       db.QuitTransaction(ret);
     }

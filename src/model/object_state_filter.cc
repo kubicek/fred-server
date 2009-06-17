@@ -1,6 +1,6 @@
 #include "object_state_filter.h"
 
-namespace DBase {
+namespace Database {
 namespace Filters {
 
 ObjectStateImpl::ObjectStateImpl() {
@@ -13,21 +13,24 @@ Table& ObjectStateImpl::joinObjectStateTable() {
   return joinTable("object_state");
 }
 
-Value<int>& ObjectStateImpl::addId() {
-  Value<int> *tmp = new Value<int>(Column("state_id", joinObjectStateTable()));
+Value<Database::ID>& ObjectStateImpl::addStateId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("state_id", joinObjectStateTable()));
   add(tmp);
+  tmp->setName("StateId");
   return *tmp;
 }
 
-Interval<DBase::DateTimeInterval>& ObjectStateImpl::addValidFrom() {
-  Interval<DBase::DateTimeInterval> *tmp = new Interval<DBase::DateTimeInterval>(Column("valid_from", joinObjectStateTable()));
+Interval<Database::DateTimeInterval>& ObjectStateImpl::addValidFrom() {
+  Interval<Database::DateTimeInterval> *tmp = new Interval<Database::DateTimeInterval>(Column("valid_from", joinObjectStateTable()));
   add(tmp);
+  tmp->setName("ValidFrom");
   return *tmp;
 }
 
-Interval<DBase::DateTimeInterval>& ObjectStateImpl::addValidTo() {
-  Interval<DBase::DateTimeInterval> *tmp = new Interval<DBase::DateTimeInterval>(Column("valid_to", joinObjectStateTable()));
+Interval<Database::DateTimeInterval>& ObjectStateImpl::addValidTo() {
+  Interval<Database::DateTimeInterval> *tmp = new Interval<Database::DateTimeInterval>(Column("valid_to", joinObjectStateTable()));
   add(tmp);
+  tmp->setName("ValidTo");
   return *tmp;
 }
 

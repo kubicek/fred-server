@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.59)
-AC_INIT([fred-server], [1.10.1])
+AC_INIT([fred-server], [2.1.0])
 AC_CONFIG_SRCDIR(src/corba/server.cc)
 AC_CONFIG_HEADER([config.h])
 AC_CONFIG_MACRO_DIR([m4])
@@ -46,7 +46,7 @@ PKG_PROG_PKG_CONFIG
 AC_CHECK_LIB([pthread], [pthread_exit])
 
 # Check for omniORB
-PKG_CHECK_MODULES(OMNIORB4, [omniORB4, omniDynamic4, omnithread3])
+PKG_CHECK_MODULES(OMNIORB4, [omniORB4 != 4.1.1, omniDynamic4, omnithread3])
 
 AX_BOOST_BASE
 AX_BOOST_DATE_TIME
@@ -119,13 +119,19 @@ AC_ARG_WITH([nshost], [AS_HELP_STRING([--with-nshost],
 			[AC_SUBST([NSHOST], [$withval])],
 			[AC_SUBST([NSHOST], [localhost])])
 
+# corba nameservice port
+AC_ARG_WITH([nsport], [AS_HELP_STRING([--with-nsport],
+			[CORBA nameservice port [2809]])],
+			[AC_SUBST([NSPORT], [$withval])],
+			[AC_SUBST([NSPORT], [2809])])
+
 # corba nameservice context
 AC_ARG_WITH([nscontext], [AS_HELP_STRING([--with-nscontext],
 			[CORBA nameservice context name [fred]])],
-			[AC_SUBST([contextname], [$withval])],
-			[AC_SUBST([contextname], [fred])])
+			[AC_SUBST([NSCONTEXT], [$withval])],
+			[AC_SUBST([NSCONTEXT], [fred])])
 #put context name into config.h file
-AC_DEFINE_UNQUOTED([CONTEXT_NAME], [["]$contextname["]], [name of CORBA context])
+AC_DEFINE_UNQUOTED([CONTEXT_NAME], [["]$NSCONTEXT["]], [name of CORBA Nameservice context])
 
 # cirba rifd port
 AC_ARG_WITH([rifdport], [AS_HELP_STRING([--with-rifdport],
@@ -151,9 +157,13 @@ AS_AC_EXPAND([DATAROOTDIR], [$datarootdir])
 AS_AC_EXPAND([SBINDIR], [$sbindir])
 AS_AC_EXPAND([SYSCONFDIR], [$sysconfdir])
 AS_AC_EXPAND([LOCALSTATEDIR], [$localstatedir])
+AS_AC_EXPAND([PREFIX], [$prefix])
 
 #put context name into config.h file
 AC_DEFINE_UNQUOTED([CONFIG_FILE], [["]$SYSCONFDIR/fred/server.conf["]], [location of fred config file])
+
+AC_DEFINE_UNQUOTED([HAVE_LOGGER], [1], [compile libraries with logging messages])
+
 
 #location of idl files, when user use this option during configuration
 #process, exactly given path will be used, otherwise will be used
@@ -215,19 +225,20 @@ fi
 
 AC_CONFIG_FILES([Makefile
                  util/Makefile
+                 util/types/Makefile
                  util/db/Makefile
-		 util/log/Makefile
-		 util/conf/Makefile
-		 src/Makefile
-		 src/old_utils/Makefile
-		 src/model/Makefile
-		 src/register/Makefile
-		 src/corba/Makefile
-		 src/corba/admin/Makefile
-		 src/corba/epp/Makefile
-		 src/cli_admin/Makefile
-		 fred-server.spec
-		 conf/server.conf
-		 init-scripts/fred-server
-		 src/cli_admin/banking.sh])
+                 util/log/Makefile
+                 util/conf/Makefile
+                 src/Makefile
+                 src/old_utils/Makefile
+                 src/model/Makefile
+                 src/register/Makefile
+                 src/corba/Makefile
+                 src/corba/admin/Makefile
+                 src/corba/epp/Makefile
+                 src/cli_admin/Makefile
+                 fred-server.spec
+                 config/server.conf
+                 init-scripts/fred-server
+                 src/cli_admin/banking.sh])
 AC_OUTPUT

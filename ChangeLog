@@ -1,3 +1,114 @@
+2008-10-20 Ales Dolezal, Jaromir Talir (2.1.0)
+   * Configure script minor changes to support omniORB 4.0
+
+   * EPP - number of dsrecords, dnskeys and techcontacts fixed
+         - reason and response messages revised
+
+2008-10-15 Ales Dolezal, Jiri Sadek (2.0.6)
+
+   * Fixing table sorting by datetime fields (DateTime operator)
+
+   * Fixing loading of filter containing datetime interval
+       - missing filter type specification
+       - timezone conversion (rewritten from boost to SQL)
+
+   * Fixing reference to PDF and XML file in invoice detail
+
+   * Fixing XML output of fred-admin --invoice_list command
+
+2008-09-30 Ales Dolezal, Jiri Sadek (2.0.5)
+
+   * Number of admin corba sessions limited
+	
+   * Database connection management improved
+
+   * Fixing fred-admin --invoice_list option
+
+   * Fixing interval filter SQL serialization
+
+2008-09-30 Ales Dolezal, Jaromir Talir, Jiri Sadek (2.0.2, 2.0.3, 2.0.4)
+
+   * Reverted change of --conf parameter to --config
+	
+   * Duplicity of DS records in different KeySets allowed
+
+   * Admin interface interval filter fixed
+
+   * DomainUpdate action closing fixed
+
+2008-09-18 Ales Dolezal (2.0.1)
+
+   * Refactoring fred-admin 
+
+2008-09-18 Jiri Sadek
+
+   * Logging system rewritten to support context (known NDC, MDC) messaging
+	 because of multithreading
+
+   * Added server configuration for CORBA Nameservice context
+
+   * Object state information in Daphne
+
+2008-09-10 Jiri Sadek
+
+   * Both logging methods merged to new logger by LOG macro redefinion
+	 
+   * New configuration format and storage class processing (used
+	 boost's program_options approach)
+
+   * New configuration options added (see config/server.conf.in for details)
+
+2008-08-15 Jiri Sadek, Ales Dolezal, Jaromir Talir (version 2.0.0)
+
+   * Merged history and dnssec branches
+   
+   * ADIFD
+     - history for domain, contact, nsset, keyset added to administation 
+	   interface
+		 - history details method
+		 - filter serialization accept setting structure (for history on/off handling)
+	   - deleted hardcoded user list (until user management authentication will
+		   be done in frontend)
+		 - changed TableRow to IDL module Register and all fields 
+		   rewritten to CORBA Any type
+     - links in PageTable are done by OID structure (id, handle, type)
+
+   * RIFD
+	   - implementation of DNSSEC extension features
+		 - new object KEYSET
+		 - implemented EPP commands 
+		 	 - create_keyset, update_keyset, info_keyset, check_keyset,  delete_keyset, list_keysets
+
+2008-07-25 Jiri Sadek
+
+   * Database library (util/db) slightly rewitten
+	   - required appropriate changes in other modules
+    	 (need testing if something is not broken!)
+
+2008-07-15 Jaromir Talir
+
+   * Bugfix - Missing ORDER BY in notification component
+
+2008-07-13 Jiri Sadek (version 1.11.0)
+
+   * Bugfix - Fixed exception handling in public requests
+
+   * Changes to implement IDL numRowsOverLimit()
+     method in all pagetables. It detect if number of rows in result set 
+     was limited by defined constant (load_limit_ in CommonList).
+
+   * EppAction
+     - filter for Requested Handle -> object doesn't need to be in registry 
+     - output xml added to detail
+     - EppActionType changed from string only to id - name pair for proper 
+       filtering
+     - EppActionTypeList is now loaded from database (not hardcoded)
+
+   * Bugfix - Registrar reload() badly handled findIDSequence()
+
+   * Bugfix - Cancel/OutZone Domain filter handles badly special 
+	type LAST_DAY +- offset
+
 2008-06-26 Jaromir Talir, Jiri Sadek (version 1.10.0)
 
     * querying invoices, mails, files

@@ -7,8 +7,9 @@
 #include "log/logger.h"
 
 ccReg_PageTable_i::ccReg_PageTable_i()
-  : aPageSize(10), aPage(0), sorted_by_(-1)
+  : aPageSize(10), aPage(0), sorted_by_(-1), sorted_dir_(false)
 {
+  base_context_ = Logging::Context::get();
 }
 
 ccReg_PageTable_i::~ccReg_PageTable_i()
@@ -54,7 +55,7 @@ ccReg_PageTable_i::numPages()
   return (unsigned)ceil((double)numRows()/aPageSize);
 }
 
-ccReg::TableRow* 
+Registry::TableRow* 
 ccReg_PageTable_i::getPageRow(CORBA::Short pageRow)
   throw (ccReg::Table::INVALID_ROW)
 {
@@ -97,7 +98,7 @@ ccReg_PageTable_i::getIterator()
 }
 
 void 
-ccReg_PageTable_i::setDB(DBase::Manager* _dbm)
+ccReg_PageTable_i::setDB(Database::Manager* _dbm)
 {
   dbm = _dbm;
 }
@@ -124,6 +125,17 @@ void
 ccReg_PageTable_i::saveFilter(const char*  _name) {
 }
 
-CORBA::Short ccReg_PageTable_i::getSortedBy() {
-  return sorted_by_;
+void ccReg_PageTable_i::sortByColumn(CORBA::Short _column, CORBA::Boolean _dir) {
+  sorted_by_ = (_column >= numColumns() ? numColumns() - 1 : _column);
+  sorted_dir_ = _dir;
 }
+
+void ccReg_PageTable_i::getSortedBy(CORBA::Short &_column, CORBA::Boolean &_dir) {
+  _column = sorted_by_;
+  _dir = sorted_dir_;
+}
+
+CORBA::Boolean ccReg_PageTable_i::numRowsOverLimit() {
+  return false; 
+}
+

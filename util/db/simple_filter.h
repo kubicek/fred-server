@@ -11,7 +11,7 @@
 #include "sql_operators.h"
 #include "filter.h"
 
-namespace DBase {
+namespace Database {
 
 class SelectQuery;
 
@@ -29,17 +29,13 @@ public:
   
   virtual ~Simple();
 
-  virtual Simple* clone() {
-    return 0;
-  }
-
   virtual bool isSimple() const {
     return true;
   }
 
   virtual bool isActive() const {
     TRACE("[CALL] Simple::isActive()");
-    LOGGER("db").debug(boost::format("filter '%1%' is %2%") % getName()
+    LOGGER(PACKAGE).debug(boost::format("filter '%1%' is %2%") % getName()
         % (active ? "active" : "not active"));
     return active;
   }
@@ -52,8 +48,7 @@ public:
     allowed_wildcard = false;
   }
   
-  // virtual void serialize(DBase::SelectQuery& _sq) = 0;
-  virtual void serialize(DBase::SelectQuery& _sq) {
+  virtual void serialize(Database::SelectQuery& _sq, const Settings *_settings) {
   }
   
   virtual void addPostValueString(const std::string& _str) {

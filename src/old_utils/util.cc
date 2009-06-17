@@ -16,11 +16,11 @@
  *  along with FRED.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include<stdio.h>
-#include<stdlib.h>
-#include<time.h>
-#include<string.h>
-#include<ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+#include <ctype.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -28,6 +28,7 @@
 
 #include "util.h"
 #include "log.h"
+#include "log/logger.h"
 #include "corba/epp/action.h"
 
 // generate randoma password contains characters  [a-z] [A-Z] and [0-9] with length PASS_LEN
@@ -172,7 +173,14 @@ bool get_NSSETHANDLE(
   return get_handle(HANDLE, handle, 2);
 }
 
-// general handle
+// keyset handle
+bool get_KEYSETHANDLE(
+        char *HANDLE, const char *handle)
+{
+    return get_handle(HANDLE, handle, 4);
+}
+
+// general handle 
 bool get_HANDLE(
   char * HANDLE, const char *handle)
 {
@@ -221,6 +229,12 @@ bool get_handle(
           return true;
         } else
           return false;
+      case 4:
+        if (strncmp(HANDLE, "KEYID:", 6) == 0) {
+            LOG(LOG_DEBUG, "OK KEYSET HANDLE [%s] ", HANDLE);
+            return true;
+        } else
+            return false;
       default:
         LOG( LOG_DEBUG , "OK HANDLE [%s] " , HANDLE );
         return true;

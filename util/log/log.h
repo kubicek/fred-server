@@ -4,7 +4,11 @@
 #include <string>
 #include <iostream>
 #include <boost/format.hpp>
+#include <boost/any.hpp>
 #include <deque>
+
+#include <stdio.h>
+#include <stdarg.h>
 
 namespace Logging {
 
@@ -30,14 +34,15 @@ public:
 	  LT_SYSLOG
 	};
 
-	Log(const std::string& _ctx = "");
+	Log(const std::string& _name);
 	~Log();
-	void addHandler(Log::Type _type, const std::string& _params = std::string());
+
+  void setName(const std::string &_name);
+	void addHandler(Log::Type _type, const boost::any& _param = boost::any());
 
 	void setLevel(Log::Level _ll);
 	Log::Level getLevel() const;
-	void setContext(const std::string &_ctx);
-	
+		
 	void trace(const std::string& _msg);
 	void trace(const boost::format& _frmt);
 	void debug(const std::string& _msg);
@@ -56,11 +61,16 @@ public:
 	void alert(const boost::format& _frmt);
 	void emerg(const std::string& _msg);
 	void emerg(const boost::format& _frmt);
+
+  /**
+   * support for old style formatting log
+   */
+  void message(int _prio, const char *_format, ...);
 	
 protected:	
 	std::deque<BaseLogType* > handlers;
 	Log::Level level;
-	std::string context;
+  std::string name;
 };
 
 }

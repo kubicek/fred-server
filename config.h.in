@@ -3,7 +3,7 @@
 /* location of fred config file */
 #undef CONFIG_FILE
 
-/* name of CORBA context */
+/* name of CORBA Nameservice context */
 #undef CONTEXT_NAME
 
 /* Define to 1 if you have the `alarm' function. */
@@ -41,6 +41,9 @@
 
 /* Define to 1 if you have the `pthread' library (-lpthread). */
 #undef HAVE_LIBPTHREAD
+
+/* compile libraries with logging messages */
+#undef HAVE_LOGGER
 
 /* Define to 1 if your system has a GNU libc compatible `malloc' function, and
    to 0 otherwise. */

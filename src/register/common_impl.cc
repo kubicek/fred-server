@@ -46,12 +46,12 @@ TID CommonObjectImpl::getId() const {
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 CommonListImpl::CommonListImpl(DB *_db) :
-  db(_db), conn_(0), load_limit_(5000), real_size_(0), real_size_initialized_(false),
+  db(_db), conn_(0), load_limit_(1000), real_size_(0), real_size_initialized_(false),
   ptr_idx_(-1), add(false), wcheck(true), idFilter(0) {
 }
 
-CommonListImpl::CommonListImpl(DBase::Connection *_conn) :
-  conn_(_conn), load_limit_(5000), real_size_(0), real_size_initialized_(false),
+CommonListImpl::CommonListImpl(Database::Connection *_conn) :
+  conn_(_conn), load_limit_(1000), real_size_(0), real_size_initialized_(false),
   ptr_idx_(-1), add(false), wcheck(true), idFilter(0) {
 }
 
@@ -86,6 +86,14 @@ void CommonListImpl::setLimit(unsigned _limit) {
   load_limit_ = _limit;
 }
 
+unsigned CommonListImpl::getLimit() const {
+  return load_limit_;
+}
+
+bool CommonListImpl::isLimited() const {
+  return load_limit_active_;
+}
+
 CommonObject* CommonListImpl::get(unsigned _idx) const {
   return _idx >= getCount() ? NULL : data_[_idx];
 }
@@ -95,11 +103,11 @@ CommonObject* CommonListImpl::findId(TID _id) const throw (Register::NOT_FOUND) 
                                               data_.end(),
                                               CheckId(_id));
   if (it != data_.end()) {
-    LOGGER("register").debug(boost::format("object list hit! object id=%1% found")
+    LOGGER(PACKAGE).debug(boost::format("object list hit! object id=%1% found")
         % _id);
     return *it;
   }
-  LOGGER("register").debug(boost::format("object list miss! object id=%1% should be loaded from db")
+  LOGGER(PACKAGE).debug(boost::format("object list miss! object id=%1% should be loaded from db")
       % _id);
   throw Register::NOT_FOUND();
 }
@@ -112,10 +120,10 @@ CommonObject* CommonListImpl::findIDSequence(TID _id) {
   // must be sorted by ID to make sence
   if (ptr_idx_ < 0)
     ptr_idx_ = 0;
-  for (; ptr_idx_ < (int)data_.size() && data_[ptr_idx_]->getId()<_id; ptr_idx_++)
-    ;
+  for (; ptr_idx_ < (int)data_.size() && data_[ptr_idx_]->getId()<_id; ptr_idx_++);
   if (ptr_idx_ == (int)data_.size() || data_[ptr_idx_]->getId() != _id) {
-    LOG(ERROR_LOG, "find_sequence: id %ull, ptr %d", _id, ptr_idx_);
+    LOGGER(PACKAGE).debug(boost::format("find id sequence: not found in result set. (id=%1%, ptr_idx=%2%)")
+                                        % _id % ptr_idx_);
     resetIDSequence();
     return NULL;
   }
@@ -133,7 +141,7 @@ unsigned long long CommonListImpl::getRealCount() {
   return real_size_;
 }
 
-unsigned long long CommonListImpl::getRealCount(DBase::Filters::Union &_filter) {
+unsigned long long CommonListImpl::getRealCount(Database::Filters::Union &_filter) {
   TRACE("[CALL] CommonListImpl::getRealCount()");
 
   if (!real_size_initialized_)
@@ -142,45 +150,44 @@ unsigned long long CommonListImpl::getRealCount(DBase::Filters::Union &_filter) 
   return real_size_;
 }
 
-void CommonListImpl::makeRealCount(DBase::Filters::Union &_filter) {
+void CommonListImpl::makeRealCount(Database::Filters::Union &_filter) {
   TRACE("[CALL] CommonListImpl::makeRealCount()");
   
   if (_filter.empty()) {
     real_size_ = 0;
     real_size_initialized_ = false;
-    LOGGER("register").warning("can't make real filter data count -- no filter specified...");
+    LOGGER(PACKAGE).warning("can't make real filter data count -- no filter specified...");
     return;
   }
 
   _filter.clearQueries();
 
-  DBase::Filters::Union::iterator it = _filter.begin();
+  Database::Filters::Union::iterator it = _filter.begin();
   for (; it != _filter.end(); ++it) {
-    DBase::SelectQuery *tmp = new DBase::SelectQuery();
+    Database::SelectQuery *tmp = new Database::SelectQuery();
     tmp->select() << "COUNT(*)";
     _filter.addQuery(tmp);
   }
 
-  DBase::SelectQuery count_query;
+  Database::SelectQuery count_query;
   _filter.serialize(count_query);
  
   if (conn_) {
     try {
-      std::auto_ptr<DBase::Result> r_count(conn_->exec(count_query));
-      std::auto_ptr<DBase::ResultIterator> r_it(r_count->getIterator());
-      real_size_ = r_it->getNextValue();
+      Database::Result r_count = conn_->exec(count_query);
+      real_size_ = (*(r_count.begin()))[0];
       real_size_initialized_ = true;
     }
-    catch (DBase::Exception& ex) {
-      LOGGER("db").error(boost::format("%1%") % ex.what());
+    catch (Database::Exception& ex) {
+      LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
     }
     catch (std::exception& ex) {
-      LOGGER("db").error(boost::format("%1%") % ex.what());
+      LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
     }
   }
   else {
     if (!db->ExecSelect(count_query.c_str())) {
-      LOGGER("register").error("filter data count failed - old database library connection used");
+      LOGGER(PACKAGE).error("filter data count failed - old database library connection used");
     }
     else {
       real_size_ = atoll(db->GetFieldValue(0, 0));
@@ -202,22 +209,21 @@ void CommonListImpl::makeRealCount() throw (SQL_ERROR) {
   real_size_initialized_ = true;
 }
 
-void CommonListImpl::fillTempTable(DBase::InsertQuery& _query) {
+void CommonListImpl::fillTempTable(Database::InsertQuery& _query) {
   try {
-    DBase::Query create_tmp_table("SELECT create_tmp_table('" + std::string(getTempTableName()) + "')");
-    std::auto_ptr<DBase::Result> r_create_tmp_table(conn_->exec(create_tmp_table));
-  
+    Database::Query create_tmp_table("SELECT create_tmp_table('" + std::string(getTempTableName()) + "')");
+    conn_->exec(create_tmp_table);
     conn_->exec(_query);
     
-    DBase::Query analyze("ANALYZE " + std::string(getTempTableName()));
+    Database::Query analyze("ANALYZE " + std::string(getTempTableName()));
     conn_->exec(analyze);
   }
-  catch (DBase::Exception& ex) {
-    LOGGER("db").error(boost::format("%1%") % ex.what());
+  catch (Database::Exception& ex) {
+    LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
     throw;
   }
   catch (std::exception& ex) {
-    LOGGER("db").error(boost::format("%1%") % ex.what());
+    LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
     throw;
   }
 }
@@ -243,6 +249,14 @@ void CommonListImpl::fillTempTable(bool _limit) const throw (SQL_ERROR) {
     throw SQL_ERROR();
 }
 
+void CommonListImpl::reload() {
+  load_limit_active_ = false;
+  if (size() > load_limit_) {
+    data_.pop_back();
+    load_limit_active_ = true;
+  }
+}
+
 void CommonListImpl::setWildcardExpansion(bool _wcheck) {
   wcheck = _wcheck;
 }
@@ -259,11 +273,11 @@ void CommonListImpl::setFilterModified() {
   real_size_initialized_ = false;
 }
 
-CommonList::iterator CommonListImpl::begin() {
+CommonList::Iterator CommonListImpl::begin() {
   return data_.begin();
 }
 
-CommonList::iterator CommonListImpl::end() {
+CommonList::Iterator CommonListImpl::end() {
   return data_.end();
 }
 

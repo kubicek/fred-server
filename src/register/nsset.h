@@ -6,7 +6,7 @@
 #include "object.h"
 #include "exceptions.h"
 #include "zone.h"
-#include "db/dbs.h"
+#include "db/manager.h"
 #include "model/model_filters.h"
 
 /// forward declared parameter type 
@@ -37,6 +37,11 @@ public:
   virtual unsigned getAddrCount() const = 0;
   /// return address by index
   virtual std::string getAddrByIdx(unsigned idx) const = 0;
+
+  virtual const std::vector<std::string>& getAddrList() const = 0;
+  // comparison operators
+  virtual bool operator==(const Host& _other) const = 0; 
+  virtual bool operator!=(const Host& _other) const = 0;
 };
 
 
@@ -53,10 +58,14 @@ public:
   virtual unsigned getAdminCount() const = 0;
   /// return handle of admin contact by index
   virtual std::string getAdminByIdx(unsigned idx) const = 0;
+  /// return handle of admin contact by index
+  virtual const std::string& getAdminHandleByIdx(unsigned idx) const throw (NOT_FOUND) = 0;
+  /// return id of admin contact by index
+  virtual TID getAdminIdByIdx(unsigned idx) const throw (NOT_FOUND) = 0;
   /// return count of managed hosts
   virtual unsigned getHostCount() const = 0;
   /// return host by index
-  virtual const Host *getHostByIdx(unsigned idx) const = 0;
+  virtual const Host *getHostByIdx(unsigned idx) const throw (NOT_FOUND) = 0;
 };
 
 
@@ -78,7 +87,7 @@ public:
   /// reload list with current filter
   virtual void reload() throw (SQL_ERROR) = 0;
   /// testing new reload function
-  virtual void reload2(DBase::Filters::Union &uf, DBase::Manager* dbm) = 0;
+  virtual void reload(Database::Filters::Union &uf, Database::Manager* dbm) = 0;
   /// clear filter data
   virtual void clearFilter() = 0;
   /// sort by column

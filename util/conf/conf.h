@@ -39,6 +39,25 @@ public:
 			throw OptionNotFound("option value '" + _what + "' not found in configuration");
 		}
 	}
+
+    bool hasOpt(std::string name) const
+    {
+        return po::variables_map::count(name);
+    }
+    bool hasUnknown() const
+    {
+        return !m_unknown.empty();
+    }
+    std::vector<std::string> getUnknown() const
+    {
+        return m_unknown;
+    }
+    void setUnknown(std::vector<std::string> unknown)
+    {
+        m_unknown = unknown;
+    }
+private:
+    std::vector<std::string> m_unknown;
 };
 
 }

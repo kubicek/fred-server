@@ -5,7 +5,7 @@
 
 #include "util.h"
 
-namespace DBase {
+namespace Database {
 
 Query::Query(const std::string& _str_query) {
   sql_buffer << _str_query;
@@ -83,7 +83,7 @@ void SelectQuery::make() {
   if (!order_by_s.str().empty())
   sql_buffer << " ORDER BY " << order_by_s.str();
   finalize();
-  LOGGER("db").debug(boost::format("generated select SQL = %1%") % sql_buffer.str());
+  LOGGER(PACKAGE).debug(boost::format("generated select SQL = %1%") % sql_buffer.str());
 }
 
 void SelectQuery::join(const std::string& _cols, const std::string& _tables,
@@ -166,7 +166,7 @@ void InsertQuery::make() {
     values_part << "VALUES (" << it->second;
     for (++it; it != values_.end(); ++it) {
       columns_part << ", " << it->first;
-      values_part  << ", " << it->second;
+      values_part  << ", " << (it->second.quoted() ? "'" : "") << it->second << (it->second.quoted() ? "'" : "");
     }
     columns_part << ")";
     values_part  << ")";

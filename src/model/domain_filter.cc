@@ -1,66 +1,90 @@
 #include "domain_filter.h"
 
-namespace DBase {
+namespace Database {
 namespace Filters {
 
+Domain* Domain::create() {
+  return new DomainHistoryImpl();
+}
+
 /*
- * DOMAIN IMPLEMENTATION 
+ * DOMAIN IMPLEMENTATION
  */
 DomainImpl::DomainImpl() :
   ObjectImpl() {
   setName("Domain");
-  setType(getType());
+  addType().setValue(getType());
 }
 
 DomainImpl::~DomainImpl() {
 }
 
-Value<DBase::ID>& DomainImpl::addId() {
-  Value<DBase::ID> *tmp = new Value<DBase::ID>(Column("id", joinDomainTable()));
+Value<std::string>& DomainImpl::addHandle() {
+  Value<std::string> *tmp = new Value<std::string>(Column("name", joinObjectRegistryTable()));
+  add(tmp);
+  tmp->addPreValueString("LOWER(");
+  tmp->addPostValueString(")");
+  tmp->setName("Handle");
+  return *tmp;
+}
+
+Value<Database::ID>& DomainImpl::addId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("id", joinDomainTable()));
   tmp->setName("Id");
   add(tmp);
   return *tmp;
 }
 
-Value<DBase::ID>& DomainImpl::addNSSetId() {
-  Value<DBase::ID> *tmp = new Value<DBase::ID>(Column("nsset", joinDomainTable()));
+Value<std::string> & DomainImpl::addFQDN() {
+    return addHandle();
+}
+
+Value<Database::ID>& DomainImpl::addNSSetId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("nsset", joinDomainTable()));
   tmp->setName("NSSetId");
   add(tmp);
   return *tmp;
 }
 
-Value<DBase::ID>& DomainImpl::addRegistrantId() {
-  Value<DBase::ID> *tmp = new Value<DBase::ID>(Column("registrant", joinDomainTable()));
+Value<Database::ID>& DomainImpl::addKeySetId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("keyset", joinDomainTable()));
+  tmp->setName("KeySetId");
+  add(tmp);
+  return *tmp;
+}
+
+Value<Database::ID>& DomainImpl::addRegistrantId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("registrant", joinDomainTable()));
   tmp->setName("RegistrantId");
   add(tmp);
   return *tmp;
 }
 
-Value<DBase::ID>& DomainImpl::addZoneId() {
-  Value<DBase::ID> *tmp = new Value<DBase::ID>(Column("zone", joinDomainTable()));
+Value<Database::ID>& DomainImpl::addZoneId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("zone", joinDomainTable()));
   tmp->setName("ZoneId");
   add(tmp);
   return *tmp;
 }
 
-Interval<DBase::DateInterval>& DomainImpl::addExpirationDate() {
-  Interval<DBase::DateInterval> *tmp = new Interval<DBase::DateInterval>(Column("exdate", joinDomainTable()));
+Interval<Database::DateInterval>& DomainImpl::addExpirationDate() {
+  Interval<Database::DateInterval> *tmp = new Interval<Database::DateInterval>(Column("exdate", joinDomainTable()));
   tmp->setName("ExpirationDate");
   add(tmp);
   return *tmp;
 }
 
-Interval<DBase::DateInterval>& DomainImpl::addOutZoneDate() {
-  Interval<DBase::DateInterval> *tmp = new Interval<DBase::DateInterval>(Column("exdate", joinDomainTable()));
-  tmp->addPostValueString("::date - (select val from enum_parameters where id = 4)::int");
+Interval<Database::DateInterval>& DomainImpl::addOutZoneDate() {
+  Interval<Database::DateInterval> *tmp = new Interval<Database::DateInterval>(Column("exdate", joinDomainTable()));
+  tmp->addPostValueString("::date - (SELECT val || ' day' FROM enum_parameters WHERE id = 4)::interval");
   tmp->setName("OutZoneDate");
   add(tmp);
   return *tmp;
 }
 
-Interval<DBase::DateInterval>& DomainImpl::addCancelDate() {
-  Interval<DBase::DateInterval> *tmp = new Interval<DBase::DateInterval>(Column("exdate", joinDomainTable()));
-  tmp->addPostValueString("::date - (select val from enum_parameters where id = 6)::int");
+Interval<Database::DateInterval>& DomainImpl::addCancelDate() {
+  Interval<Database::DateInterval> *tmp = new Interval<Database::DateInterval>(Column("exdate", joinDomainTable()));
+  tmp->addPostValueString("::date - (SELECT val || ' day' FROM enum_parameters WHERE id = 6)::interval");
   tmp->setName("CancelDate");
   add(tmp);
   return *tmp;
@@ -77,6 +101,13 @@ Contact& DomainImpl::addRegistrant() {
 NSSet& DomainImpl::addNSSet() {
   NSSet *tmp = new NSSetImpl();
   tmp->joinOn(new Join(Column("nsset", joinDomainTable()), SQL_OP_EQ, Column("id", tmp->joinNSSetTable())));
+  add(tmp);
+  return *tmp;
+}
+
+KeySet& DomainImpl::addKeySet() {
+  KeySet *tmp = new KeySetImpl();
+  tmp->joinOn(new Join(Column("keyset", joinDomainTable()), SQL_OP_EQ, Column("id", tmp->joinKeySetTable())));
   add(tmp);
   return *tmp;
 }
@@ -125,70 +156,90 @@ void DomainImpl::_joinPolymorphicTables() {
 }
 
 /*
- * DOMAIN HISTORY IMPLEMENTATION 
+ * DOMAIN HISTORY IMPLEMENTATION
  */
 DomainHistoryImpl::DomainHistoryImpl() :
   ObjectHistoryImpl() {
   setName("DomainHistory");
-  setType(getType());
+  addType().setValue(getType());
 }
 
 DomainHistoryImpl::~DomainHistoryImpl() {
 }
 
-Value<DBase::ID>& DomainHistoryImpl::addId() {
-  Value<DBase::ID> *tmp = new Value<DBase::ID>(Column("id", joinDomainTable()));
+Value<std::string>& DomainHistoryImpl::addHandle() {
+  Value<std::string> *tmp = new Value<std::string>(Column("name", joinObjectRegistryTable()));
+  add(tmp);
+  tmp->addPreValueString("LOWER(");
+  tmp->addPostValueString(")");
+  tmp->setName("Handle");
+  return *tmp;
+}
+
+Value<Database::ID>& DomainHistoryImpl::addId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("id", joinDomainTable()));
   tmp->setName("Id");
   add(tmp);
   return *tmp;
 }
 
-Value<DBase::ID>& DomainHistoryImpl::addNSSetId() {
-  Value<DBase::ID> *tmp = new Value<DBase::ID>(Column("nsset", joinDomainTable()));
+Value<std::string>& DomainHistoryImpl::addFQDN() {
+  return addHandle();
+}
+
+Value<Database::ID>& DomainHistoryImpl::addNSSetId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("nsset", joinDomainTable()));
   tmp->setName("NSSetId");
   add(tmp);
   return *tmp;
 }
 
-Value<DBase::ID>& DomainHistoryImpl::addRegistrantId() {
-  Value<DBase::ID> *tmp = new Value<DBase::ID>(Column("registrant", joinDomainTable()));
+Value<Database::ID>& DomainHistoryImpl::addKeySetId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("keyset", joinDomainTable()));
+  tmp->setName("KeySetId");
+  add(tmp);
+  return *tmp;
+}
+
+Value<Database::ID>& DomainHistoryImpl::addRegistrantId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("registrant", joinDomainTable()));
   tmp->setName("RegistrantId");
   add(tmp);
   return *tmp;
 }
 
-Value<DBase::ID>& DomainHistoryImpl::addZoneId() {
-  Value<DBase::ID> *tmp = new Value<DBase::ID>(Column("zone", joinDomainTable()));
+Value<Database::ID>& DomainHistoryImpl::addZoneId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("zone", joinDomainTable()));
   tmp->setName("ZoneId");
   add(tmp);
   return *tmp;
 }
 
-Interval<DBase::DateInterval>& DomainHistoryImpl::addExpirationDate() {
-  Interval<DBase::DateInterval> *tmp = new Interval<DBase::DateInterval>(Column("exdate", joinDomainTable()));
+Interval<Database::DateInterval>& DomainHistoryImpl::addExpirationDate() {
+  Interval<Database::DateInterval> *tmp = new Interval<Database::DateInterval>(Column("exdate", joinDomainTable()));
   tmp->setName("ExpirationDate");
   add(tmp);
   return *tmp;
 }
 
-Interval<DBase::DateInterval>& DomainHistoryImpl::addOutZoneDate() {
-  Interval<DBase::DateInterval> *tmp = new Interval<DBase::DateInterval>(Column("exdate", joinDomainTable()));
-  tmp->addPostValueString("::date - (select val from enum_parameters where id = 4)::int");
+Interval<Database::DateInterval>& DomainHistoryImpl::addOutZoneDate() {
+  Interval<Database::DateInterval> *tmp = new Interval<Database::DateInterval>(Column("exdate", joinDomainTable()));
+  tmp->addPostValueString("::date - (SELECT val || ' day' FROM enum_parameters WHERE id = 4)::interval");
   tmp->setName("OutZoneDate");
   add(tmp);
   return *tmp;
 }
 
-Interval<DBase::DateInterval>& DomainHistoryImpl::addCancelDate() {
-  Interval<DBase::DateInterval> *tmp = new Interval<DBase::DateInterval>(Column("exdate", joinDomainTable()));
-  tmp->addPostValueString("::date - (select val from enum_parameters where id = 6)::int");
+Interval<Database::DateInterval>& DomainHistoryImpl::addCancelDate() {
+  Interval<Database::DateInterval> *tmp = new Interval<Database::DateInterval>(Column("exdate", joinDomainTable()));
+  tmp->addPostValueString("::date - (SELECT val || ' day' FROM enum_parameters WHERE id = 6)::interval");
   tmp->setName("CancelDate");
   add(tmp);
   return *tmp;
 }
 
 Contact& DomainHistoryImpl::addRegistrant() {
-  Contact *tmp = new ContactHistoryImpl();
+  Contact *tmp = Contact::create();
   tmp->setName("Registrant");
   tmp->joinOn(new Join(Column("registrant", joinDomainTable()), SQL_OP_EQ, Column("id", tmp->joinContactTable())));
   add(tmp);
@@ -196,16 +247,31 @@ Contact& DomainHistoryImpl::addRegistrant() {
 }
 
 NSSet& DomainHistoryImpl::addNSSet() {
-  NSSet *tmp = new NSSetHistoryImpl();
+  NSSet *tmp = NSSet::create();
   tmp->joinOn(new Join(Column("nsset", joinDomainTable()), SQL_OP_EQ, Column("id", tmp->joinNSSetTable())));
   add(tmp);
   return *tmp;
 }
 
+KeySet &
+DomainHistoryImpl::addKeySet()
+{
+    KeySet *tmp = new KeySetHistoryImpl();
+    tmp->joinOn(
+            new Join(
+                Column("keyset", joinDomainTable()),
+                SQL_OP_EQ,
+                Column("id", tmp->joinKeySetTable())
+                )
+            );
+    add(tmp);
+    return *tmp;
+}
+
 Contact& DomainHistoryImpl::_addDCMFilter(unsigned _role) {
-  Contact *tmp = new ContactHistoryImpl();
+  Contact *tmp = Contact::create();
   Value<int> *role_filter = new Value<int>(Column("role", joinTable("domain_contact_map_history")), _role);
-  role_filter->setValue(_role); 
+  role_filter->setValue(_role);
   add(role_filter);
   add(tmp);
   tmp->addJoin(new Join(
@@ -236,15 +302,15 @@ Table& DomainHistoryImpl::joinDomainTable() {
 }
 
 void DomainHistoryImpl::_joinPolymorphicTables() {
-  ObjectHistoryImpl::_joinPolymorphicTables();
   Table *d = findTable("domain_history");
   if (d) {
     joins.push_back(new Join(
-        Column("historyid", joinTable("object_registry")),
+        Column("historyid", joinTable("object_history")),
         SQL_OP_EQ,
         Column("historyid", *d)
     ));
   }
+  ObjectHistoryImpl::_joinPolymorphicTables();
 }
 
 }

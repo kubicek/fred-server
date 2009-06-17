@@ -32,7 +32,7 @@ namespace Register
       bool closed;
       LocalTransaction(DB *_db) : db(_db), closed(false)
       {
-        db->BeginTransaction();
+        (void)db->BeginTransaction();
       }
       ~LocalTransaction()
       {
@@ -52,6 +52,7 @@ namespace Register
       Mailer::Manager *mm;
       Contact::Manager *cm;
       NSSet::Manager *nm;
+      KeySet::Manager *km;
       Domain::Manager *dm;
       Document::Manager *docm;
       Registrar::Manager *rm;
@@ -61,6 +62,7 @@ namespace Register
         Mailer::Manager *_mm,
         Contact::Manager *_cm,
         NSSet::Manager *_nm,
+        KeySet::Manager *_km,
         Domain::Manager *_dm,
         Document::Manager *_docm,
         Registrar::Manager *_rm
@@ -134,6 +136,15 @@ namespace Register
             << "FROM nsset_contact_map ncm, contact c "
             << "WHERE ncm.contactid=c.id AND ncm.nssetid=" << nsset;
         return getEmailList(sql);
+      }
+      std::string getKeySetTechEmails(TID keyset)
+      {
+          std::stringstream sql;
+          sql << "SELECT c.email "
+              << "FROM keyset_contact_map kcm, contact c "
+              << "WHERE kcm.contactid=c.id AND kcm.keysetid="
+              << keyset;
+          return getEmailList(sql);
       }
       std::string getContactEmails(TID contact)
       {
@@ -234,30 +245,16 @@ namespace Register
         }
         params["registrar"] = reg.str();
       }
-      void fillContactParams(
+      void fillSimpleObjectParams(
         TID id,
         Register::Mailer::Parameters& params
       ) throw (SQL_ERROR)
       {
         std::stringstream sql;
-        sql << "SELECT c.name FROM object_registry c WHERE c.id=" << id;
+        sql << "SELECT c.name, c.type FROM object_registry c WHERE c.id=" << id;
         if (!db->ExecSelect(sql.str().c_str())) throw SQL_ERROR();
-        params["type"] = "1";
         params["handle"] = db->GetFieldValue(0,0);
-        params["deldate"] = to_iso_extended_string(
-          date(day_clock::local_day())
-        );
-      }
-      void fillNSSetParams(
-        TID id,
-        Register::Mailer::Parameters& params
-      ) throw (SQL_ERROR)
-      {
-        std::stringstream sql;
-        sql << "SELECT n.name FROM object_registry n WHERE n.id=" << id;
-        if (!db->ExecSelect(sql.str().c_str())) throw SQL_ERROR();
-        params["type"] = "2";
-        params["handle"] = db->GetFieldValue(0,0);
+        params["type"] = db->GetFieldValue(0,1);
         params["deldate"] = to_iso_extended_string(
           date(day_clock::local_day())
         );
@@ -297,6 +294,7 @@ namespace Register
         bool useHistory
       ) throw (SQL_ERROR)
       {
+        TRACE("[CALL] Register::Notify::notifyStateChanges()");
         std::stringstream sql;
         sql << "SELECT nt.state_id, nt.type, "
             << "nt.mtype, nt.emails, nt.obj_id, nt.obj_type, nt.valid_from "
@@ -314,6 +312,7 @@ namespace Register
             << "WHERE ns.state_id ISNULL ";
         if (!exceptList.empty())
         	sql << "AND nt.type NOT IN (" << exceptList << ") ";
+        sql << "ORDER BY nt.state_id ASC ";
         if (limit)
         	sql << "LIMIT " << limit;
         if (!db->ExecSelect(sql.str().c_str())) throw SQL_ERROR();
@@ -341,11 +340,11 @@ namespace Register
           try {
             switch (i->obj_type) {
              case 1: // contact
-              fillContactParams(i->obj_id,params);
+              fillSimpleObjectParams(i->obj_id,params);
               emails = getContactEmails(i->obj_id);
               break;
              case 2: // nsset
-              fillNSSetParams(i->obj_id,params);
+              fillSimpleObjectParams(i->obj_id,params);
               emails = getNSSetTechEmails(i->obj_id);
               break;
              case 3: // domain
@@ -361,6 +360,9 @@ namespace Register
                    (i->emails == 1 ? getDomainAdminEmails(i->obj_id) :
                     getDomainTechEmails(i->obj_id));
                }
+             case 4: // keyset
+              fillSimpleObjectParams(i->obj_id,params);
+              emails = getKeySetTechEmails(i->obj_id);
               break;
             }
             if (debugOutput) {
@@ -394,6 +396,7 @@ namespace Register
       virtual void generateLetters()
         throw (SQL_ERROR)
       {
+        TRACE("[CALL] Register::Notify::generateLetters()");
     	// transaction is needed for 'ON COMMIT DROP' functionality
     	LocalTransaction trans(db);
     	// because every expiration date is
@@ -495,12 +498,13 @@ namespace Register
       Mailer::Manager *mm,
       Contact::Manager *cm,
       NSSet::Manager *nm,
+      KeySet::Manager *km,
       Domain::Manager *dm,
       Document::Manager *docm,
       Registrar::Manager *rm
     )
     {
-      return new ManagerImpl(db,mm,cm,nm,dm,docm,rm);
+      return new ManagerImpl(db,mm,cm,nm, km, dm,docm,rm);
     }
   }
 }

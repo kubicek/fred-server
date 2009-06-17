@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "common_object.h"
-#include "db/dbs.h"
+#include "db/manager.h"
 
 class DB;
 
@@ -29,8 +29,15 @@ class Compare##_by_what {                                            \
 public:                                                              \
   Compare##_by_what(bool _asc) : asc_(_asc) { }                      \
   bool operator()(CommonObject *_left, CommonObject *_right) const { \
-    bool result = ((dynamic_cast<_object_type *>(_left))->get##_by_what() <= (dynamic_cast<_object_type *>(_right))->get##_by_what()); \
-    return (asc_ && result) || (!asc_ && !result);  	             \
+    _object_type *l_casted = dynamic_cast<_object_type *>(_left);    \
+    _object_type *r_casted = dynamic_cast<_object_type *>(_right);   \
+    if (l_casted == 0 || r_casted == 0) {                            \
+      /* this should never happen */                                 \
+      throw std::bad_cast();                                         \
+    }                                                                \
+                                                                     \
+    bool result = l_casted->get##_by_what() <= r_casted->get##_by_what(); \
+    return (asc_ && result) || (!asc_ && !result);  	               \
 }                                                                    \
 private:                                                             \
   bool asc_;                                                         \
@@ -52,12 +59,13 @@ struct CheckId {
 class CommonListImpl : virtual public CommonList {
 protected:
   DB *db;
-  DBase::Connection *conn_;
+  Database::Connection *conn_;
 
   list_type data_;
   unsigned load_limit_;
   unsigned long long real_size_;
   bool real_size_initialized_;
+  bool load_limit_active_;
 
   int ptr_idx_;
   bool add;
@@ -66,13 +74,15 @@ protected:
 
 public:
   CommonListImpl(DB *_db);
-  CommonListImpl(DBase::Connection *_conn);
+  CommonListImpl(Database::Connection *_conn);
   ~CommonListImpl();
   virtual void clear();
   
   size_type size() const;
   unsigned long long sizeDb();
   virtual void setLimit(unsigned _limit);
+  virtual unsigned getLimit() const;
+  virtual bool isLimited() const;
   
   CommonObject* get(unsigned _idx) const;
   CommonObject* findId(TID _id) const throw (Register::NOT_FOUND);
@@ -80,14 +90,16 @@ public:
   void resetIDSequence();
   CommonObject* findIDSequence(TID _id);
 
-  virtual void fillTempTable(DBase::InsertQuery& _query);
+  virtual void fillTempTable(Database::InsertQuery& _query);
   virtual void fillTempTable(bool _limit) const throw (SQL_ERROR);
   
   unsigned getCount() const;
   virtual unsigned long long getRealCount();
   virtual void makeRealCount() throw (SQL_ERROR);
-  virtual unsigned long long getRealCount(DBase::Filters::Union &_filter);
-  virtual void makeRealCount(DBase::Filters::Union &_filter);
+  virtual unsigned long long getRealCount(Database::Filters::Union &_filter);
+  virtual void makeRealCount(Database::Filters::Union &_filter);
+
+  virtual void reload();
 
   
   virtual void setWildcardExpansion(bool _wcheck);
@@ -98,8 +110,8 @@ public:
   virtual void
       makeQuery(bool count, bool limit, std::stringstream& sql) const = 0;
   
-  virtual iterator begin();
-  virtual iterator end();
+  virtual Iterator begin();
+  virtual Iterator end();
 };
 
 }

@@ -60,6 +60,27 @@ using namespace boost::posix_time;
 
 namespace Register {
 namespace Invoicing {
+
+std::string
+Type2Str(Type _type)
+{
+    switch (_type) {
+        case IT_DEPOSIT:    return "Deposit";
+        case IT_ACCOUNT:    return "Account";
+        default:            return "TYPE UNKNOWN";
+    }
+}
+
+std::string
+PaymentActionType2Str(PaymentActionType type)
+{
+    switch (type) {
+        case PAT_CREATE_DOMAIN: return "Create domain";
+        case PAT_RENEW_DOMAIN:  return "Renew domain";
+        default:                return "TYPE UNKNOWN";
+    }
+}
+
 // hold vat rates for time periods
 class VAT {
 public:
@@ -79,8 +100,8 @@ public:
 /// implementation for Manager interface
 class ManagerImpl : public Manager {
   DB *db;
-  DBase::Manager *db_manager_;
-  DBase::Connection *conn_;
+  Database::Manager *db_manager_;
+  Database::Connection *conn_;
   
   Document::Manager *docman;
   Mailer::Manager *mailman;
@@ -94,7 +115,7 @@ public:
     initVATList();
   }
   
-  ManagerImpl(DBase::Manager *_db_manager, Document::Manager *_doc_manager, Mailer::Manager *_mail_manager) :
+  ManagerImpl(Database::Manager *_db_manager, Document::Manager *_doc_manager, Mailer::Manager *_mail_manager) :
     db_manager_(_db_manager), conn_(_db_manager->getConnection()), docman(_doc_manager), mailman(_mail_manager) {
     initVATList();
   }
@@ -475,6 +496,8 @@ class InvoiceImpl : public Register::CommonObjectImpl,
   TID fileXML;
   std::string varSymbol;
   SubjectImpl client;
+  std::string filepdf_name;
+  std::string filexml_name;
   static SubjectImpl supplier;
   std::vector<PaymentSourceImpl *> sources;
   std::vector<PaymentActionImpl *> actions;
@@ -482,6 +505,7 @@ class InvoiceImpl : public Register::CommonObjectImpl,
   AnnualPartitioningImpl ap; ///< total prices partitioned by year
   std::vector<PaymentImpl> paid; ///< list of paid vat rates
   ManagerImpl *man; ///< backlink to manager for VAT and others
+
   void clearLists() {
     for (unsigned i=0; i<sources.size(); i++)
       delete sources[i];
@@ -535,27 +559,30 @@ public:
               date_period& _accountPeriod, Type _type, unsigned long long _number,
               TID _registrar, Money _credit, Money _price, short _vatRate, Money _total,
               Money _totalVAT, TID _filePDF, TID _fileXML, std::string& _varSymbol,
-              SubjectImpl& _client, ManagerImpl *_manager) : CommonObjectImpl(_id),
-                                                             zone(_zone),
-                                                             zoneName(_zoneName),
-                                                             crTime(_crTime),
-                                                             taxDate(_taxDate),
-                                                             accountPeriod(_accountPeriod),
-                                                             type(_type),
-                                                             number(_number),
-                                                             registrar(_registrar),
-                                                             credit(_credit),
-                                                             price(_price),
-                                                             vatRate(_vatRate),
-                                                             total(_total),
-                                                             totalVAT(_totalVAT),
-                                                             filePDF(_filePDF),
-                                                             fileXML(_fileXML),
-                                                             varSymbol(_varSymbol),
-                                                             client(_client),
-                                                             storeFileFlag(false),
-                                                             ap(_manager),
-                                                             man(_manager) {
+              SubjectImpl& _client, const std::string &_filepdf_name, const std::string &_filexml_name,
+              ManagerImpl *_manager) : CommonObjectImpl(_id),
+                                       zone(_zone),
+                                       zoneName(_zoneName),
+                                       crTime(_crTime),
+                                       taxDate(_taxDate),
+                                       accountPeriod(_accountPeriod),
+                                       type(_type),
+                                       number(_number),
+                                       registrar(_registrar),
+                                       credit(_credit),
+                                       price(_price),
+                                       vatRate(_vatRate),
+                                       total(_total),
+                                       totalVAT(_totalVAT),
+                                       filePDF(_filePDF),
+                                       fileXML(_fileXML),
+                                       varSymbol(_varSymbol),
+                                       client(_client),
+                                       filepdf_name(_filepdf_name),
+                                       filexml_name(_filexml_name),
+                                       storeFileFlag(false),
+                                       ap(_manager),
+                                       man(_manager) {
   }
   
   ~InvoiceImpl() {
@@ -615,6 +642,12 @@ public:
   TID getFileXML() const {
     return fileXML;
   }
+  std::string getFileNamePDF() const {
+    return filepdf_name;
+  }
+  std::string getFileNameXML() const {
+    return filexml_name;
+  }
   unsigned getSourceCount() const {
     return sources.size();
   }
@@ -665,17 +698,17 @@ public:
     actions.push_back(new PaymentActionImpl(db,row,man));
     ap.addAction(actions.back()); // update partitioning
   }
-  void addAction(DBase::ResultIterator *_it) {
-    DBase::Money price = _it->getNextValue();
-    unsigned vat_rate = _it->getNextValue();
-    std::string object_name = _it->getNextValue();
-    DBase::DateTime action_time = _it->getNextValue(); 
-    DBase::Date exdate = _it->getNextValue();
-    PaymentActionType type = (int)_it->getNextValue() == 1 ? PAT_CREATE_DOMAIN 
-                                                           : PAT_RENEW_DOMAIN;
-    unsigned units = _it->getNextValue(); 
-    DBase::Money price_per_unit = _it->getNextValue();
-    DBase::ID id = _it->getNextValue();
+  void addAction(Database::Row::Iterator& _col) {
+    Database::Money    price       = *_col;
+    unsigned           vat_rate    = *(++_col);
+    std::string        object_name = *(++_col);
+    Database::DateTime action_time = *(++_col); 
+    Database::Date     exdate      = *(++_col);
+    PaymentActionType  type        = (int)*(++_col) == 1 ? PAT_CREATE_DOMAIN 
+                                                         : PAT_RENEW_DOMAIN;
+    unsigned           units          = *(++_col); 
+    Database::Money    price_per_unit = *(++_col);
+    Database::ID       id             = *(++_col);
                           
     PaymentActionImpl *new_action = new PaymentActionImpl(price,
                                                           vat_rate,
@@ -703,15 +736,15 @@ public:
     else
       paid.push_back(PaymentImpl(ps));
   }
-  void addSource(DBase::ResultIterator *_it) {
-    DBase::Money price = _it->getNextValue();
-    unsigned vat_rate = _it->getNextValue();
-    unsigned long long number = _it->getNextValue();  
-    DBase::Money credit = _it->getNextValue();
-    DBase::ID id = _it->getNextValue();
-    DBase::Money total_price = _it->getNextValue();
-    DBase::Money total_vat = _it->getNextValue();
-    DBase::DateTime crtime = _it->getNextValue();
+  void addSource(Database::Row::Iterator& _col) {
+    Database::Money price       = *_col;
+    unsigned vat_rate           = *(++_col);
+    unsigned long long number   = *(++_col);  
+    Database::Money credit      = *(++_col);
+    Database::ID id             = *(++_col);
+    Database::Money total_price = *(++_col);
+    Database::Money total_vat   = *(++_col);
+    Database::DateTime crtime   = *(++_col);
     
     PaymentSourceImpl *new_source = new PaymentSourceImpl(price,
                                                           vat_rate,
@@ -1004,7 +1037,7 @@ public:
     man(_man)
     {}
     
-    ListImpl(DBase::Connection *_conn, ManagerImpl *_manager) : CommonListImpl(_conn),
+    ListImpl(Database::Connection *_conn, ManagerImpl *_manager) : CommonListImpl(_conn),
                                                                 crDateFilter(ptime(neg_infin),ptime(pos_infin)),
                                                                 taxDateFilter(ptime(neg_infin),ptime(pos_infin)),
                                                                 partialLoad(false),
@@ -1122,31 +1155,39 @@ public:
       partialLoad = _partialLoad;
     }
     
-    virtual void reload(DBase::Filters::Union& _uf, DBase::Manager *_db_manager) {
+    virtual void reload(Database::Filters::Union& _uf, Database::Manager *_db_manager) {
       TRACE("[CALL] Invoicing::ListImpl::reload()");
       clear();
       _uf.clearQueries();
 
-      DBase::SelectQuery id_query;
-      std::auto_ptr<DBase::Filters::Iterator> fit(_uf.createIterator());
+      bool at_least_one = false;
+      Database::SelectQuery id_query;
+      std::auto_ptr<Database::Filters::Iterator> fit(_uf.createIterator());
       for (fit->first(); !fit->isDone(); fit->next()) {
-        DBase::Filters::Invoice *inv_filter =
-        dynamic_cast<DBase::Filters::Invoice*>(fit->get());
+        Database::Filters::Invoice *inv_filter =
+            dynamic_cast<Database::Filters::Invoice*>(fit->get());
         if (!inv_filter)
-        continue;
-        DBase::SelectQuery *tmp = new DBase::SelectQuery();
-        tmp->addSelect(new DBase::Column("id", inv_filter->joinInvoiceTable(), "DISTINCT"));
+          continue;
+
+        Database::SelectQuery *tmp = new Database::SelectQuery();
+        tmp->addSelect(new Database::Column("id", inv_filter->joinInvoiceTable(), "DISTINCT"));
         _uf.addQuery(tmp);
+        at_least_one = true;
       }
-      id_query.limit(5000);
+      if (!at_least_one) {
+        LOGGER(PACKAGE).error("wrong filter passed for reload!");
+        return;
+      }
+
+      id_query.limit(load_limit_);
       _uf.serialize(id_query);
 
-      DBase::InsertQuery tmp_table_query = DBase::InsertQuery(getTempTableName(),
+      Database::InsertQuery tmp_table_query = Database::InsertQuery(getTempTableName(),
           id_query);
-      LOGGER("db").debug(boost::format("temporary table '%1%' generated sql = %2%")
+      LOGGER(PACKAGE).debug(boost::format("temporary table '%1%' generated sql = %2%")
           % getTempTableName() % tmp_table_query.str());
 
-      DBase::SelectQuery object_info_query;
+      Database::SelectQuery object_info_query;
       object_info_query.select() << "t_1.id, t_1.zone, t_2.fqdn, t_1.crdate, t_1.taxdate, "
                                  << "t_5.fromdate, t_5.todate, t_4.typ, t_1.prefix, "
                                  << "t_1.registrarid, t_1.credit * 100, t_1.price * 100, "
@@ -1154,58 +1195,65 @@ public:
                                  << "t_1.file, t_1.fileXML, t_3.organization, t_3.street1, "
                                  << "t_3.city, t_3.postalcode, "
                                  << "TRIM(t_3.ico), TRIM(t_3.dic), TRIM(t_3.varsymb), "
-                                 << "t_3.handle, t_3.vat, t_3.id, t_3.country ";
+                                 << "t_3.handle, t_3.vat, t_3.id, t_3.country, "
+                                 << "t_6.name as file_name, t_7.name as filexml_name";
 
       object_info_query.from() << "tmp_invoice_filter_result tmp "
                                << "JOIN invoice t_1 ON (tmp.id = t_1.id) "
                                << "JOIN zone t_2 ON (t_1.zone = t_2.id) "
                                << "JOIN registrar t_3 ON (t_1.registrarid = t_3.id) "
                                << "JOIN invoice_prefix t_4 ON (t_4.id = t_1.prefix_type) "
-                               << "LEFT JOIN invoice_generation t_5 ON (t_1.id = t_5.invoiceid) ";
+                               << "LEFT JOIN invoice_generation t_5 ON (t_1.id = t_5.invoiceid) "
+                               << "LEFT JOIN files t_6 ON (t_1.file = t_6.id) "
+                               << "LEFT JOIN files t_7 ON (t_1.filexml = t_7.id)";
 
       object_info_query.order_by() << "tmp.id";
 
       try {
-        std::auto_ptr<DBase::Connection> conn(_db_manager->getConnection());
+        std::auto_ptr<Database::Connection> conn(_db_manager->getConnection());
               
-        DBase::Query create_tmp_table("SELECT create_tmp_table('" + std::string(getTempTableName()) + "')");
-        std::auto_ptr<DBase::Result> r_create_tmp_table(conn->exec(create_tmp_table));
+        Database::Query create_tmp_table("SELECT create_tmp_table('" + std::string(getTempTableName()) + "')");
+        conn->exec(create_tmp_table);
         conn->exec(tmp_table_query);
  
         // TODO: use this and rewrite conn to conn_ specified in CommonListImpl
         // fillTempTable(tmp_table_query);
 
-        std::auto_ptr<DBase::Result> r_info(conn->exec(object_info_query));
-        std::auto_ptr<DBase::ResultIterator> it(r_info->getIterator());
-        for (it->first(); !it->isDone(); it->next()) {
-          DBase::ID id = it->getNextValue();
-          DBase::ID zone = it->getNextValue();
-          std::string fqdn = it->getNextValue();
-          DBase::DateTime create_time = it->getNextValue();
-          DBase::Date tax_date = it->getNextValue();
-          DBase::Date from_date = it->getNextValue();
-          DBase::Date to_date = it->getNextValue();
-          Type type = ((int)it->getNextValue() == 0 ? IT_DEPOSIT : IT_ACCOUNT);
-          unsigned long long number = it->getNextValue();
-          DBase::ID registrar_id = it->getNextValue();
-          DBase::Money credit = it->getNextValue();
-          DBase::Money price = it->getNextValue();
-          short vat_rate = it->getNextValue();
-          DBase::Money total = it->getNextValue();
-          DBase::Money total_vat = it->getNextValue();
-          DBase::ID filePDF = it->getNextValue();
-          DBase::ID fileXML = it->getNextValue();
-          std::string c_organization = it->getNextValue();
-          std::string c_street1 = it->getNextValue();
-          std::string c_city = it->getNextValue();
-          std::string c_postal_code = it->getNextValue();
-          std::string c_ico = it->getNextValue();
-          std::string c_dic = it->getNextValue();
-          std::string c_var_symb = it->getNextValue();
-          std::string c_handle = it->getNextValue();
-          bool c_vat = it->getNextValue();
-          TID c_id = it->getNextValue();
-          std::string c_country = it->getNextValue();
+        Database::Result r_info = conn->exec(object_info_query);
+        for (Database::Result::Iterator it = r_info.begin(); it != r_info.end(); ++it) {
+          Database::Row::Iterator col = (*it).begin();
+
+          Database::ID       id             = *col;
+          Database::ID       zone           = *(++col);
+          std::string        fqdn           = *(++col);
+          Database::DateTime create_time    = *(++col);
+          Database::Date     tax_date       = *(++col);
+          Database::Date     from_date      = *(++col);
+          Database::Date     to_date        = *(++col);
+          Type               type           = (int)*(++col) == 0 ? IT_DEPOSIT 
+                                                                 : IT_ACCOUNT;
+          unsigned long long number         = *(++col);
+          Database::ID       registrar_id   = *(++col);
+          Database::Money    credit         = *(++col);
+          Database::Money    price          = *(++col);
+          short              vat_rate       = *(++col);
+          Database::Money    total          = *(++col);
+          Database::Money    total_vat      = *(++col);
+          Database::ID       filePDF        = *(++col);
+          Database::ID       fileXML        = *(++col);
+          std::string        c_organization = *(++col);
+          std::string        c_street1      = *(++col);
+          std::string        c_city         = *(++col);
+          std::string        c_postal_code  = *(++col);
+          std::string        c_ico          = *(++col);
+          std::string        c_dic          = *(++col);
+          std::string        c_var_symb     = *(++col);
+          std::string        c_handle       = *(++col);
+          bool               c_vat          = *(++col);
+          TID                c_id           = *(++col);
+          std::string        c_country      = *(++col);
+          std::string        filepdf_name   = *(++col);
+          std::string        filexml_name   = *(++col);
 
           date_period account_period(from_date, to_date);
           SubjectImpl client(c_id, c_handle, c_organization, "", c_street1,
@@ -1230,11 +1278,13 @@ public:
                                           fileXML,
                                           c_var_symb,
                                           client,
+                                          filepdf_name,
+                                          filexml_name,
                                           man));
           
         }
         
-        LOGGER("register").debug(boost::format("list of invoices size: %1%") % data_.size());
+        LOGGER(PACKAGE).debug(boost::format("list of invoices size: %1%") % data_.size());
         
         if (data_.empty())
           return;
@@ -1245,7 +1295,8 @@ public:
          * 
          * append list of sources to all selected invoices
          */
-        DBase::SelectQuery source_query;
+        resetIDSequence();
+        Database::SelectQuery source_query;
         source_query.select() << "tmp.id, ipm.credit * 100, sri.vat, sri.prefix, "
                               << "ipm.balance * 100, sri.id, sri.total * 100, "
                               << "sri.totalvat * 100, sri.crdate";
@@ -1255,14 +1306,14 @@ public:
         source_query.order_by() << "tmp.id";
         
         resetIDSequence();
-        std::auto_ptr<DBase::Result> r_sources(conn->exec(source_query));
-        std::auto_ptr<DBase::ResultIterator> sit(r_sources->getIterator());
-        for (sit->first(); !sit->isDone(); sit->next()) {
-          DBase::ID invoice_id = sit->getNextValue();
+        Database::Result r_sources = conn->exec(source_query);
+        for (Database::Result::Iterator it = r_sources.begin(); it != r_sources.end(); ++it) {
+          Database::Row::Iterator col = (*it).begin();
+          Database::ID invoice_id = *col;
                     
           InvoiceImpl *invoice_ptr = dynamic_cast<InvoiceImpl*>(findIDSequence(invoice_id));
           if (invoice_ptr) 
-            invoice_ptr->addSource(sit.get());
+            invoice_ptr->addSource(++col);
         }
                   
         /* append list of actions to all selected invoices
@@ -1271,7 +1322,7 @@ public:
          * this is ignored on partial load
          */
         if (!partialLoad) {
-          DBase::SelectQuery action_query;
+          Database::SelectQuery action_query;
           action_query.select() << "tmp.id, SUM(ipm.price) * 100, i.vat, o.name, "
                                 << "ior.crdate, ior.exdate, ior.operation, ior.period, "
                                 << "CASE "
@@ -1285,24 +1336,28 @@ public:
                               << "JOIN invoice i ON (ipm.invoiceid = i.id) ";
           action_query.group_by() << "tmp.id, o.name, ior.crdate, ior.exdate, "
                                   << "ior.operation, ior.period, o.id, i.vat";
-          
-          std::auto_ptr<DBase::Result> r_actions(conn->exec(action_query));
-          std::auto_ptr<DBase::ResultIterator> ait(r_actions->getIterator());
-          for (ait->first(); !ait->isDone(); ait->next()) {
-            DBase::ID invoice_id = ait->getNextValue();
+          action_query.order_by() << "tmp.id";
+        
+          resetIDSequence();
+          Database::Result r_actions = conn->exec(action_query);
+          for (Database::Result::Iterator it = r_actions.begin(); it != r_actions.end(); ++it) {
+            Database::Row::Iterator col = (*it).begin();
+            Database::ID invoice_id = *col;
             
-            InvoiceImpl *invoice_ptr = dynamic_cast<InvoiceImpl* >(findId(invoice_id));
+            InvoiceImpl *invoice_ptr = dynamic_cast<InvoiceImpl* >(findIDSequence(invoice_id));
             if (invoice_ptr) 
-              invoice_ptr->addAction(ait.get());
+              invoice_ptr->addAction(++col);
           }
         }
+        /* checks if row number result load limit is active and set flag */ 
+        CommonListImpl::reload();
       }
-      catch (DBase::Exception& ex) {
-        LOGGER("db").error(boost::format("%1%") % ex.what());
+      catch (Database::Exception& ex) {
+        LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
         clear();
       }
       catch (std::exception& ex) {
-        LOGGER("db").error(boost::format("%1%") % ex.what());
+        LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
         clear();
       }
 
@@ -1449,7 +1504,7 @@ public:
     
     /// export all invoices on the list using given exporter
     void doExport(Exporter *_exporter) {
-      iterator it = data_.begin();
+      Iterator it = data_.begin();
       for (; it != data_.end(); ++it) {
         InvoiceImpl *invoice = dynamic_cast<InvoiceImpl*>(*it);
         if (invoice)
@@ -1685,7 +1740,7 @@ public:
     return new ManagerImpl(db,docman,mailman);
   }
   
-  Manager* Manager::create(DBase::Manager *_db_manager, 
+  Manager* Manager::create(Database::Manager *_db_manager, 
                            Document::Manager *_doc_manager, 
                            Mailer::Manager *_mail_manager) {
     return new ManagerImpl(_db_manager, _doc_manager, _mail_manager);

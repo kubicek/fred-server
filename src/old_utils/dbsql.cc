@@ -26,6 +26,7 @@
 #include "dbsql.h"
 #include "util.h"
 #include "log.h"
+#include "log/logger.h"
 #include "corba/epp/action.h"
 
 #include <boost/date_time/posix_time/posix_time.hpp>
@@ -44,9 +45,9 @@ ParsedAction::executeSQL(Register::TID actionid, DB* db)
   for (i=elements.begin();i!=elements.end();i++) {
     std::stringstream sql;
     sql << "INSERT INTO action_elements (actionid,elementid,value) VALUES ("
-        << actionid << "," << i->first << ",'" << db->Escape2(i->second) << "')";
-    if (!db->ExecSQL(sql.str().c_str())) return false;
-    return true;  
+        << actionid << "," << i->first << ", LOWER('" << db->Escape2(i->second) << "'))";
+    if (!db->ExecSQL(sql.str().c_str()))
+        return false;
   }
   return true;
 }
@@ -140,6 +141,10 @@ bool DB::SaveEPPTransferMessage(
       schema_contact[] =
           " xmlns:contact=\"http://www.nic.cz/xml/epp/contact-1.4\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.nic.cz/xml/epp/contact-1.4 contact-1.4.xsd\" ";
 
+  char
+      schema_keyset[] = 
+      " xmlns:keyset=\"http://www.nic.cz/xml/epp/keyset-1.4\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.nic.cz/xml/epp/keyset-1.4 keyset-1.4.xsd\" ";
+
   LOG( NOTICE_LOG , "EPPTransferMessage to registrar : %d trasfer objectID %d new registar %d" , oldregID , objectID , regID );
 
   xmlString[0] = 0; // empty string
@@ -181,6 +186,17 @@ bool DB::SaveEPPTransferMessage(
             schema_domain, GetFieldValueName("Name", 0) ,
             GetFieldDateTimeValueName("TrDate", 0) , regHandle);
         FreeSelect();
+      }
+      break;
+    case 4: // keyset
+      if (SELECTOBJECTID("KEYSET", "handle", objectID)) {
+          snprintf(
+                  xmlString,
+                  sizeof(xmlString),
+                  "<keyset:trnData %s > <keyset:id>%s</keyset:id><keyset:trDate>%s</keyset:trDate><keyset:clID>%s</keyset:clID></keyset:trnData> ",
+                  schema_keyset, GetFieldValueName("Name", 0),
+                  GetFieldDateTimeValueName("TrDate", 0), regHandle);
+          FreeSelect();
       }
       break;
     default:
@@ -470,7 +486,7 @@ int DB::SaveXMLout(
   int actionID;
 
   actionID = GetNumericFromTable("action", "id", "serverTRID", svTRID);
-
+  throw std::bad_alloc();
   if (actionID > 0) {
 
     if (strlen(xml) ) {
@@ -496,7 +512,8 @@ bool DB::BeginAction(
 
   bool ret = false;
 
-  BeginTransaction();
+  if (!BeginTransaction())
+      return false;
 
   // actionID for loging all action
   actionID = GetSequenceID("action");
@@ -646,6 +663,158 @@ int DB::GetNSSetHosts(
   return num;
 }
 
+// get number of dsrecords associated to keyset
+int 
+DB::GetKeySetDSRecords(int keysetID)
+{
+    char sqlString[128];
+    int num = 0;
+
+    sprintf(sqlString, "SELECT id FROM dsrecord WHERE keysetid=%d;", keysetID);
+
+    if (ExecSelect(sqlString)) {
+        num = GetSelectRows();
+        LOG(SQL_LOG, "keyset id(%d) has %d dsrecord(s)", keysetID, num);
+        FreeSelect();
+    }
+
+    return num;
+}
+// get id of dsrecord
+int 
+DB::GetDSRecordId(
+        int keysetId,
+        int keyTag,
+        int alg,
+        int digestType,
+        const char *digest,
+        int maxSigLife)
+{
+    std::stringstream query;
+    int id = 0;
+    query
+        << "SELECT id"
+        << " FROM dsrecord"
+        << " WHERE keysetid=" << keysetId
+        << " AND keytag=" << keyTag
+        << " AND alg=" << alg
+        << " AND digest='" << digest << "'";
+    if (maxSigLife != -1)
+        query << " AND maxsiglife=" << maxSigLife;
+
+    if (ExecSelect(query.str().c_str())) {
+        id = atoi(GetFieldValue(0, 0));
+        if (id != 0) {
+            LOG(SQL_LOG, "Found dsrecord id(%d) with same values", id);
+        }
+        FreeSelect();
+    }
+    return id;
+}
+
+// get id of dsrecord, dont care about keyset id
+int 
+DB::GetDSRecordId(
+        int keyTag,
+        int alg,
+        int digestType,
+        const char *digest,
+        int maxSigLife)
+{
+    std::stringstream query;
+    int id = 0;
+    query
+        << "SELECT id"
+        << " FROM dsrecord"
+        << " WHERE keytag=" << keyTag
+        << " AND alg=" << alg
+        << " AND digest='" << digest << "'";
+    if (maxSigLife != -1)
+        query << " AND maxsiglife=" << maxSigLife;
+
+    if (ExecSelect(query.str().c_str())) {
+        id = atoi(GetFieldValue(0, 0));
+        if (id != 0) {
+            LOG(SQL_LOG, "Found dsrecord id(%d) with same values", id);
+        }
+        FreeSelect();
+    }
+    return id;
+}
+
+// returns number of dnskey records associated to keyset
+int
+DB::GetKeySetDNSKeys(int keysetId)
+{
+    std::stringstream query;
+    int ret = 0;
+
+    query << "SELECT id FROM dnskey WHERE keysetid=" << keysetId << ";";
+    if (ExecSelect(query.str().c_str())) {
+        ret = GetSelectRows();
+        LOG(SQL_LOG, "Keyset id(%d) has %d dnskey(s)",
+                keysetId, ret);
+        FreeSelect();
+    }
+    return ret;
+}
+
+// get id of dnskey
+int
+DB::GetDNSKeyId(
+        int keysetId,
+        int flags,
+        int protocol,
+        int alg,
+        const char *key)
+{
+    std::stringstream query;
+    int id = 0;
+    query
+        << "SELECT id"
+        << " FROM dnskey"
+        << " WHERE keysetid=" << keysetId
+        << " AND flags=" << flags
+        << " AND protocol=" << protocol
+        << " AND alg=" << alg
+        << " AND key='" << key << "'";
+    if (ExecSelect(query.str().c_str())) {
+        id = atoi(GetFieldValue(0, 0));
+        if (id != 0) {
+            LOG(SQL_LOG, "Found dnskey id(%d) with same values", id);
+        }
+        FreeSelect();
+    }
+    return id;
+}
+// get id of dnskey, don't care about keyset id
+int
+DB::GetDNSKeyId(
+        int flags,
+        int protocol,
+        int alg,
+        const char *key)
+{
+    std::stringstream query;
+    int id = 0;
+    query
+        << "SELECT id"
+        << " FROM dnskey"
+        << " WHERE flags=" << flags
+        << " AND protocol=" << protocol
+        << " AND alg=" << alg
+        << " AND key='" << key << "'";
+    if (ExecSelect(query.str().c_str())) {
+        id = atoi(GetFieldValue(0, 0));
+        if (id != 0) {
+            LOG(SQL_LOG, "Found dnskey id(%d) with same values", id);
+        }
+        FreeSelect();
+    }
+    return id;
+}
+
+
 // if the registrar is client of the object
 bool DB::TestObjectClientID(
   int id, int regID)
@@ -698,6 +867,17 @@ int DB::GetNSSetID(
     return GetObjectID( 2, HANDLE);
 }
 
+int
+DB::GetKeySetID(const char *handle)
+{
+    char HANDLE[64];
+    // to upper case and test
+    if (get_KEYSETHANDLE(HANDLE, handle) == false)
+        return -1;
+    else
+        return GetObjectID(4, HANDLE);
+}
+
 int DB::GetObjectID(
   int type, const char *name)
 {
@@ -737,6 +917,24 @@ int DB::GetNSSetContacts(
   }
 
   return num;
+}
+
+// get number of tech contact associated to keyset
+int
+DB::GetKeySetContacts(int keysetid)
+{
+    char sqlString[128];
+    int num = 0;
+    sprintf(sqlString, "SELECT * FROM keyset_contact_map WHERE keysetid=%d;",
+            keysetid);
+
+    if (ExecSelect(sqlString)) {
+        num = GetSelectRows();
+        LOG(SQL_LOG, " keyset_contact_map num %d", num);
+        FreeSelect();
+    }
+
+    return num;
 }
 
 // save object as deleted
@@ -779,6 +977,12 @@ bool DB::TestDomainFQDNHistory(
   const char * fqdn, int days)
 {
   return TestObjectHistory(fqdn, days);
+}
+
+bool
+DB::TestKeySetHandleHistory(const char *handle, int days)
+{
+    return TestObjectHistory(handle, days);
 }
 
 // test protected period 
@@ -824,6 +1028,9 @@ int DB::CreateObject(
       break;
     case 'D':
       itype = 3;
+      break;
+    case 'K':
+      itype = 4;
       break;
     default:
       return 0;
@@ -1091,6 +1298,22 @@ bool DB::TestNSSetRelations(
   return ret;
 }
 
+// test for keyset is linked to domain
+bool
+DB::TestKeySetRelations(int id)
+{
+    bool ret = false;
+    char sqlString[128];
+
+    sprintf(sqlString, "SELECT id FROM DOMAIN WHERE keyset=%d;", id);
+    if (ExecSelect(sqlString)) {
+        if (GetSelectRows() > 0)
+            ret = true;
+        FreeSelect();
+    }
+    return ret;
+}
+
 bool DB::TestContactRelations(
   int id)
 {
@@ -1111,6 +1334,16 @@ bool DB::TestContactRelations(
   if (ExecSelect(sqlString) ) {
     count = atoi(GetFieldValue( 0, 0) );
     FreeSelect();
+  }
+
+  if (count > 0)
+    return true;
+
+  sprintf(sqlString,
+          "SELECT count(keysetID) from KEYSET_CONTACT_MAP WHERE contactid=%d;", id);
+  if (ExecSelect(sqlString)) {
+      count = atoi(GetFieldValue(0, 0));
+      FreeSelect();
   }
 
   if (count > 0)
@@ -2076,6 +2309,20 @@ bool DB::SaveNSSetHistory(
   return 0;
 }
 
+bool
+DB::SaveKeySetHistory(int id)
+{
+    // save to history
+    if (MakeHistory(id))
+        if (SaveHistory("KEYSET", "id", id))
+            if (SaveHistory("DSRECORD", "keysetid", id))
+                if (SaveHistory("dnskey", "keysetid", id))
+                    if (SaveHistory("keyset_contact_map", "keysetid", id))
+                        return true;
+    return false;
+}
+
+
 bool DB::DeleteNSSetObject(
   int id)
 {
@@ -2089,6 +2336,19 @@ bool DB::DeleteNSSetObject(
             return true;
 
   return false;
+}
+
+bool
+DB::DeleteKeySetObject(int id)
+{
+    // first delete tech contact
+    if (DeleteFromTable("keyset_contact_map", "keysetid", id))
+        if (DeleteFromTable("dnskey", "keysetid", id))
+            if (DeleteFromTable("dsrecord", "keysetid", id))
+                if (DeleteFromTable("keyset", "id", id))
+                    if (DeleteFromTable("object", "id", id))
+                        return true;
+    return false;
 }
 
 bool DB::SaveDomainHistory(

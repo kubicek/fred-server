@@ -1,7 +1,11 @@
 #include "contact_filter.h"
 
-namespace DBase {
+namespace Database {
 namespace Filters {
+
+Contact* Contact::create() {
+  return new ContactHistoryImpl();
+}
 
 /*
  * CONTACT IMPLEMENTATION
@@ -9,13 +13,22 @@ namespace Filters {
 ContactImpl::ContactImpl() :
   ObjectImpl() {
   setName("Contact");
-  setType(getType());
+  addType().setValue(getType());
 }
 
 ContactImpl::~ContactImpl() {
 }
 
-Value<DBase::ID>& ContactImpl::addId() {
+Value<std::string>& ContactImpl::addHandle() {
+  Value<std::string> *tmp = new Value<std::string>(Column("name", joinObjectRegistryTable()));
+  add(tmp);
+  tmp->addPreValueString("UPPER(");
+  tmp->addPostValueString(")");
+  tmp->setName("Handle");
+  return *tmp;
+}
+
+Value<Database::ID>& ContactImpl::addId() {
   Value<ID> *tmp = new Value<ID>(Column("id", joinContactTable()));
   tmp->setName("Id");
   add(tmp);
@@ -93,13 +106,22 @@ void ContactImpl::_joinPolymorphicTables() {
 ContactHistoryImpl::ContactHistoryImpl() :
   ObjectHistoryImpl() {
   setName("ContactHistory");
-  setType(getType());
+  addType().setValue(getType());
 }
 
 ContactHistoryImpl::~ContactHistoryImpl() {
 }
 
-Value<DBase::ID>& ContactHistoryImpl::addId() {
+Value<std::string>& ContactHistoryImpl::addHandle() {
+  Value<std::string> *tmp = new Value<std::string>(Column("name", joinObjectRegistryTable()));
+  add(tmp);
+  tmp->addPreValueString("UPPER(");
+  tmp->addPostValueString(")");
+  tmp->setName("Handle");
+  return *tmp;
+}
+
+Value<Database::ID>& ContactHistoryImpl::addId() {
   Value<ID> *tmp = new Value<ID>(Column("id", joinContactTable()));
   tmp->setName("Id");
   add(tmp);
@@ -160,15 +182,15 @@ Table& ContactHistoryImpl::joinContactTable() {
 }
 
 void ContactHistoryImpl::_joinPolymorphicTables() {
-  ObjectHistoryImpl::_joinPolymorphicTables();
   Table *c = findTable("contact_history");
   if (c) {
     joins.push_back(new Join(
-        Column("historyid", joinTable("object_registry")),
+        Column("historyid", joinTable("object_history")),
         SQL_OP_EQ,
         Column("historyid", *c)
     ));
   }
+  ObjectHistoryImpl::_joinPolymorphicTables();
 }
 
 

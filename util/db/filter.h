@@ -9,13 +9,15 @@
 #include <boost/serialization/string.hpp>
 
 #include "query.h"
-#include "data_types.h"
+#include "types/data_types.h"
 #include "sql_helper_objects.h"
 #include "sql_operators.h"
 #include "log/logger.h"
+
+#include "settings.h"
 //#include "visitor.h"
 
-namespace DBase {
+namespace Database {
 
 class SelectQuery;
 
@@ -59,15 +61,12 @@ public:
   virtual void setName(const std::string& _name) {
     name = _name;
   }
-  virtual Filter* clone() const {
-    return 0;
-  }
   virtual bool isActive() const = 0;
   
   /**
    * Query data filling
    */
-  virtual void serialize(DBase::SelectQuery& _sq) = 0;
+  virtual void serialize(Database::SelectQuery& _sq, const Settings_* _settings = 0) = 0;
   
   friend class boost::serialization::access;
   template<class Archive>
@@ -77,7 +76,7 @@ public:
     _ar & BOOST_SERIALIZATION_NVP(conj);
     _ar & BOOST_SERIALIZATION_NVP(name);
   }
-
+  
 protected:
   virtual void setConjuction(const std::string& _conj) {
     conj = _conj;

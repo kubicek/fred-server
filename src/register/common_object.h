@@ -4,9 +4,45 @@
 #include "types.h"
 #include "exceptions.h"
 #include "model/model_filters.h"
-#include "db/dbs.h"
+#include "db/manager.h"
 
 namespace Register {
+
+/**
+ * Type of searchable objects
+ */
+enum FilterType {
+  FT_FILTER,
+  FT_REGISTRAR,
+  FT_OBJ,
+  FT_CONTACT,
+  FT_NSSET,
+  FT_KEYSET,
+  FT_DOMAIN,
+  FT_ACTION,
+  FT_INVOICE,
+  FT_PUBLICREQUEST,
+  FT_MAIL,
+  FT_FILE
+};
+
+/*
+ * Object info (for links between objects)
+ */
+struct OID {
+  OID(Database::ID _id) : id(_id) { }
+  OID(Database::ID _id, std::string _handle, FilterType _type) : id(_id),
+                                                                 handle(_handle),
+                                                                 type(_type) { }
+  Database::ID   id;
+  std::string handle;
+  FilterType  type;
+};
+
+
+/**
+ * Top of the objects hierarchy
+ */
 class CommonObject {
 public:
   /// D-tor
@@ -20,7 +56,7 @@ class CommonList {
 protected:
   typedef std::vector<CommonObject *> list_type;
   typedef list_type::size_type size_type;
-  typedef list_type::iterator iterator;  
+  typedef list_type::iterator Iterator;  
 
 public:
   /// D-tor
@@ -35,6 +71,10 @@ public:
   virtual unsigned long long sizeDb() = 0;
   /// set limit for result
   virtual void setLimit(unsigned _limit) = 0;
+  /// get load lomit
+  virtual unsigned getLimit() const = 0;
+  /// true if result size has been limited by load_limit_ value
+  virtual bool isLimited() const = 0;
 
   /// get detail of loaded objects  
   virtual CommonObject *get(unsigned _idx) const = 0;
@@ -49,9 +89,9 @@ public:
   /// fill variable with count of select objects
   virtual void makeRealCount() throw (SQL_ERROR) = 0;
   /// get variable with count of select objects
-  virtual unsigned long long getRealCount(DBase::Filters::Union &_filter) = 0;
+  virtual unsigned long long getRealCount(Database::Filters::Union &_filter) = 0;
   /// make real count for new filters
-  virtual void makeRealCount(DBase::Filters::Union &_filter) = 0;
+  virtual void makeRealCount(Database::Filters::Union &_filter) = 0;
   
   /// fill temporary table with selected ids 
   virtual void fillTempTable(bool _limit) const throw (SQL_ERROR) = 0;
@@ -66,8 +106,8 @@ public:
   /// reload data according to filter
   virtual void reload() = 0;
   
-  virtual iterator begin() = 0;
-  virtual iterator end() = 0;
+  virtual Iterator begin() = 0;
+  virtual Iterator end() = 0;
 };
 
 }

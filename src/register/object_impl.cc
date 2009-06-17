@@ -16,6 +16,8 @@
  *  along with FRED.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
+
 #include "object_impl.h"
 #include "old_utils/dbsql.h"
 #include "sql.h"
@@ -24,15 +26,28 @@
 //     Register::StatusImpl
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-Register::StatusImpl::StatusImpl(TID _id, ptime _timeFrom, ptime _timeTo) :
-  id(_id), timeFrom(_timeFrom), timeTo(_timeTo) {
+Register::StatusImpl::StatusImpl(const TID& _id, 
+                                 const TID& _status_id,
+                                 const ptime& _timeFrom, 
+                                 const ptime& _timeTo, 
+                                 const TID& _ohid_from,
+                                 const TID& _ohid_to) : id(_id),
+                                                        status_id(_status_id),
+                                                        timeFrom(_timeFrom), 
+                                                        timeTo(_timeTo),
+                                                        ohid_from(_ohid_from),
+                                                        ohid_to(_ohid_to) {
 }
 
 Register::StatusImpl::~StatusImpl() {
 }
 
-Register::TID Register::StatusImpl::getStatusId() const {
+Register::TID Register::StatusImpl::getId() const {
   return id;
+}
+
+Register::TID Register::StatusImpl::getStatusId() const {
+  return status_id;
 }
 
 ptime Register::StatusImpl::getFrom() const {
@@ -43,17 +58,25 @@ ptime Register::StatusImpl::getTo() const {
   return timeTo;
 }
 
+Register::TID Register::StatusImpl::getHistoryIdFrom() const {
+  return ohid_from;
+}
+
+Register::TID Register::StatusImpl::getHistoryIdTo() const {
+  return ohid_to;
+}
+
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 //     Register::ObjectImpl
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-Register::ObjectImpl::ObjectImpl(TID _id, ptime _crDate, ptime _trDate,
-    ptime _upDate, date _erDate, TID _registrar,
+Register::ObjectImpl::ObjectImpl(TID _id, const Database::ID& _history_id, ptime _crDate, ptime _trDate,
+    ptime _upDate, ptime _erDate, TID _registrar,
     const std::string _registrarHandle, TID _createRegistrar,
     const std::string _createRegistrarHandle, TID _updateRegistrar,
     const std::string _updateRegistrarHandle, const std::string& _authPw,
     const std::string _roid) :
-  CommonObjectImpl(_id), crDate(_crDate), trDate(_trDate), upDate(_upDate),
+  CommonObjectImpl(_id), history_id(_history_id), crDate(_crDate), trDate(_trDate), upDate(_upDate),
       erDate(_erDate), registrar(_registrar),
       registrarHandle(_registrarHandle), createRegistrar(_createRegistrar),
       createRegistrarHandle(_createRegistrarHandle),
@@ -68,6 +91,23 @@ Register::ObjectImpl::ObjectImpl() :
       updateRegistrar(0) {
 }
 
+Database::ID Register::ObjectImpl::getHistoryId() const {
+  return history_id;
+}
+
+Database::ID Register::ObjectImpl::getActionId() const {
+  return action_id;
+}
+
+Database::DateTime Register::ObjectImpl::getActionStartTime() const {
+  return action_start_time;
+}
+
+void Register::ObjectImpl::setAction(const Database::ID& _id, const Database::DateTime& _start_time) {
+  action_id = _id;
+  action_start_time = _start_time;
+}
+
 ptime Register::ObjectImpl::getCreateDate() const {
   return crDate;
 }
@@ -80,7 +120,7 @@ ptime Register::ObjectImpl::getUpdateDate() const {
   return upDate;
 }
 
-date Register::ObjectImpl::getDeleteDate() const {
+ptime Register::ObjectImpl::getDeleteDate() const {
   return erDate;
 }
 
@@ -131,8 +171,8 @@ const Register::Status* Register::ObjectImpl::getStatusByIdx(unsigned idx) const
     return &slist[idx];
 }
 
-void Register::ObjectImpl::insertStatus(TID id, ptime timeFrom, ptime timeTo) {
-  slist.push_back(StatusImpl(id, timeFrom, timeTo));
+void Register::ObjectImpl::insertStatus(const StatusImpl& _state) {
+  slist.push_back(_state);
 }
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -144,7 +184,7 @@ Register::ObjectListImpl::ObjectListImpl(DB *_db) :
       updateRegistrarFilter(0), crDateIntervalFilter(ptime(neg_infin),
           ptime(pos_infin)), updateIntervalFilter(ptime(neg_infin),
           ptime(pos_infin)), trDateIntervalFilter(ptime(neg_infin),
-          ptime(pos_infin)), nonHandleFilterSet(false) {
+          ptime(pos_infin)), nonHandleFilterSet(false), ptr_history_idx_(-1) {
 }
 
 void Register::ObjectListImpl::setRegistrarFilter(TID registrarId) {
@@ -253,41 +293,131 @@ void Register::ObjectListImpl::reload(const char *handle, int type)
             i, 0)) ));
     if (!o)
       throw SQL_ERROR();
-    o->insertStatus(STR_TO_ID(db->GetFieldValue(i, 1)), MAKE_TIME(i, 2),
-        ptime() );
+    o->insertStatus(StatusImpl(0 /* dummy state db id */, STR_TO_ID(db->GetFieldValue(i, 1)), MAKE_TIME(i, 2),
+        ptime(), 0, 0 /* dummy history ids */));
   }
   db->FreeSelect();
 }
 
-void Register::ObjectListImpl::reload2(DBase::Connection* _conn) {
-  DBase::SelectQuery states_query;
-  states_query.select() << "tmp.id, t_1.object_id, t_1.state_id, t_1.valid_from";
-  states_query.from() << getTempTableName() << " tmp "
-                      << "JOIN object_registry t_2 ON (tmp.id = t_2.historyid) "
-                      << "JOIN object_state t_1 ON (t_2.id = t_1.object_id)";
-  states_query.where() << "AND t_1.valid_to IS NULL";
-  states_query.order_by() << "t_1.object_id";
+void Register::ObjectListImpl::reload(Database::Connection* _conn, bool _history) {
+//  Database::SelectQuery states_query;
+//  states_query.select() << "tmp.id, t_1.object_id, t_1.state_id, t_1.valid_from";
+//  states_query.from() << getTempTableName() << " tmp "
+//                      << "JOIN object_registry t_2 ON (tmp.id = t_2.historyid) "
+//                      << "JOIN object_state t_1 ON (t_2.id = t_1.object_id)";
+//  states_query.where() << "AND t_1.valid_to IS NULL";
+//  states_query.order_by() << "t_1.object_id";
 
-  resetIDSequence();
+  Database::SelectQuery states_query;
+  states_query.select() << "tmp.id, t_1.object_id, t_1.id, t_1.state_id, t_1.valid_from, t_1.valid_to, t_1.ohid_from, t_1.ohid_to";
+  states_query.from() << getTempTableName() << " tmp "
+                      << "JOIN object_history t_2 ON (tmp.id = t_2.historyid) "
+                      << "JOIN object_state t_1 ON (t_2.historyid >= t_1.ohid_from AND (t_2.historyid <= t_1.ohid_to OR t_1.ohid_to IS NULL)) "
+                      << "AND t_2.id = t_1.object_id";
+  if (!_history) {
+    states_query.where() << "AND t_1.ohid_to IS NULL";
+  }
+  states_query.order_by() << "tmp.id";
+
+  Database::SelectQuery actions_query;
+  actions_query.select() << "tmp.id, a.id, a.startdate";
+  actions_query.from() << getTempTableName() << " tmp "
+                       << "JOIN history h ON (tmp.id = h.id) "
+                       << "JOIN action a ON (a.id = h.action)";
+  actions_query.order_by() << "tmp.id";
+
   try {
-    std::auto_ptr<DBase::Result> r_states(_conn->exec(states_query));
-    std::auto_ptr<DBase::ResultIterator> rit(r_states->getIterator());
-    for (rit->first(); !rit->isDone(); rit->next()) {
-      DBase::ID object_historyid = rit->getNextValue();
-      DBase::ID object_id = rit->getNextValue();
-      DBase::ID state_id = rit->getNextValue();
-      DBase::DateTime valid_from = rit->getNextValue();
-      
-      ObjectImpl *object_ptr = dynamic_cast<ObjectImpl *>(findIDSequence(object_id));
+    /* load object states */
+    resetHistoryIDSequence();
+    
+    Database::Result r_states = _conn->exec(states_query);
+    for (Database::Result::Iterator it = r_states.begin(); it != r_states.end(); ++it) {
+      Database::Row::Iterator col = (*it).begin();
+
+      Database::ID       object_historyid = *col;
+      Database::ID       object_id        = *(++col);
+      Database::ID       state_db_id      = *(++col);
+      Database::ID       state_id         = *(++col);
+      Database::DateTime valid_from       = *(++col);
+      Database::DateTime valid_to         = *(++col);
+      Database::ID       ohid_from        = *(++col);
+      Database::ID       ohid_to          = *(++col);
+
+      ObjectImpl *object_ptr = dynamic_cast<ObjectImpl *>(findHistoryIDSequence(object_historyid));
       if (object_ptr)
-        object_ptr->insertStatus(state_id, valid_from, ptime());
+        object_ptr->insertStatus(StatusImpl(state_db_id, state_id, valid_from, valid_to, ohid_from, ohid_to));
+    }
+
+    /* load object history actions */
+    resetHistoryIDSequence();
+    Database::Result r_actions = _conn->exec(actions_query);
+    for (Database::Result::Iterator it = r_actions.begin(); it != r_actions.end(); ++it) {
+      Database::Row::Iterator col = (*it).begin();
+
+      Database::ID       object_historyid = *col;
+      Database::ID       action_id        = *(++col);
+      Database::DateTime start_date       = *(++col);
+      
+      ObjectImpl *object_ptr = dynamic_cast<ObjectImpl *>(findHistoryIDSequence(object_historyid));
+      if (object_ptr)
+        object_ptr->setAction(action_id, start_date);
     }
   }
-  catch (DBase::Exception& ex) {
-    LOGGER("db").error(boost::format("%1%") % ex.what());
+  catch (Database::Exception& ex) {
+    LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
   }
   catch (std::exception& ex) {
-    LOGGER("db").error(boost::format("%1%") % ex.what());
+    LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
+  }
+}
+
+void Register::ObjectListImpl::resetHistoryIDSequence() {
+  ptr_history_idx_ = -1;
+}
+
+
+Register::Object* Register::ObjectListImpl::findHistoryIDSequence(const Database::ID& _history_id) {
+  /* data_ container must be sorted by ID to make sence */
+  if (ptr_history_idx_ < 0)
+    ptr_history_idx_ = 0;
+
+  while (ptr_history_idx_ < (int)data_.size()) {
+    Register::Object *ptr_object = dynamic_cast<Register::Object*>(data_[ptr_history_idx_]);
+    if (ptr_object && ptr_object->getHistoryId() < _history_id) {
+      ++ptr_history_idx_;
+    }
+    else {
+      break;
+    }
   }
 
+  Register::Object *ptr_object = dynamic_cast<Register::Object*>(data_[ptr_history_idx_]);
+  if (ptr_history_idx_ == (int)data_.size() || (ptr_object && (ptr_object->getHistoryId() != _history_id))) {
+    LOGGER(PACKAGE).debug(boost::format("find history id sequence: not found in result set. (historyid=%1%, ptr_idx=%2%)")
+                                        % _history_id % ptr_idx_);
+    resetHistoryIDSequence();
+    return 0;
+  }
+  else {
+    return ptr_object;
+  }
+}
+
+
+void Register::ObjectListImpl::deleteDuplicatesId() {
+  TRACE("<CALL> Register::ObjectListImpl::deleteDuplicatesId()");
+
+  std::stable_sort(data_.begin(), data_.end(), SortByHistoryId());
+  LOGGER(PACKAGE).debug(boost::format("%1% record(s) in result sorted") % data_.size());
+  list_type::iterator it = data_.begin();
+  while (data_.begin() != data_.end() && it < data_.end() - 1) {
+    if ((*it)->getId() == (*(it + 1))->getId()) {
+      delete *it;
+      it = data_.erase(it);
+    }
+    else {
+      ++it;
+    }
+  }
+  LOGGER(PACKAGE).debug(boost::format("%1% record(s) in result after removing duplicates") % data_.size());
 }

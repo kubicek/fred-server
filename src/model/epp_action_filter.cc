@@ -1,10 +1,14 @@
 #include "epp_action_filter.h"
 
-namespace DBase {
+namespace Database {
 namespace Filters {
 
-EppActionImpl::EppActionImpl() :
-  Compound() {
+EppAction* EppAction::create() {
+  return new EppActionImpl();
+}
+
+
+EppActionImpl::EppActionImpl() : Compound() {
   setName("EppAction");
   active = true;
 }
@@ -14,6 +18,13 @@ EppActionImpl::~EppActionImpl() {
 
 Table& EppActionImpl::joinActionTable() {
   return joinTable("action");
+}
+
+Value<Database::ID>& EppActionImpl::addId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("id", joinActionTable()));
+  tmp->setName("Id");
+  add(tmp);
+  return *tmp;
 }
 
 EppSession& EppActionImpl::addSession() {
@@ -35,7 +46,7 @@ Registrar& EppActionImpl::addRegistrar() {
 }
 
 Object& EppActionImpl::addObject() {
-  Object* tmp = new ObjectHistoryImpl();
+  Object* tmp = Object::create();
   addJoin(new Join(
       Column("id", joinActionTable()),
       SQL_OP_EQ,
@@ -54,6 +65,20 @@ Object& EppActionImpl::addObject() {
   tmp->setName("Object");
   add(tmp);
   return *tmp;
+}
+
+Value<std::string>& EppActionImpl::addRequestHandle() {
+  addJoin(new Join(
+      Column("id", joinActionTable()),
+      SQL_OP_EQ,
+      Column("actionid", joinTable("action_elements"))
+  ));
+  Value<std::string> *tmp = new Value<std::string>(Column("value", joinTable("action_elements")));
+  add(tmp);
+  tmp->addPreValueString("LOWER(");
+  tmp->addPostValueString(")");
+  tmp->setName("RequestHandle");
+  return *tmp;  
 }
 
 Interval<DateTimeInterval>& EppActionImpl::addTime() {
@@ -78,8 +103,17 @@ Value<std::string>& EppActionImpl::addSvTRID() {
   return *tmp;
 }
 
+Value<int>& EppActionImpl::addEppCodeResponse() {
+  Value<int> *tmp = new Value<int>(Column("response", joinActionTable()));
+  add(tmp);
+  tmp->setName("EppCodeResponse");
+  return *tmp;
+}
+
 Value<int>& EppActionImpl::addResponse() {
   Value<int> *tmp = new Value<int>(Column("response", joinActionTable()));
+  tmp->addModifier(new ValueModifier<int>(0, 2000, SQL_OP_GE));
+  tmp->addModifier(new ValueModifier<int>(1, 2000, SQL_OP_LT));
   add(tmp);
   tmp->setName("Response");
   return *tmp;

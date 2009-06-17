@@ -10,22 +10,28 @@ ccReg_Filters_i::~ccReg_Filters_i() {
 
 void 
 ccReg_Filters_i::reload() {
+  Logging::Context ctx(base_context_);
+
   TRACE("[CALL] ccReg_Filters_i::reload()");
   m_filter_list.reload(uf);
 }
 
 ccReg::Filters::Compound_ptr ccReg_Filters_i::add() {
+  Logging::Context ctx(base_context_);
+
   TRACE("[CALL] ccReg_Filters_i::add()");
   it.clearF();
-  DBase::Filters::FilterFilter *f = new DBase::Filters::FilterFilterImpl();
+  Database::Filters::FilterFilter *f = new Database::Filters::FilterFilterImpl();
   uf.addFilter(f);
   return it.addE(f); 
 }
 
-ccReg::Table::ColumnHeaders* 
+Registry::Table::ColumnHeaders* 
 ccReg_Filters_i::getColumnHeaders() {
+  Logging::Context ctx(base_context_);
+
   TRACE("[CALL] ccReg_Filters_i::getColumnHeaders()");
-  ccReg::Table::ColumnHeaders *ch = new ccReg::Table::ColumnHeaders();
+  Registry::Table::ColumnHeaders *ch = new Registry::Table::ColumnHeaders();
   ch->length(4);
   COLHEAD(ch,0,"UserID", CT_OTHER);
   COLHEAD(ch,1,"GroupID", CT_OTHER);
@@ -34,32 +40,50 @@ ccReg_Filters_i::getColumnHeaders() {
   return ch;
 }
 
-ccReg::TableRow* 
+Registry::TableRow* 
 ccReg_Filters_i::getRow(CORBA::Short row) 
   throw (ccReg::Table::INVALID_ROW) {
-  const Register::Filter::Filter *item = m_filter_list.get(row);
-  if (!item) 
-  	  throw ccReg::Table::INVALID_ROW();
-  ccReg::TableRow *tr = new ccReg::TableRow;
-  tr->length(4);
-  (*tr)[0] = DUPSTRC(Util::stream_cast<std::string>(item->getUserId().value));
-  (*tr)[1] = DUPSTRC(Util::stream_cast<std::string>(item->getGroupId().value));
-  (*tr)[2] = DUPSTRC(Util::stream_cast<std::string>(item->getType()));
-  (*tr)[3] = DUPSTRFUN(item->getName);
-  return tr;
+  Logging::Context ctx(base_context_);
+
+  try {
+    const Register::Filter::Filter *item = m_filter_list.get(row);
+    if (!item) 
+    	  throw ccReg::Table::INVALID_ROW();
+    
+    Registry::TableRow *tr = new Registry::TableRow;
+    tr->length(4);
+    (*tr)[0] <<= DUPSTRC(item->getUserId().to_string());
+    (*tr)[1] <<= DUPSTRC(item->getGroupId().to_string());
+    (*tr)[2] <<= DUPSTRC(Conversion<int>::to_string(item->getType()));
+    (*tr)[3] <<= DUPSTRFUN(item->getName);
+    return tr;
+  }
+  catch (...) {
+    throw ccReg::Table::INVALID_ROW();
+  }
 }
 
 ccReg::TID 
 ccReg_Filters_i::getRowId(CORBA::Short row)
   throw (ccReg::Table::INVALID_ROW) {
-  const Register::Filter::Filter *item = m_filter_list.get(row);
-  if (!item) 
-	  throw ccReg::Table::INVALID_ROW();
-  return item->getId().value;
+  Logging::Context ctx(base_context_);
+ 
+  try {
+    const Register::Filter::Filter *item = m_filter_list.get(row);
+    if (!item) 
+  	  throw ccReg::Table::INVALID_ROW();
+    
+    return item->getId();
+  }
+  catch (...) {
+    throw ccReg::Table::INVALID_ROW();
+  }
 }
 
 void 
 ccReg_Filters_i::sortByColumn(CORBA::Short column, CORBA::Boolean dir) {
+  Logging::Context ctx(base_context_);
+
 }
 
 char* 
@@ -69,21 +93,29 @@ ccReg_Filters_i::outputCSV() {
 
 CORBA::Short 
 ccReg_Filters_i::numRows() {
+  Logging::Context ctx(base_context_);
+
   return m_filter_list.size();
 }
 
 CORBA::Short 
 ccReg_Filters_i::numColumns() {
+  Logging::Context ctx(base_context_);
+
   return 4;
 }
 
 CORBA::ULongLong 
 ccReg_Filters_i::resultSize() {
+  Logging::Context ctx(base_context_);
+
   return 1234;
 }
 
 void
 ccReg_Filters_i::clear() {
+  Logging::Context ctx(base_context_);
+
   TRACE("[CALL] ccReg_Filters_i::clear()");
   ccReg_PageTable_i::clear();
   uf.clear();
@@ -91,8 +123,19 @@ ccReg_Filters_i::clear() {
 
 void
 ccReg_Filters_i::loadFilter(ccReg::TID _id) {
+  Logging::Context ctx(base_context_);
+
 }
 
 void
 ccReg_Filters_i::saveFilter(const char* _name) {
+  Logging::Context ctx(base_context_);
+
 }
+
+CORBA::Boolean ccReg_Filters_i::numRowsOverLimit() {
+  Logging::Context ctx(base_context_);
+
+  return m_filter_list.isLimited(); 
+}
+

@@ -6,6 +6,7 @@
 #include "registrar.h"
 #include "contact.h"
 #include "nsset.h"
+#include "keyset.h"
 #include "auth_info.h"
 #include "public_request.h"
 #include "invoice.h"
@@ -25,6 +26,7 @@ enum HandleType
   HT_DOMAIN, ///< Handle is non enum domain
   HT_CONTACT, ///< Handle is contact
   HT_NSSET, ///< Handle is nsset
+  HT_KEYSET, ///< Handle is keyset
   HT_REGISTRAR, ///< Handle is registrar
   HT_OTHER ///< Invalid handle    
 };
@@ -73,6 +75,8 @@ public:
   virtual Contact::Manager *getContactManager() const = 0;
   /// return nsset manager
   virtual NSSet::Manager *getNSSetManager() const = 0;
+  /// return KeySet manager
+  virtual KeySet::Manager *getKeySetManager() const = 0;
   /// return filter manager
   virtual Filter::Manager* getFilterManager() const = 0;
   /// loads country codes description from database
@@ -93,11 +97,11 @@ public:
   /// globaly update all states of all objects
   virtual void updateObjectStates() const throw (SQL_ERROR) = 0;
   /// temporary for new database manager init
-  virtual void dbManagerInit(DBase::Manager *_db_manager) = 0;
+  virtual void dbManagerInit(Database::Manager *_db_manager) = 0;
   /// factory method
   static Manager *create(DB *db, bool _restrictedHandles);
   /// factory method
-  static Manager *create(DBase::Manager *_db_manager, bool _restricted_handles);
+  static Manager *create(Database::Manager *_db_manager, bool _restricted_handles);
 };
 }
 ;

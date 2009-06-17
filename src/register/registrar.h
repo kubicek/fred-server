@@ -8,7 +8,7 @@
 #include "object.h"
 #include "types.h"
 #include "exceptions.h" 
-#include "db/dbs.h"
+#include "db/manager.h"
 #include "model/model_filters.h"
 
 using namespace boost::posix_time;
@@ -131,9 +131,9 @@ public:
   /// Get actual credit 
   virtual unsigned long getCredit() const = 0;
   /// Get credit for specific zone
-  virtual unsigned long getCredit(DBase::ID _zone_id) = 0;
+  virtual unsigned long getCredit(Database::ID _zone_id) = 0;
   /// Set credit for specific zone
-  virtual void setCredit(DBase::ID _zone_id, unsigned long _credit) = 0;
+  virtual void setCredit(Database::ID _zone_id, unsigned long _credit) = 0;
   /// Create new ACL record
   virtual ACL* newACL() = 0;
   /// Return ACL list size
@@ -166,7 +166,7 @@ public:
   /// Reload actual list of registrars
   virtual void reload() throw (SQL_ERROR) = 0;
   /// testing new reload function
-  virtual void reload2(DBase::Filters::Union &uf, DBase::Manager* dbm) = 0;
+  virtual void reload(Database::Filters::Union &uf, Database::Manager* dbm) = 0;
   /// Get registrar detail object by list index
 //  virtual const Registrar* get(unsigned idx) const = 0;
   /// Get registrar detail object by list index for update
@@ -201,6 +201,13 @@ enum EPPActionResultFilter {
   EARF_ALL ///< All EPP Actions
 };
 
+
+/// Action type
+struct EPPActionType {
+  Database::ID   id;
+  std::string name;
+};
+
 /// Action made by registrar through EPP
 class EPPAction : virtual public Register::CommonObject {
 protected:
@@ -223,11 +230,15 @@ public:
   /// Return client provided transaction id
   virtual const std::string& getClientTransactionId() const = 0;
   /// Return xml of EPP message
-  virtual const std::string& getEPPMessage() const = 0;
+  virtual const std::string& getEPPMessageIn() const = 0;
+  /// Return xml of EPP message
+  virtual const std::string& getEPPMessageOut() const = 0;
   /// Return result of action
   virtual unsigned getResult() const = 0;
   /// Return result message
   virtual std::string getResultStatus() const = 0;
+  /// Return id of registrar who made this action
+  virtual TID getRegistrarId() const = 0; 
   /// Return handle of registrar who made this action
   virtual const std::string& getRegistrarHandle() const = 0;
 };
@@ -267,12 +278,12 @@ public:
   virtual void setSvTRIDFilter(const std::string& svTRID) = 0;
   /// Reload list according actual filter settings
   virtual void reload() = 0;
+  /// testing new reload function
+  virtual void reload(Database::Filters::Union &uf, Database::Manager* dbm) = 0;
   /// Return deatil of action by index in list
   virtual EPPAction* get(unsigned idx) const = 0;
   /// clear filter data
   virtual void clearFilter() = 0;
-  /// testing new reload function
-  virtual void reload2(DBase::Filters::Union &uf, DBase::Manager* dbm) = 0;
   /// load actions withou xml
   virtual void setPartialLoad(bool partialLoad) = 0;
   /// sort by column
@@ -307,10 +318,12 @@ public:
   virtual RegistrarList *getList() = 0;
   /// Return list of EPP actions
   virtual EPPActionList *getEPPActionList() = 0;
+  /// Return new empty list of EPP actions
+  virtual EPPActionList *createEPPActionList() = 0;
   /// Return count of EPP action types
   virtual unsigned getEPPActionTypeCount() = 0;
   /// Return EPP action type by index
-  virtual const std::string& getEPPActionTypeByIdx(unsigned idx) const
+  virtual const EPPActionType& getEPPActionTypeByIdx(unsigned idx) const
       throw (NOT_FOUND) = 0;
   virtual bool checkHandle(const std::string) const throw (SQL_ERROR) = 0;
   virtual void addRegistrar(const std::string& registrarHandle)

@@ -362,6 +362,7 @@ public:
         case MT_TRANSFER_CONTACT:
         case MT_TRANSFER_NSSET:
         case MT_TRANSFER_DOMAIN:
+        case MT_TRANSFER_KEYSET:
           o = new MessageEventRegImpl(
               type,STR_TO_ID(db->GetFieldValue(i,1)),
               STR_TO_ID(db->GetFieldValue(i,2)),
@@ -372,6 +373,7 @@ public:
         case MT_DELETE_CONTACT:
         case MT_DELETE_NSSET:
         case MT_DELETE_DOMAIN:
+        case MT_DELETE_KEYSET:
         case MT_IMP_EXPIRATION:
         case MT_EXPIRATION:
         case MT_IMP_VALIDATION:
@@ -396,7 +398,7 @@ public:
     }
     db->FreeSelect();
     if (hasTechCheck) {
-      // load name of nsset 
+      // load name of nsset
       sql.str("");
       sql << "SELECT tmp.id, o.name, "
           << "ARRAY_TO_STRING(cn.extra_fqdns,',') " << "FROM "
@@ -505,8 +507,8 @@ public:
           << "eh.exdate::date, obr.name "
           << "FROM " << getTempTableName() << " tmp "
           << "JOIN poll_statechange ps ON (tmp.id=ps.msgid) "
-          << "JOIN object_state s ON (ps.stateid=s.id) "          
-          << "JOIN object_registry obr ON (s.object_id=obr.id) " 
+          << "JOIN object_state s ON (ps.stateid=s.id) "
+          << "JOIN object_registry obr ON (s.object_id=obr.id) "
           << "LEFT JOIN domain_history dh ON (s.ohid_from=dh.historyid) "
           << "LEFT JOIN enumval_history eh ON (eh.historyid=dh.historyid) "
           << "ORDER BY tmp.id ";
@@ -533,6 +535,7 @@ public:
           case MT_DELETE_CONTACT:
           case MT_DELETE_NSSET:
           case MT_DELETE_DOMAIN:
+          case MT_DELETE_KEYSET:
             d = MAKE_DATE(i, 1);
             break;
           default:
@@ -564,7 +567,7 @@ struct LocalTransaction {
   bool closed;
   LocalTransaction(DB *_db) :
     db(_db), closed(false) {
-    db->BeginTransaction();
+    (void)db->BeginTransaction();
   }
   ~LocalTransaction() {
     if (!closed)
@@ -593,7 +596,7 @@ class ManagerImpl : public Manager {
     l.setNonSeenFilter(true);
     l.setNonExpiredFilter(true);
   }
-  
+
 public:
   ManagerImpl(DB* _db) :
     db(_db) {
@@ -647,10 +650,11 @@ public:
   virtual void createStateMessages(const std::string& exceptList,
                                    int limit,
                                    std::ostream* debug) throw (SQL_ERROR) {
+    TRACE("[CALL] Register::Poll::createStateMessages()");
     // transaction is needed for 'ON COMMIT DROP' functionality
     LocalTransaction trans(db);
     // for each new state appearance of state type (expirationWarning,
-    // expiration, validationWarning1, outzoneUnguarded and 
+    // expiration, validationWarning1, outzoneUnguarded and
     // deleteCandidate for all object type that has not associated
     // poll message create one new poll message
     std::string caseSQL =
@@ -669,7 +673,9 @@ public:
               // MT_DELETE_NSSET
               "      WHEN os.state_id=17 AND ob.type=2 THEN 7 "
               // MT_DELETE_DOMAIN
-              "      WHEN os.state_id=17 AND ob.type=3 THEN 8 END ";
+              "      WHEN os.state_id=17 AND ob.type=3 THEN 8 "
+              // MT_DELETE_DOMAIN
+              "      WHEN os.state_id=17 AND ob.type=4 THEN 15 END ";
     std::stringstream insertSelect;
     insertSelect << "SELECT "
       " oh.clid AS reg, " << caseSQL << " AS msgtype, "

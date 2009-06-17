@@ -21,10 +21,12 @@
 #include "old_utils/conf.h"
 
 #include "log/logger.h"
-#include "db/dbs.h"
+#include "log/context.h"
+
+#include "db/manager.h"
 #include "model/model_filters.h"
 
-using namespace DBase;
+using namespace Database;
 
 #define DECL_ATTRIBUTE(name,type,settype,gettype) \
  private: \
@@ -51,10 +53,9 @@ using namespace DBase;
                  const ccReg::DateTimeInterval&,ccReg::DateTimeInterval)
 
 #define DECL_PAGETABLE_I \
-  ccReg::Table::ColumnHeaders* getColumnHeaders(); \
-  ccReg::TableRow* getRow(CORBA::Short row) throw (ccReg::Table::INVALID_ROW);\
+  Registry::Table::ColumnHeaders* getColumnHeaders(); \
+  Registry::TableRow* getRow(CORBA::Short row) throw (ccReg::Table::INVALID_ROW);\
   ccReg::TID getRowId(CORBA::Short row) throw (ccReg::Table::INVALID_ROW);\
-  void sortByColumn(CORBA::Short column, CORBA::Boolean dir);\
   char* outputCSV();\
   CORBA::Short numRows();\
   CORBA::Short numColumns();\
@@ -62,31 +63,39 @@ using namespace DBase;
   void clear();\
   CORBA::ULongLong resultSize();\
   void loadFilter(ccReg::TID _id);\
-  void saveFilter(const char* _name)
+  void saveFilter(const char* _name);\
+  void sortByColumn(CORBA::Short _column, CORBA::Boolean _dir);\
+  CORBA::Boolean numRowsOverLimit();
 
-class ccReg_PageTable_i : virtual public POA_ccReg::PageTable {
+class ccReg_PageTable_i : virtual public POA_Registry::PageTable {
   unsigned int aPageSize;
   unsigned int aPage;
 
 protected:
-  DBase::Filters::Union uf;
+  Database::Filters::Union uf;
   FilterIteratorImpl it;
-  DBase::Manager* dbm;
+  Database::Manager* dbm;
   ccReg::FilterType filterType;
   int sorted_by_;
+  bool sorted_dir_;
+
+  /**
+   * context with session object was created - need for futher call on object
+   * which are done in separate threads 
+   */
+  std::string base_context_;
 
 public:
   ccReg_PageTable_i();
   virtual ~ccReg_PageTable_i();
-  void setDB(DBase::Manager* dbm);
+  void setDB(Database::Manager* dbm);
   CORBA::Short pageSize();
   void pageSize(CORBA::Short _v);
   CORBA::Short page();
   void setPage(CORBA::Short page) throw (ccReg::PageTable::INVALID_PAGE);
   CORBA::Short start();
   CORBA::Short numPages();
-  ccReg::TableRow* getPageRow(CORBA::Short pageRow)
-      throw (ccReg::Table::INVALID_ROW);
+  Registry::TableRow* getPageRow(CORBA::Short pageRow) throw (ccReg::Table::INVALID_ROW);
   CORBA::Short numPageRows();
   ccReg::TID getPageRowId(CORBA::Short row) throw (ccReg::Table::INVALID_ROW);
   void reloadF();
@@ -98,7 +107,10 @@ public:
   void clear();
   void loadFilter(ccReg::TID _id);
   void saveFilter(const char* _name);
-  CORBA::Short getSortedBy();
+  void sortByColumn(CORBA::Short _column, CORBA::Boolean _dir);
+  void getSortedBy(CORBA::Short &_column, CORBA::Boolean &_dir);
+  CORBA::Boolean numRowsOverLimit();
 };
+
 
 #endif /*PAGETABLE_IMPL_H_*/

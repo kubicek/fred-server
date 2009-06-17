@@ -1,15 +1,19 @@
 #include "nsset_filter.h"
 
-namespace DBase {
+namespace Database {
 namespace Filters {
 
+NSSet* NSSet::create() {
+  return new NSSetHistoryImpl();
+}
+
 /*
- * NSSET IMPLEMENTATION 
+ * NSSET IMPLEMENTATION
  */
 NSSetImpl::NSSetImpl() :
   ObjectImpl() {
   setName("NSSet");
-  setType(getType());
+  addType().setValue(getType());
 }
 
 NSSetImpl::~NSSetImpl() {
@@ -17,6 +21,15 @@ NSSetImpl::~NSSetImpl() {
 
 Table& NSSetImpl::joinNSSetTable() {
   return joinTable("nsset");
+}
+
+Value<std::string>& NSSetImpl::addHandle() {
+  Value<std::string> *tmp = new Value<std::string>(Column("name", joinObjectRegistryTable()));
+  add(tmp);
+  tmp->addPreValueString("UPPER(");
+  tmp->addPostValueString(")");
+  tmp->setName("Handle");
+  return *tmp;
 }
 
 Value<ID>& NSSetImpl::addId() {
@@ -76,12 +89,12 @@ void NSSetImpl::_joinPolymorphicTables() {
 }
 
 /*
- * NSSET HISTORY IMPLEMENTATION 
+ * NSSET HISTORY IMPLEMENTATION
  */
 NSSetHistoryImpl::NSSetHistoryImpl() :
   ObjectHistoryImpl() {
   setName("NSSetHistory");
-  setType(getType());
+  addType().setValue(getType());
 }
 
 NSSetHistoryImpl::~NSSetHistoryImpl() {
@@ -89,6 +102,15 @@ NSSetHistoryImpl::~NSSetHistoryImpl() {
 
 Table& NSSetHistoryImpl::joinNSSetTable() {
   return joinTable("nsset_history");
+}
+
+Value<std::string>& NSSetHistoryImpl::addHandle() {
+  Value<std::string> *tmp = new Value<std::string>(Column("name", joinObjectRegistryTable()));
+  add(tmp);
+  tmp->addPreValueString("UPPER(");
+  tmp->addPostValueString(")");
+  tmp->setName("Handle");
+  return *tmp;
 }
 
 Value<ID>& NSSetHistoryImpl::addId() {
@@ -121,7 +143,7 @@ Value<std::string>& NSSetHistoryImpl::addHostIP() {
 }
 
 Contact& NSSetHistoryImpl::addTechContact() {
-  Contact *tmp = new ContactHistoryImpl();
+  Contact *tmp = Contact::create();
   add(tmp);
   tmp->setName("TechContact");
   tmp->addJoin(new Join(
@@ -136,15 +158,15 @@ Contact& NSSetHistoryImpl::addTechContact() {
 }
 
 void NSSetHistoryImpl::_joinPolymorphicTables() {
-  ObjectHistoryImpl::_joinPolymorphicTables();
   Table *n = findTable("nsset_history");
   if (n) {
     joins.push_front(new Join(
-        Column("historyid", joinTable("object_registry")),
+        Column("historyid", joinTable("object_history")),
         SQL_OP_EQ,
         Column("historyid", *n)
     ));
   }
+  ObjectHistoryImpl::_joinPolymorphicTables();
 }
 
 }

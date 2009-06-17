@@ -1,8 +1,9 @@
 #ifndef REGISTER_FILTER_H_
 #define REGISTER_FILTER_H_
 
+#include "common_impl.h"
 #include "types.h"
-#include "db/dbs.h"
+#include "db/manager.h"
 #include "model/model_filters.h"
 
 namespace Register {
@@ -14,6 +15,7 @@ enum FilterType {
   FT_OBJ,
   FT_CONTACT,
   FT_NSSET,
+  FT_KEYSET,
   FT_DOMAIN,
   FT_ACTION,
   FT_INVOICE,
@@ -22,30 +24,32 @@ enum FilterType {
   FT_FILE
 };
 
-class Filter {
+class Filter : virtual public Register::CommonObject {
 public:
   virtual ~Filter() {
   }
-  virtual DBase::ID getId() const = 0;
   virtual const std::string& getName() const = 0;
   virtual void setName(const std::string& _name) = 0;
   virtual FilterType getType() const = 0;
   virtual void setType(FilterType _type) = 0;
-  virtual DBase::ID getUserId() const = 0;
-  virtual void setUserId(DBase::ID _id) = 0;
-  virtual DBase::ID getGroupId() const = 0;
-  virtual void setGroupId(DBase::ID _id) = 0;
-  virtual void save(DBase::Connection *_conn) const = 0;
+  virtual Database::ID getUserId() const = 0;
+  virtual void setUserId(Database::ID _id) = 0;
+  virtual Database::ID getGroupId() const = 0;
+  virtual void setGroupId(Database::ID _id) = 0;
+  virtual void save(Database::Connection *_conn) const = 0;
 };
 
-class List {
+class List : virtual public Register::CommonList {
 public:
   virtual ~List() {
   }
-  virtual void reload(DBase::Filters::Union &uf) = 0;
-  virtual const unsigned size() const = 0;
-  virtual void clear() = 0;
-  virtual const Filter* get(unsigned _idx) const = 0;
+  virtual Filter* get(unsigned _idx) const = 0;
+  virtual void reload(Database::Filters::Union &uf) = 0;
+  
+  /// from CommonList; propably will be removed in future
+  virtual const char* getTempTableName() const = 0;
+  virtual void makeQuery(bool, bool, std::stringstream&) const = 0;
+  virtual void reload() = 0;
 };
 
 class Manager {
@@ -53,9 +57,9 @@ public:
   virtual ~Manager() {
   }
   virtual List& getList() = 0;
-  virtual void load(DBase::ID _id, DBase::Filters::Union& _uf) const = 0;
-  virtual void save(FilterType _type, const std::string& _name, DBase::Filters::Union& _uf) = 0;
-  static Manager *create(DBase::Manager* _db_manager);
+  virtual void load(Database::ID _id, Database::Filters::Union& _uf) const = 0;
+  virtual void save(FilterType _type, const std::string& _name, Database::Filters::Union& _uf) = 0;
+  static Manager *create(Database::Manager* _db_manager);
 };
 
 }

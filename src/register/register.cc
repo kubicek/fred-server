@@ -17,6 +17,7 @@
  */
 
 #include <memory> ///< auto_ptr<>
+#include <algorithm>
 #include <boost/shared_ptr.hpp>
 
 #include "old_utils/dbsql.h"
@@ -24,7 +25,7 @@
 #include "zone.h"
 #include "domain.h"
 #include "filter.h"
-#include "db/dbs.h"
+#include "db/manager.h"
 #include "log/logger.h"
 
 namespace Register {
@@ -37,6 +38,7 @@ class StatusDescImpl : public virtual StatusDesc {
   bool contact;
   bool nsset;
   bool domain;
+  bool keyset;
 
 public:
   StatusDescImpl(TID _id,
@@ -47,6 +49,7 @@ public:
     contact = types.find("1") != std::string::npos;
     nsset = types.find("2") != std::string::npos;
     domain = types.find("3") != std::string::npos;
+    keyset = types.find("4") != std::string::npos;
   }
 
   void addDesc(const std::string& lang, const std::string text) {
@@ -71,20 +74,23 @@ public:
 
   virtual const std::string& getDesc(const std::string& lang) const
       throw (BAD_LANG) {
-    std::map<std::string,std::string>::const_iterator i = desc.find(lang);
+    std::string lang_upper = lang;
+    boost::algorithm::to_upper(lang_upper);
+    std::map<std::string,std::string>::const_iterator i = desc.find(lang_upper);
     if (i == desc.end())
       throw BAD_LANG();
     return i->second;
   }
 
   virtual bool isForType(short type) const {
-    return type == 1 ? contact : type == 2 ? nsset : domain;
+    //return type == 1 ? contact : type == 2 ? nsset : domain;
+    return type == 1 ? contact : type == 2 ? nsset : type == 3 ? domain : keyset;
   }
 };
 
 class ManagerImpl : virtual public Manager {
   DB *db;
-  DBase::Manager *m_db_manager;
+  Database::Manager *m_db_manager;
   bool m_restricted_handles;
 
   std::auto_ptr<Zone::Manager> m_zone_manager;
@@ -92,6 +98,7 @@ class ManagerImpl : virtual public Manager {
   std::auto_ptr<Registrar::Manager> m_registrar_manager;
   std::auto_ptr<Contact::Manager> m_contact_manager;
   std::auto_ptr<NSSet::Manager> m_nsset_manager;
+  std::auto_ptr<KeySet::Manager> m_keyset_manager;
   std::auto_ptr<Filter::Manager> m_filter_manager;
 
   std::vector<CountryDesc> m_countries;
@@ -109,6 +116,7 @@ public:
     m_nsset_manager.reset(NSSet::Manager::create(db,
                                                  m_zone_manager.get(),
                                                  m_restricted_handles));
+    m_keyset_manager.reset(KeySet::Manager::create(db, m_restricted_handles));
     // TEMP: this will be ok when DBase::Manager ptr will be initilized
     // here in constructor (not in dbManagerInit method)
     // m_filter_manager.reset(Filter::Manager::create(m_db_manager));
@@ -122,7 +130,7 @@ public:
     m_countries.push_back(cd);
   }
   /// upper constructor replacement
-  ManagerImpl(DBase::Manager *_db_manager, bool _restricted_handles) :
+  ManagerImpl(Database::Manager *_db_manager, bool _restricted_handles) :
     m_db_manager(_db_manager), m_restricted_handles(_restricted_handles) {
     /// initialize all other managers
     /// TODO: db -> change to db_manager; needs other constructor update
@@ -133,6 +141,7 @@ public:
     m_nsset_manager.reset(NSSet::Manager::create(db,
                                                  m_zone_manager.get(),
                                                  m_restricted_handles));
+    m_keyset_manager.reset(KeySet::Manager::create(db, m_restricted_handles));
     m_filter_manager.reset(Filter::Manager::create(m_db_manager));
 
     /// load country codes descrition from database
@@ -157,6 +166,11 @@ public:
 
   NSSet::Manager *getNSSetManager() const {
     return m_nsset_manager.get();
+  }
+
+  KeySet::Manager *getKeySetManager() const
+  {
+      return m_keyset_manager.get();
   }
 
   Filter::Manager* getFilterManager() const {
@@ -232,6 +246,15 @@ public:
       chNss.handleClass= CH_REGISTRED;
       chl.push_back(chNss);
     }
+    // check if handle is registered keyset
+    NameIdPair conflictKeySet;
+    if (getKeySetManager()->checkAvail(handle, conflictKeySet) ==
+            KeySet::Manager::CA_REGISTRED) {
+        CheckHandle chKey;
+        chKey.type = HT_KEYSET;
+        chKey.handleClass = CH_REGISTRED;
+        chl.push_back(chKey);
+    }
     // check if handle is registrant   
     if (getRegistrarManager()->checkHandle(handle)) {
       CheckHandle chReg;
@@ -250,35 +273,35 @@ public:
 
   virtual void loadCountryDesc() {
     TRACE("[CALL] Register::Manager::loadCountryDesc()");
-    DBase::SelectQuery country_query;
+    Database::SelectQuery country_query;
     country_query.select() << "id, country_cs, country";
     country_query.from() << "enum_country";
 
     try {
-      std::auto_ptr<DBase::Connection> conn(m_db_manager->getConnection());
-      std::auto_ptr<DBase::Result> r_country(conn->exec(country_query));
-      std::auto_ptr<DBase::ResultIterator> it(r_country->getIterator());
+      std::auto_ptr<Database::Connection> conn(m_db_manager->getConnection());
+      Database::Result r_country = conn->exec(country_query);
       
       m_countries.clear();
-      for (it->first(); !it->isDone(); it->next()) {
+      for (Database::Result::Iterator it = r_country.begin(); it != r_country.end(); ++it) {
+        Database::Row::Iterator col = (*it).begin();
         CountryDesc desc;
         
-        std::string cc = it->getNextValue();
-        std::string name_cs = it->getNextValue();
-        std::string name = it->getNextValue();
+        std::string cc      = *col;
+        std::string name_cs = *(++col);
+        std::string name    = *(++col);
         
         desc.cc = cc;
         desc.name = (!name_cs.empty() ? name_cs : name);
         m_countries.push_back(desc);
       }
-      LOGGER("register").debug(boost::format("loaded '%1%' country codes "
-              "description from database") % r_country->getNumRows());
+      LOGGER(PACKAGE).debug(boost::format("loaded '%1%' country codes "
+              "description from database") % r_country.size());
     }
-    catch (DBase::Exception& ex) {
-      LOGGER("db").error(boost::format("%1%") % ex.what());
+    catch (Database::Exception& ex) {
+      LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
     }
     catch (std::exception& ex) {
-      LOGGER("db").error(boost::format("%1%") % ex.what());
+      LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
     }
   }
 
@@ -295,10 +318,17 @@ public:
 
   virtual void initStates() throw (SQL_ERROR) {
     TRACE("[CALL] Register::Manager::initStates()");
-    if (!db->ExecSelect("SELECT id, name, external, ARRAY_TO_STRING(types,',') "
-      "FROM enum_object_states") )
-      throw SQL_ERROR();
+
     statusList.clear();
+
+    /// HACK: OK state
+    statusList.push_back(StatusDescImpl(0, "ok", true, "1,2,3,4"));
+    statusList.back().addDesc("CS", "Objekt je bez omezení");
+    statusList.back().addDesc("EN", "Objekt is without restrictions");
+
+    if (!db->ExecSelect("SELECT id, name, external, ARRAY_TO_STRING(types,',') "
+      "FROM enum_object_states ORDER BY id") )
+      throw SQL_ERROR();
     for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++) {
       statusList.push_back(StatusDescImpl(
       STR_TO_ID(db->GetFieldValue(i,0)),
@@ -321,11 +351,7 @@ public:
     }
     db->FreeSelect();
     
-    /// HACK: OK state
-    statusList.push_back(StatusDescImpl(0, "ok", true, "1,2,3"));
-    statusList.back().addDesc("CS", "Objekt je bez omezení");
-    statusList.back().addDesc("EN", "Objekt is without restrictions");
-    LOGGER("register").debug(boost::format("loaded '%1%' object states description from database")
+    LOGGER(PACKAGE).debug(boost::format("loaded '%1%' object states description from database")
         % states_loaded);
   }
 
@@ -349,13 +375,16 @@ public:
   }
 
   virtual void updateObjectStates() const throw (SQL_ERROR) {
-    if (!db->ExecSelect("SELECT update_object_states(0)"))
+    TRACE("[CALL] Register::Manager::updateObjectStates()");
+    if (!db->ExecSelect("SELECT update_object_states(0)")) {
+      LOGGER(PACKAGE).error("updateObjectStates(): throwing SQL_ERROR");
       throw SQL_ERROR();
+    }
     db->FreeSelect();
   }
 
   /// TEMP: method for initialization new Database manager
-  virtual void dbManagerInit(DBase::Manager *_db_manager) {
+  virtual void dbManagerInit(Database::Manager *_db_manager) {
     m_db_manager = _db_manager;
     m_filter_manager.reset(Filter::Manager::create(m_db_manager));
     
@@ -370,7 +399,7 @@ Manager *Manager::create(DB *db, bool _restrictedHandles) {
 }
 
 /// upper create factory method replacement
-Manager *create(DBase::Manager *_db_manager, bool _restricted_handles) {
+Manager *create(Database::Manager *_db_manager, bool _restricted_handles) {
   TRACE(boost::format("[CALL] Register::Manager::create(%1%, %2%)")
       % _db_manager % _restricted_handles);
   return new ManagerImpl(_db_manager, _restricted_handles);

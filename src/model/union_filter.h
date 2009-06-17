@@ -15,13 +15,14 @@
 
 #include "log/logger.h"
 
-namespace DBase {
+namespace Database {
 namespace Filters {
 
 class Union {
 public:
-  Union() {
+  Union(const Settings *_ptr = 0) : settings_ptr_(_ptr) {
   }
+
   virtual ~Union() {
   }
 
@@ -33,7 +34,7 @@ public:
     return filter_list.at(idx);
   }
 
-  virtual void addQuery(DBase::SelectQuery *_q) {
+  virtual void addQuery(Database::SelectQuery *_q) {
     query_list.push_back(_q);
   }
 
@@ -58,7 +59,7 @@ public:
     return filter_list.end();
   }
 
-  virtual void serialize(DBase::SelectQuery& _q);
+  virtual void serialize(Database::SelectQuery& _q);
 
   friend class boost::serialization::access;
   template<class Archive> void serialize(Archive& _ar,
@@ -74,11 +75,11 @@ public:
     _ar.register_type(static_cast<Value<int> *>(NULL));
     _ar.register_type(static_cast<Value<unsigned> *>(NULL));
     _ar.register_type(static_cast<Value<std::string> *>(NULL));
-    _ar.register_type(static_cast<Value<DBase::ID> *>(NULL));
-    _ar.register_type(static_cast<_BaseDTInterval<DBase::DateTimeInterval> *>(NULL));
-    _ar.register_type(static_cast<_BaseDTInterval<DBase::DateInterval> *>(NULL));
-    _ar.register_type(static_cast<Interval<DBase::DateTimeInterval> *>(NULL));
-    _ar.register_type(static_cast<Interval<DBase::DateInterval> *>(NULL));
+    _ar.register_type(static_cast<Value<Database::ID> *>(NULL));
+    _ar.register_type(static_cast<_BaseDTInterval<Database::DateTimeInterval> *>(NULL));
+    _ar.register_type(static_cast<_BaseDTInterval<Database::DateInterval> *>(NULL));
+    _ar.register_type(static_cast<Interval<Database::DateTimeInterval> *>(NULL));
+    _ar.register_type(static_cast<Interval<Database::DateInterval> *>(NULL));
     _ar.register_type(static_cast<Compound *>(NULL));
     _ar.register_type(static_cast<ObjectRegistryImpl *>(NULL));
     _ar.register_type(static_cast<ObjectImpl *>(NULL));
@@ -95,13 +96,27 @@ public:
     _ar.register_type(static_cast<InvoiceImpl *>(NULL));
     _ar.register_type(static_cast<FileImpl *>(NULL));
     _ar.register_type(static_cast<MailImpl *>(NULL));
+    _ar.register_type(static_cast<KeySetImpl *>(NULL));
+    _ar.register_type(static_cast<KeySetHistoryImpl *>(NULL));
+    _ar.register_type(static_cast<ObjectStateImpl *>(NULL));
+
 
     _ar & BOOST_SERIALIZATION_NVP(filter_list);
   }
 
+  void settings(const Settings *_ptr) {
+    settings_ptr_ = _ptr;
+  }
+
+  const Settings* settings() const {
+    return settings_ptr_;
+  }
+  
 protected:
   std::vector<Filter*> filter_list;
-  std::vector<DBase::SelectQuery*> query_list;
+  std::vector<Database::SelectQuery*> query_list;
+
+  const Settings *settings_ptr_;
 };
 
 }
