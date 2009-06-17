@@ -13,4 +13,4 @@ wget -q -O /tmp/.ebanka.csv --no-check-certificate $URL
 # transfer to UTF8
 iconv --from-code=WINDOWS-1250 --to-code=UTF8 < /tmp/.ebanka.csv > /tmp/.e.csv
 # log to syslog
-/home/jara/a/root/sbin/fred-banking -C $CONF --ebanka-csv /tmp/.e.csv
+/home/jara/enum/fred/build/root/sbin/fred-banking -C $CONF --ebanka-csv /tmp/.e.csv

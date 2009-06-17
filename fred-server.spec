@@ -1,5 +1,5 @@
 Name:           fred-server
-Version:        1.10.0
+Version:        1.10.1
 Release:        1%{?dist}
 Summary:        FRED - CORBA backend C++ server
 
@@ -8,7 +8,7 @@ License:        GPL
 URL:            http://fred.nic.cz
 Source:         %{name}-%{version}.tar.gz
 BuildRoot:	%{_tmppath}/%{name}-%{version}-%{release}-%(%{__id_u} -n)
-BuildRequires:  libomniORB4.1-devel, fred-idl, boost-devel, postgresql-devel
+BuildRequires:  libomniORB4.1-devel, boost-devel, postgresql-devel
 Requires: libomniORB4.1, boost, postgresql-libs, fred-pyfred, fred-doc2pdf fred-db
 
 %description
