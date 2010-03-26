@@ -32,7 +32,8 @@ InvoiceClient::InvoiceClient()
         addOpt(INVOICE_LIST_FILTERS_NAME)
         addOpt(INVOICE_ARCHIVE_NAME)
         addOpt(INVOICE_LIST_HELP_NAME)
-        addOpt(INVOICE_ADD_PREFIX_NAME);
+        addOpt(INVOICE_ADD_PREFIX_NAME)
+        addOpt(INVOICE_ADD_PREFIX_HELP_NAME);
 
     m_optionsInvis = new boost::program_options::options_description(
             "Invoice related sub options");
@@ -40,6 +41,7 @@ InvoiceClient::InvoiceClient()
         add_ID()
         add_REGISTRAR_ID()
         add_ZONE_ID()
+        add_ZONE_FQDN()
         addOptUInt(INVOICE_TYPE_NAME)
         addOptStr(INVOICE_VAR_SYMBOL_NAME)
         add_CRDATE()
@@ -51,7 +53,6 @@ InvoiceClient::InvoiceClient()
         addOptStr(INVOICE_ADV_NUMBER_NAME)
         addOptUInt(INVOICE_FILE_ID_NAME)
         addOptStr(INVOICE_FILE_NAME_NAME)
-        addOptUInt(INVOICE_PREFIX_ZONE_NAME)
         addOptUInt(INVOICE_PREFIX_TYPE_NAME)
         addOptUInt(INVOICE_PREFIX_YEAR_NAME)
         addOptType(INVOICE_PREFIX_PREFIX_NAME, unsigned long long);
@@ -134,6 +135,10 @@ InvoiceClient::list()
     if (m_conf.hasOpt(ZONE_ID_NAME))
         invFilter->addZoneId().setValue(
                 Database::ID(m_conf.get<unsigned int>(ZONE_ID_NAME)));
+    if (m_conf.hasOpt(ZONE_FQDN_NAME)) {
+        invFilter->addZone().addFqdn().setValue(
+                m_conf.get<std::string>(ZONE_FQDN_NAME));
+    }
     if (m_conf.hasOpt(INVOICE_TYPE_NAME))
         invFilter->addType().setValue(
                 m_conf.get<unsigned int>(INVOICE_TYPE_NAME));
@@ -225,6 +230,10 @@ InvoiceClient::list_filters()
     if (m_conf.hasOpt(ZONE_ID_NAME))
         invFilter->addZoneId().setValue(
                 Database::ID(m_conf.get<unsigned int>(ZONE_ID_NAME)));
+    if (m_conf.hasOpt(ZONE_FQDN_NAME)) {
+        invFilter->addZone().addFqdn().setValue(
+                m_conf.get<std::string>(ZONE_FQDN_NAME));
+    }
     if (m_conf.hasOpt(INVOICE_TYPE_NAME))
         invFilter->addType().setValue(
                 m_conf.get<unsigned int>(INVOICE_TYPE_NAME));
@@ -434,7 +443,6 @@ InvoiceClient::add_invoice_prefix()
                 docMan.get(),
                 &mailMan)
             );
-    unsigned int zoneId = m_conf.get<unsigned int>(INVOICE_PREFIX_ZONE_NAME);
     unsigned int type = m_conf.get<unsigned int>(INVOICE_PREFIX_TYPE_NAME);
     if (type > 1) {
         std::cerr << "Type can be either 0 or 1." << std::endl;
@@ -448,7 +456,15 @@ InvoiceClient::add_invoice_prefix()
         year = now.get().year();
     }
     unsigned long long prefix = m_conf.get<unsigned long long>(INVOICE_PREFIX_PREFIX_NAME);
-    invMan->insertInvoicePrefix(zoneId, type, year, prefix);
+    if (m_conf.hasOpt(ZONE_ID_NAME)) {
+        unsigned int zoneId = m_conf.get<unsigned int>(ZONE_ID_NAME);
+        invMan->insertInvoicePrefix(zoneId, type, year, prefix);
+    } else if (m_conf.hasOpt(ZONE_FQDN_NAME)) {
+        std::string zoneName = m_conf.get<std::string>(ZONE_FQDN_NAME);
+        invMan->insertInvoicePrefix(zoneName, type, year, prefix);
+    } else {
+        std::cerr << "Zone is not specified" << std::endl;
+    }
 }
 
 void
@@ -460,6 +476,7 @@ InvoiceClient::list_help()
         "    [--" << ID_NAME << "=<id_number>] \\\n"
         "    [--" << REGISTRANT_ID_NAME << "=<id_number>] \\\n"
         "    [--" << ZONE_ID_NAME << "=<id_number>] \\\n"
+        "    [--" << ZONE_FQDN_NAME << "=<zone_fqdn>] \\\n"
         "    [--" << INVOICE_TYPE_NAME << "=<invoice_type>] \\\n"
         "    [--" << INVOICE_VAR_SYMBOL_NAME << "=<invoice_var_symbol>] \\\n"
         "    [--" << INVOICE_NUMBER_NAME << "=<invoice_number>] \\\n"
@@ -492,7 +509,8 @@ InvoiceClient::add_invoice_prefix_help()
     std::cout <<
         "** Invoice add prefix **\n\n"
         "  $ " << g_prog_name << " --" << INVOICE_ADD_PREFIX_NAME << " \\\n"
-        "    --" << INVOICE_PREFIX_ZONE_NAME << "=<zone_id> \\\n"
+        "    --" << ZONE_ID_NAME << "=<zone_id> \\\n"
+        "    --" << ZONE_FQDN_NAME << "=<zone_fqdn> \\\n"
         "    --" << INVOICE_PREFIX_TYPE_NAME << "=<type> \\\n"
         "    [--" << INVOICE_PREFIX_YEAR_NAME << "=<year>] \\\n"
         "    --" << INVOICE_PREFIX_PREFIX_NAME << "=<prefix_number>\n"

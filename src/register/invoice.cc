@@ -137,6 +137,8 @@ public:
           throw (SQL_ERROR);
   virtual bool insertInvoicePrefix(unsigned long long zoneId,
           int type, int year, unsigned long long prefix);
+  virtual bool insertInvoicePrefix(const std::string &zoneName,
+          int type, int year, unsigned long long prefix);
 }; // ManagerImpl
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -1198,8 +1200,9 @@ public:
           % getTempTableName() % tmp_table_query.str());
 
       Database::SelectQuery object_info_query;
-      object_info_query.select() << "t_1.id, t_1.zone, t_2.fqdn, t_1.crdate, t_1.taxdate, "
-                                 << "t_5.fromdate, t_5.todate, t_4.typ, t_1.prefix, "
+      object_info_query.select() << "t_1.id, t_1.zone, t_2.fqdn, "
+                                 << "t_1.crdate::timestamptz AT TIME ZONE 'Europe/Prague', "
+                                 << "t_1.taxdate, t_5.fromdate, t_5.todate, t_4.typ, t_1.prefix, "
                                  << "t_1.registrarid, t_1.credit * 100, t_1.price * 100, "
                                  << "t_1.vat, t_1.total * 100, t_1.totalvat * 100, "
                                  << "t_1.file, t_1.fileXML, t_3.organization, t_3.street1, "
@@ -1221,11 +1224,11 @@ public:
 
       try {
         std::auto_ptr<Database::Connection> conn(_db_manager->getConnection());
-              
+
         Database::Query create_tmp_table("SELECT create_tmp_table('" + std::string(getTempTableName()) + "')");
         conn->exec(create_tmp_table);
         conn->exec(tmp_table_query);
- 
+
         // TODO: use this and rewrite conn to conn_ specified in CommonListImpl
         // fillTempTable(tmp_table_query);
 
@@ -1334,7 +1337,8 @@ public:
         if (!partialLoad) {
           Database::SelectQuery action_query;
           action_query.select() << "tmp.id, SUM(ipm.price) * 100, i.vat, o.name, "
-                                << "ior.crdate, ior.exdate, ior.operation, ior.period, "
+                                << "ior.crdate::timestamptz AT TIME ZONE 'Europe/Prague', "
+                                << "ior.exdate, ior.operation, ior.period, "
                                 << "CASE "
                                 << "  WHEN ior.period = 0 THEN 0 "
                                 << "  ELSE 100 * SUM(ipm.price) * 12 / ior.period END, "
@@ -1437,7 +1441,8 @@ public:
       // initialize list of invoices using temporary table 
       if (!db->ExecSelect(
               "SELECT "
-              " i.id, i.zone, i.crdate, i.taxdate, ig.fromdate, "
+              " i.id, i.zone, i.crdate::timestamptz AT TIME ZONE 'Europe/Prague',"
+              " i.taxdate, ig.fromdate, "
               " ig.todate, ip.typ, i.prefix, i.registrarid, i.credit*100, "
               " i.price*100, i.vat, i.total*100, i.totalvat*100, "
               " i.file, i.fileXML, "
@@ -1464,8 +1469,8 @@ public:
       if (!partialLoad) {
         if (!db->ExecSelect(
                 "SELECT "
-                " it.id, o.name, ior.crdate, ior.exdate, "
-                " ior.operation, ior.period, "
+                " it.id, o.name, ior.crdate::timestamptz AT TIME ZONE 'Europe/Prague',"
+                " ior.exdate, ior.operation, ior.period, "
                 " CASE "
                 "  WHEN ior.period=0 THEN 0 "
                 "  ELSE 100*SUM(ipm.price)*12/ior.period END, "
@@ -1771,6 +1776,14 @@ public:
           return false;
       }
       return true;
+  }
+  bool ManagerImpl::insertInvoicePrefix(const std::string &zoneName,
+          int type, int year, unsigned long long prefix) 
+  {
+      TRACE("Invoicing::ManagerImpl::insertInvoicePrefix(...)");
+      return insertInvoicePrefix(
+              db->GetNumericFromTable("zone", "id", "fqdn", zoneName.c_str()),
+              type, year, prefix);
   }
   
   Manager* Manager::create(DB *db, Document::Manager *docman, Mailer::Manager *mailman) {

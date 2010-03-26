@@ -82,6 +82,13 @@ Value<Database::ID>& PublicRequestImpl::addEppActionId() {
   return *tmp;
 }
 
+Value<Database::ID>& PublicRequestImpl::addRegistrarId() {
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("registrar_id", joinRequestTable()));
+  tmp->setName("RegistrarId");
+  add(tmp);
+  return *tmp;
+}
+
 Object& PublicRequestImpl::addObject() {
   Object* tmp = Object::create();
   addJoin(new Join(
@@ -99,14 +106,14 @@ Object& PublicRequestImpl::addObject() {
   return *tmp;
 }
 
-EppAction& PublicRequestImpl::addEppAction() {
-  EppAction *tmp = EppAction::create();
+Registrar& PublicRequestImpl::addRegistrar() { 
+  Registrar *tmp = new RegistrarImpl();
   tmp->joinOn(new Join(
-                       Column("epp_action_id", joinRequestTable()),
+                       Column("registrar_id", joinRequestTable()),
                        SQL_OP_EQ,
-                       Column("id", tmp->joinActionTable())
+                       Column("id", tmp->joinRegistrarTable())
                        ));
-  tmp->setName("EppAction");
+  tmp->setName("Registrar");
   add(tmp);
   return *tmp;
 }

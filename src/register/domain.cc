@@ -61,6 +61,7 @@ class DomainImpl : public ObjectImpl, public virtual Domain {
   AdminInfoList tempList;
   date exDate;
   date valExDate;
+  bool publish;
   unsigned zoneStatus;
   ptime zoneStatusTime;
   ptime outZoneDate;
@@ -89,7 +90,7 @@ public:
         fqdn(_fqdn), fqdnIDN(zm->decodeIDN(fqdn)), zone(_zone), nsset(_nsset), nssetHandle(_nssetHandle),
         registrant(_registrant), registrantHandle(_registrantHandle), 
         registrantName(_registrantName), registrantOrganization(_registrantOrganization), exDate(_exDate),
-        valExDate(_valExDate), zoneStatus(_zoneStatus),
+        valExDate(_valExDate), publish(false), zoneStatus(_zoneStatus),
         zoneStatusTime(_zoneStatusTime), 
         outZoneDate(_outZoneDate), cancelDate(_cancelDate),
         keyset(_keyset), keysetHandle(_keysetHandle) {
@@ -151,6 +152,9 @@ public:
   virtual date getValExDate() const {
     return valExDate;
   }
+  virtual bool getPublish() const {
+    return publish;
+  }
   virtual unsigned getZoneStatus() const {
     return zoneStatus;
   }
@@ -207,6 +211,9 @@ public:
   /// setting validation date - for domain initialization
   void setValExDate(date _valExDate) {
     valExDate = _valExDate;
+  }
+  void setPublish(bool _publish) {
+    publish = _publish;
   }
   virtual void insertStatus(const StatusImpl& _state) {
     ObjectImpl::insertStatus(_state);
@@ -724,7 +731,7 @@ public:
       /// load validation (for enum domains)
       resetHistoryIDSequence();
       Database::SelectQuery validation_query;
-      validation_query.select() << "tmp.id, t_1.domainid, t_1.exdate";
+      validation_query.select() << "tmp.id, t_1.domainid, t_1.exdate, t_1.publish";
       validation_query.from() << getTempTableName() << " tmp "
                               << "JOIN enumval_history t_1 ON (tmp.id = t_1.historyid)";
       validation_query.order_by() << "tmp.id";
@@ -737,10 +744,13 @@ public:
         Database::ID   domain_historyid = *col;
         Database::ID   domain_id        = *(++col);
         Database::Date validation_date  = *(++col);
+        bool           publish          = *(++col);
 
         DomainImpl *domain_ptr = dynamic_cast<DomainImpl *>(findHistoryIDSequence(domain_historyid));
-        if (domain_ptr)
+        if (domain_ptr) {
           domain_ptr->setValExDate(validation_date);
+          domain_ptr->setPublish(publish);
+        }
       }
 
       bool history = false;
@@ -924,7 +934,7 @@ public:
     // add validation (for enum domains)
     resetIDSequence();
     sql.str("");
-    sql << "SELECT " << "tmp.id, ev.exdate " << "FROM " 
+    sql << "SELECT " << "tmp.id, ev.exdate, ev.publish " << "FROM " 
         << (useTempTable ? getTempTableName() : "object_registry ") << " tmp, "
         << "enumval ev " << "WHERE tmp.id=ev.domainid ";
     if (!useTempTable) {
@@ -940,6 +950,7 @@ public:
       if (!dom)
         throw SQL_ERROR();
       dom->setValExDate(MAKE_DATE(i, 1));
+      dom->setPublish(*db->GetFieldValue(i, 2) == 't');
     }
     db->FreeSelect();
     ObjectListImpl::reload(useTempTable ? NULL : fqdn.c_str(),3);

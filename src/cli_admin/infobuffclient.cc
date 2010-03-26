@@ -35,8 +35,11 @@ InfoBuffClient::InfoBuffClient()
     m_optionsInvis = new boost::program_options::options_description(
             "Info buffer related sub options");
     m_optionsInvis->add_options()
+        add_REGISTRAR_ID()
+        add_REGISTRAR_HANDLE()
+        addOptBool(REG_RESTRICTED_HANDLES_NAME)
         addOptUInt(INFOBUFF_REGISTRAR_NAME)
-        addOptStrDef(INFOBUFF_REQUEST_NAME, "");
+        addOptStr(INFOBUFF_REQUEST_NAME);
 }
 InfoBuffClient::InfoBuffClient(
         std::string connstring,
@@ -115,22 +118,40 @@ InfoBuffClient::make_info()
                 keyMan.get())
             );
     unsigned int type = m_conf.get<unsigned int>(INFOBUFF_MAKE_INFO_NAME);
-    if (type < 1 || type > 7)
-        std::cerr << INFOBUFF_MAKE_INFO_NAME << " must be number between 1 and 7" << std::endl;
-    else {
+    std::string requestName("");
+    if (m_conf.hasOpt(INFOBUFF_REQUEST_NAME)) {
+        requestName = m_conf.get<std::string>(INFOBUFF_REQUEST_NAME);
+    }
+    if (type < 1 || type > 10) {
+        std::cerr
+            << INFOBUFF_MAKE_INFO_NAME
+            << " must be number between 1 and 10 (inclusive border values)" 
+            << std::endl;
+        return 1;
+    }
+
+    Register::InfoBuffer::Type type_type =
+        type == 1 ? Register::InfoBuffer::T_LIST_CONTACTS :
+        type == 2 ? Register::InfoBuffer::T_LIST_DOMAINS :
+        type == 3 ? Register::InfoBuffer::T_LIST_NSSETS :
+        type == 4 ? Register::InfoBuffer::T_LIST_KEYSETS :
+        type == 5 ? Register::InfoBuffer::T_DOMAINS_BY_NSSET :
+        type == 6 ? Register::InfoBuffer::T_DOMAINS_BY_CONTACT :
+        type == 7 ? Register::InfoBuffer::T_DOMAINS_BY_KEYSET :
+        type == 8 ? Register::InfoBuffer::T_NSSETS_BY_CONTACT :
+        type == 9 ? Register::InfoBuffer::T_NSSETS_BY_NS :
+        Register::InfoBuffer::T_KEYSETS_BY_CONTACT;
+    if (m_conf.hasOpt(REGISTRAR_ID_NAME)) {
         infoBuffMan->info(
                 m_conf.get<unsigned int>(REGISTRAR_ID_NAME),
-                type == 1 ? Register::InfoBuffer::T_LIST_CONTACTS :
-                type == 2 ? Register::InfoBuffer::T_LIST_DOMAINS :
-                type == 3 ? Register::InfoBuffer::T_LIST_NSSETS :
-                type == 4 ? Register::InfoBuffer::T_LIST_KEYSETS :
-                type == 5 ? Register::InfoBuffer::T_DOMAINS_BY_NSSET :
-                type == 6 ? Register::InfoBuffer::T_DOMAINS_BY_CONTACT :
-                type == 7 ? Register::InfoBuffer::T_DOMAINS_BY_KEYSET :
-                type == 8 ? Register::InfoBuffer::T_NSSETS_BY_CONTACT :
-                type == 9 ? Register::InfoBuffer::T_NSSETS_BY_NS :
-                Register::InfoBuffer::T_KEYSETS_BY_CONTACT,      
-                m_conf.get<std::string>(INFOBUFF_REQUEST_NAME));
+                type_type, requestName);
+    } else if (m_conf.hasOpt(REGISTRAR_HANDLE_NAME)) {
+        infoBuffMan->info(
+                m_conf.get<std::string>(REGISTRAR_HANDLE_NAME),
+                type_type, requestName);
+    } else {
+        std::cerr << "You have to specify either ``--" << REGISTRAR_ID_NAME
+            << "'' or ``--" << REGISTRAR_HANDLE_NAME << "''" << std::endl;
     }
     return 0;
 }
@@ -165,15 +186,30 @@ InfoBuffClient::get_chunk()
                 conMan.get(),
                 keyMan.get())
             );
-    std::auto_ptr<Register::InfoBuffer::Chunk> chunk(
-            infoBuffMan->getChunk(
-                m_conf.get<unsigned int>(REGISTRAR_ID_NAME),
-                m_conf.get<unsigned int>(INFOBUFF_GET_CHUNK_NAME))
-            );
-    for (unsigned long i = 0; i < chunk->getCount(); i++)
-        std::cout << chunk->getNext() << std::endl;
+    if (m_conf.hasOpt(REGISTRAR_ID_NAME)) {
+        std::auto_ptr<Register::InfoBuffer::Chunk> chunk(
+                infoBuffMan->getChunk(
+                    m_conf.get<unsigned int>(REGISTRAR_ID_NAME),
+                    m_conf.get<unsigned int>(INFOBUFF_GET_CHUNK_NAME))
+                );
+        for (unsigned long i = 0; i < chunk->getCount(); i++) {
+            std::cout << chunk->getNext() << std::endl;
+        }
+    } else if (m_conf.hasOpt(REGISTRAR_HANDLE_NAME)) {
+        std::auto_ptr<Register::InfoBuffer::Chunk> chunk(
+                infoBuffMan->getChunk(
+                    m_conf.get<std::string>(REGISTRAR_HANDLE_NAME),
+                    m_conf.get<unsigned int>(INFOBUFF_GET_CHUNK_NAME))
+                );
+        for (unsigned long i = 0; i < chunk->getCount(); i++) {
+            std::cout << chunk->getNext() << std::endl;
+        }
+    } else {
+        std::cerr << "You have to specify either ``--" << REGISTRAR_ID_NAME
+            << "'' or ``--" << REGISTRAR_HANDLE_NAME << "''" << std::endl;
+    }
     return 0;
-}
+} // InfoBuffClient::get_chunk()
 
 } // namespace Admin;
 

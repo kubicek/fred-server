@@ -261,7 +261,8 @@ public:
                          Mailer::Manager *_mail_manager);
   virtual bool insertInvoicePrefix(unsigned long long zoneId,
           int type, int year, unsigned long long prefix) = 0;
-
+  virtual bool insertInvoicePrefix(const std::string &zoneName,
+          int type, int year, unsigned long long prefix) = 0;
   
 }; // Manager
 }

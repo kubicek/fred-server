@@ -275,6 +275,14 @@ main(int argc, char **argv)
         return 0;
     }
 
+    if (conf.hasOpt(INFOBUFF_MAKE_INFO_NAME)) {
+        infobuff.make_info();
+    } else if (conf.hasOpt(INFOBUFF_GET_CHUNK_NAME)) {
+        infobuff.get_chunk();
+    } else if (conf.hasOpt(INFOBUFF_SHOW_OPTS_NAME)) {
+        infobuff.show_opts();
+    }
+
     if (conf.hasOpt(CONTACT_INFO2_NAME)) {
         contact.info2();
     } else if (conf.hasOpt(CONTACT_INFO_NAME)) {
@@ -375,6 +383,10 @@ main(int argc, char **argv)
         bank.statement_list();
     } else if (conf.hasOpt(BANK_SHOW_OPTS_NAME)) {
         bank.show_opts();
+    } else if (conf.hasOpt(BANK_ADD_ACCOUNT_NAME)) {
+        bank.add_bank_account();
+    } else if (conf.hasOpt(BANK_ADD_ACCOUNT_HELP_NAME)) {
+        bank.add_bank_account_help();
     }
 
     if (conf.hasOpt(POLL_LIST_ALL_NAME)) {

@@ -31,11 +31,18 @@ BankClient::BankClient()
     m_options->add_options()
         addOpt(BANK_ONLINE_LIST_NAME)
         addOpt(BANK_STATEMENT_LIST_NAME)
+        addOpt(BANK_ADD_ACCOUNT_NAME)
+        addOpt(BANK_ADD_ACCOUNT_HELP_NAME)
         addOpt(BANK_SHOW_OPTS_NAME);
 
     m_optionsInvis = new boost::program_options::options_description(
             "Bank related sub options");
-    m_optionsInvis->add_options();
+    m_optionsInvis->add_options()
+        addOptStr(BANK_ACCOUNT_NUMBER_NAME)
+        addOptStr(BANK_ACCOUNT_NAME_NAME)
+        addOptStr(BANK_BANK_CODE_NAME)
+        addOptUInt(BANK_ZONE_ID_NAME)
+        addOptStr(BANK_ZONE_NAME_NAME);
 }
 BankClient::BankClient(
         std::string connstring,
@@ -109,6 +116,44 @@ BankClient::statement_list()
     statList->exportXML(stdout);
 
     return 0;
+}
+
+void
+BankClient::add_bank_account()
+{
+    std::string account_number = m_conf.get<std::string>(BANK_ACCOUNT_NUMBER_NAME);
+    std::string account_name;
+    if (m_conf.hasOpt(BANK_ACCOUNT_NAME_NAME)) {
+        account_name = m_conf.get<std::string>(BANK_ACCOUNT_NAME_NAME);
+    }
+    std::string bank_code = m_conf.get<std::string>(BANK_BANK_CODE_NAME);
+    std::auto_ptr<Register::Banking::Manager>
+        bankMan(Register::Banking::Manager::create(&m_db));
+    bool retval = true;
+    if (m_conf.hasOpt(BANK_ZONE_ID_NAME)) {
+        Database::ID zoneId = m_conf.get<unsigned int>(BANK_ZONE_ID_NAME);
+        retval = bankMan->insertBankAccount(zoneId, account_number, account_name, bank_code);
+    } else if (m_conf.hasOpt(BANK_ZONE_NAME_NAME)) {
+        std::string zoneName = m_conf.get<std::string>(BANK_ZONE_NAME_NAME);
+        retval = bankMan->insertBankAccount(zoneName, account_number, account_name, bank_code);
+    }
+    if (!retval) {
+        std::cout << "Error occured!" << std::endl;
+    }
+}
+
+void
+BankClient::add_bank_account_help()
+{
+    std::cout << 
+        "** Add new bank account **\n\n"
+        "  $ " << g_prog_name << " --" << BANK_ADD_ACCOUNT_NAME << " \\\n"
+        "    --" << BANK_ZONE_ID_NAME << "=<zone_id> | \\\n"
+        "    --" << BANK_ZONE_NAME_NAME << "=<zone_fqdn> \\\n"
+        "    --" << BANK_ACCOUNT_NUMBER_NAME << "=<account_number> \\\n"
+        "    --" << BANK_BANK_CODE_NAME << "=<bank_code> \\\n"
+        "    [--" << BANK_ACCOUNT_NAME_NAME << "=<account_name>]\n"
+        << std::endl;
 }
 
 } // namespace Admin;

@@ -501,6 +501,7 @@ ccReg::DomainDetail* ccReg_Session_i::createDomainDetail(Register::Domain::Domai
   detail->registrantHandle = DUPSTRFUN(_domain->getRegistrantHandle);
   detail->expirationDate = DUPSTRDATED(_domain->getExpirationDate);
   detail->valExDate = DUPSTRDATED(_domain->getValExDate);
+  detail->publish = _domain->getPublish();
   detail->nssetHandle = DUPSTRFUN(_domain->getNSSetHandle);
   detail->keysetHandle = DUPSTRFUN(_domain->getKeySetHandle);
   detail->admins.length(_domain->getAdminCount(1));
@@ -588,10 +589,10 @@ Registry::Domain::Detail* ccReg_Session_i::createHistoryDomainDetail(Register::D
     }
 
     /* domain specific follows */
-
     MAP_HISTORY_OID(registrant, getRegistrantId, getRegistrantHandle, ccReg::FT_CONTACT)
     MAP_HISTORY_DATE(expirationDate, getExpirationDate)
     MAP_HISTORY_DATE(valExDate, getValExDate)
+    MAP_HISTORY_BOOL(publish, getPublish)
     MAP_HISTORY_OID(nsset, getNSSetId, getNSSetHandle, ccReg::FT_NSSET)
     MAP_HISTORY_OID(keyset, getKeySetId, getKeySetHandle, ccReg::FT_KEYSET)
 
@@ -1384,7 +1385,7 @@ Registry::Invoicing::Detail* ccReg_Session_i::createInvoiceDetail(Register::Invo
   
   detail->id = _invoice->getId();
   detail->zone = _invoice->getZone();
-  detail->createTime = DUPSTRDATE(_invoice->getCrTime);
+  detail->createTime = DUPSTRDATE_NOLTCONVERT(_invoice->getCrTime);
   detail->taxDate = DUPSTRDATED(_invoice->getTaxDate);
   detail->fromDate = DUPSTRDATED(_invoice->getAccountPeriod().begin);
   detail->toDate = DUPSTRDATED(_invoice->getAccountPeriod().end);
@@ -1426,7 +1427,7 @@ Registry::Invoicing::Detail* ccReg_Session_i::createInvoiceDetail(Register::Invo
     detail->paymentActions[n].paidObject.handle = DUPSTRFUN(pa->getObjectName);
     detail->paymentActions[n].paidObject.type   = ccReg::FT_DOMAIN;
 
-    detail->paymentActions[n].actionTime = DUPSTRDATE(pa->getActionTime);
+    detail->paymentActions[n].actionTime = DUPSTRDATE_NOLTCONVERT(pa->getActionTime);
     detail->paymentActions[n].expirationDate = DUPSTRDATED(pa->getExDate);
     detail->paymentActions[n].actionType = pa->getAction();
     detail->paymentActions[n].unitsCount = pa->getUnitsCount();

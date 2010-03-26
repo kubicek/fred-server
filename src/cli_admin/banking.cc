@@ -241,10 +241,10 @@ int ebanka_invoicing(const char *database, const char *filename)
 
     LOG( LOG_DEBUG , "successfully  connect to DATABASE %s" , database);
 
-    if (db.BeginTransaction() ) {
 
       if (csv.get_cols() == 16) {
         while (csv.get_row() ) {
+          if (db.BeginTransaction() ) {
 
           bzero(my_accountStr, SIZE_my_accountStr);
           bzero(my_codeStr, SIZE_my_codeStr);
@@ -332,13 +332,15 @@ int ebanka_invoicing(const char *database, const char *filename)
 
           }
 
+          db.QuitTransaction(ret); // potvrdit transakci jako uspesnou OK 
+
         }
 
-        if (err == 0)
-          ret = CMD_OK;
-
-        db.QuitTransaction(ret); // potvrdit transakci jako uspesnou OK
       }
+
+      if (err == 0)
+        ret = CMD_OK;
+
       // odpojeni od databaze
       db.Disconnect();
 

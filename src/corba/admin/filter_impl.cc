@@ -84,6 +84,24 @@ public:
   }
 };
 
+class FilterBoolImpl : virtual public POA_ccReg::Filters::Bool,
+  public FilterSimpleImpl {
+  Database::Filters::Value<bool>* get() {
+    return dynamic_cast<Database::Filters::Value<bool>*>(f);
+  }
+
+public:
+  FilterBoolImpl(Database::Filters::Value<bool>* f) :
+    FilterSimpleImpl(f) {
+  }
+  CORBA::Boolean value() {
+    return get()->getValue().getValue();
+  }
+  void value(CORBA::Boolean v) {
+    get()->setValue(v);
+  }
+};
+
 class FilterIdImpl : virtual public POA_ccReg::Filters::Id,
   public FilterSimpleImpl {
   Database::Filters::Value<Database::ID>* get() {
@@ -325,6 +343,7 @@ COMPOUND_CLASS(Domain, Domain, Obj,
     FILTER_ADD(Contact, addTempContact);
     FILTER_ADD(NSSet, addNSSet);
     FILTER_ADD(KeySet, addKeySet);
+    FILTER_ADD(Bool, addPublish)
 );
 
 COMPOUND_CLASS(NSSet, NSSet, Obj,
@@ -366,7 +385,7 @@ COMPOUND_CLASS(PublicRequest, PublicRequest, Compound,
     FILTER_ADD(Str, addReason);
     FILTER_ADD(Str, addEmailToAnswer);
     FILTER_ADD(Obj, addObject);
-    FILTER_ADD(Action, addEppAction);
+    FILTER_ADD(Registrar, addRegistrar);
 );
 
 COMPOUND_CLASS(File, File, Compound,
@@ -457,6 +476,7 @@ ITERATOR_ADD_E_METHOD_IMPL(Str,Value<std::string>);
 ITERATOR_ADD_E_METHOD_IMPL(Int,Value<unsigned>);
 ITERATOR_ADD_E_METHOD_IMPL(Int,Value<int>);
 ITERATOR_ADD_E_METHOD_IMPL(IntInterval,Interval<int>);
+ITERATOR_ADD_E_METHOD_IMPL(Bool,Value<bool>);
 ITERATOR_ADD_E_METHOD_IMPL(Id,Value<Database::ID>);
 ITERATOR_ADD_E_METHOD_IMPL(Action,EppAction);
 ITERATOR_ADD_E_METHOD_IMPL(Date,Interval<Database::DateInterval>);
@@ -484,6 +504,7 @@ void FilterIteratorImpl::addFilter(Database::Filters::Filter *f) {
   ITERATOR_ADD_FILTER_METHOD_IMPL(Int,Value<unsigned>);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Int,Value<int>);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Id,Value<Database::ID>);
+  ITERATOR_ADD_FILTER_METHOD_IMPL(Bool,Value<bool>);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Action,EppAction);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Date,Interval<Database::DateInterval>);
   ITERATOR_ADD_FILTER_METHOD_IMPL(DateTime,Interval<Database::DateTimeInterval>);

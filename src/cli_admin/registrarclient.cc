@@ -208,13 +208,13 @@ RegistrarClient::list()
             << "\t\t<credit>" << reg(i)->getCredit() << "</credit>\n";
         for (unsigned int j = 0; j < reg(i)->getACLSize(); j++) {
             std::cout
-                << "\t\t<ACL>"
+                << "\t\t<ACL>\n"
                 << "\t\t\t<cert_md5>" << reg(i)->getACL(j)->getCertificateMD5() << "</cert_md5>\n"
                 << "\t\t\t<pass>" << reg(i)->getACL(j)->getPassword() << "</pass>\n"
                 << "\t\t</ACL>\n";
         }
         std::cout
-            << std::endl;
+            << "\t</registrar>\n";
     }
     std::cout << "</object>" << std::endl;
 
@@ -364,7 +364,7 @@ RegistrarClient::price_add()
     std::auto_ptr<Register::Zone::Manager> zoneMan(
             Register::Zone::Manager::create(&m_db));
     std::string zone = m_conf.get<std::string>(REGISTRAR_ZONE_FQDN_NAME);
-    Database::DateTime validFrom(Database::NOW);
+    Database::DateTime validFrom(Database::NOW_UTC);
     if (m_conf.hasOpt(REGISTRAR_VALID_FROM_NAME)) {
         validFrom.from_string(m_conf.get<std::string>(REGISTRAR_VALID_FROM_NAME));
     }

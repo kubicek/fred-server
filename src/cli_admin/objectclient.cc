@@ -43,7 +43,7 @@ ObjectClient::ObjectClient()
             "Object related sub options");
     m_optionsInvis->add_options()
         addOpt(OBJECT_DEBUG_NAME)
-        addOptUInt(OBJECT_ID_NAME)
+        addOptULongLong(OBJECT_ID_NAME)
         addOptStr(OBJECT_NAME_NAME)
         addOptStrDef(OBJECT_DELETE_TYPES_NAME, "")
         addOptStrDef(OBJECT_NOTIFY_EXCEPT_TYPES_NAME, "")
@@ -103,8 +103,8 @@ ObjectClient::createObjectStateRequest(
       std::stringstream sql;
       sql << "SELECT COUNT(*) FROM object_state_request "
           << "WHERE object_id=" << object << " AND state_id=" << state
-          << " AND canceled ISNULL "
-          << " AND (valid_to ISNULL OR valid_to>CURRENT_TIMESTAMP) ";
+          << " AND (canceled ISNULL OR canceled > CURRENT_TIMESTAMP) "
+          << " AND (valid_to ISNULL OR valid_to > CURRENT_TIMESTAMP) ";
       if (!m_db.ExecSelect(sql.str().c_str()))
           return -1;
       if (atoi(m_db.GetFieldValue(0,0)))
@@ -124,7 +124,7 @@ ObjectClient::createObjectStateRequest(
 int
 ObjectClient::new_state_request()
 {
-    Register::TID id = m_conf.get<unsigned int>(OBJECT_ID_NAME);
+    Register::TID id = m_conf.get<unsigned long long>(OBJECT_ID_NAME);
     unsigned int state = m_conf.get<unsigned int>(OBJECT_NEW_STATE_REQUEST_NAME);
     int res = createObjectStateRequest(
             id, state
@@ -158,7 +158,12 @@ ObjectClient::update_states()
                 &m_db,
                 m_conf.get<bool>(REG_RESTRICTED_HANDLES_NAME))
             );
-    regMan->updateObjectStates();
+    unsigned long long id = 0;
+    if (m_conf.hasOpt(OBJECT_ID_NAME)) {
+        id = m_conf.get<unsigned long long>(OBJECT_ID_NAME);
+    }
+
+    regMan->updateObjectStates(id);
     return 0;
 }
 
@@ -340,7 +345,7 @@ int
 ObjectClient::regular_procedure()
 {
     int i;
-    CorbaClient *cc = NULL;
+    std::auto_ptr<CorbaClient> cc;
     try {
         std::auto_ptr<Register::Document::Manager> docMan(
                 Register::Document::Manager::create(
@@ -351,8 +356,8 @@ ObjectClient::regular_procedure()
                 );
         for (i = 0; i < RESOLVE_TRY; i++) {
             try {
-                cc = new CorbaClient(0, NULL, m_nsAddr, m_conf.get<std::string>(NS_CONTEXT_NAME));
-                if (cc != NULL) {
+                cc.reset(new CorbaClient(0, NULL, m_nsAddr, m_conf.get<std::string>(NS_CONTEXT_NAME)));
+                if (cc.get() != NULL) {
                     break;
                 }
             } catch (NameService::NOT_RUNNING) {
@@ -412,7 +417,7 @@ ObjectClient::regular_procedure()
         pollMan->createStateMessages(
                 m_conf.get<std::string>(OBJECT_POLL_EXCEPT_TYPES_NAME),
                 0, NULL);
-        if ((i = deleteObjects(m_conf.get<std::string>(OBJECT_DELETE_TYPES_NAME), *cc)) != 0) {
+        if ((i = deleteObjects(m_conf.get<std::string>(OBJECT_DELETE_TYPES_NAME), *(cc.get()))) != 0) {
             LOG(ERROR_LOG, "Admin::ObjectClient::regular_procedure(): Error has occured in deleteObject: %d", i);
       	    return i;
         }
@@ -433,11 +438,6 @@ ObjectClient::regular_procedure()
         LOG(ERROR_LOG, "Admin::ObjectClient::regular_procedure(): unknown exception catched");
     }
 
-    try {
-        delete cc;
-    } catch (CORBA::Exception &e) {
-        ;
-    }
     return 0;
 }
 

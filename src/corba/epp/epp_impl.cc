@@ -1040,6 +1040,29 @@ char* ccReg_EPP_i::version(
   return CORBA::string_dup("DSDng");
 }
 
+void ccReg_EPP_i::extractEnumDomainExtension(std::string &valexdate, ccReg::Disclose &publish,
+        const ccReg::ExtensionList &ext)
+{
+    const ccReg::ENUMValidationExtension *enum_ext;
+    unsigned int len = ext.length();
+
+    for (unsigned int i = 0; i < len; ++i) {
+        if (ext[i] >>= enum_ext) {
+            /* extract validation exdate */
+            valexdate = enum_ext->valExDate;
+            /* extract enum publish flag */
+            publish = enum_ext->publish;
+            LOGGER(PACKAGE).debug(boost::format("valexdate=%1% publish=%2%")
+                    % valexdate % publish);
+        }
+        else {
+            LOGGER(PACKAGE).debug(boost::format("unknown extension found when"
+                    " extracting domain enum extension (list idx=%1%)") % i);
+            break;
+        }
+    }
+}
+
 // parse extension fom domain.ValExDate
 void ccReg_EPP_i::GetValExpDateFromExtension(
   char *valexpDate, const ccReg::ExtensionList& ext)
@@ -1186,16 +1209,21 @@ bool ccReg_EPP_i::setvalue_DISCLOSE(
 }
 
 std::vector<int>
-ccReg_EPP_i::GetAllZonesIDs()
+ccReg_EPP_i::GetAllZonesIDs(
+  DB *db)
 {
     std::vector<int> ret;
     std::string query("SELECT id FROM zone;");
-    if (!db.ExecSelect(query.c_str())) {
+    if (!db->ExecSelect(query.c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve zones ids from the database");
         return ret;
     }
-    for (int i = 0; i < db.GetSelectRows(); i++) {
-        ret.push_back(atoi(db.GetFieldValue(i, 0)));
+    if (db->GetSelectRows() == 0) {
+        LOGGER(PACKAGE).error("GetAllZonesIDs: result size is zero");
+        return ret;
+    }
+    for (int i = 0; i < db->GetSelectRows(); i++) {
+        ret.push_back(atoi(db->GetFieldValue(i, 0)));
     }
 
     return ret;
@@ -1203,125 +1231,138 @@ ccReg_EPP_i::GetAllZonesIDs()
 
 // ZONE parameters
 int ccReg_EPP_i::GetZoneExPeriodMin(
+  DB *db,
   int id)
 {
     std::stringstream query;
     query << "SELECT ex_period_min FROM zone WHERE id=" << id << ";";
-    if (!db.ExecSelect(query.str().c_str())) {
+    if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("Cannot retrieve ``ex_period_min'' from the database");
         return 0;
     }
-    return atoi(db.GetFieldValue(0, 0));
+    return atoi(db->GetFieldValue(0, 0));
 }
 
 int ccReg_EPP_i::GetZoneExPeriodMax(
+  DB *db,
   int id)
 {
     std::stringstream query;
     query << "SELECT ex_period_max FROM zone WHERE id=" << id << ";";
-    if (!db.ExecSelect(query.str().c_str())) {
+    if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("Cannot retrieve ``ex_period_max'' from the database");
         return 0;
     }
-    return atoi(db.GetFieldValue(0, 0));
+    return atoi(db->GetFieldValue(0, 0));
 }
 
 int ccReg_EPP_i::GetZoneValPeriod(
+  DB *db,
   int id)
 {
     std::stringstream query;
     query << "SELECT val_period FROM zone WHERE id=" << id << ";";
-    if (!db.ExecSelect(query.str().c_str())) {
+    if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("Cannot retrieve ``val_period'' from the database");
         return 0;
     }
-    return atoi(db.GetFieldValue(0, 0));
+    return atoi(db->GetFieldValue(0, 0));
 }
 
 bool ccReg_EPP_i::GetZoneEnum(
+  DB *db,
   int id)
 {
     std::stringstream query;
     query << "SELECT enum_zone FROM zone WHERE id=" << id << ";";
-    if (!db.ExecSelect(query.str().c_str())) {
+    if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve ``enum_zone'' from the database");
         return false;
     }
-    if (strcmp("t", db.GetFieldValue(0, 0)) == 0) {
+    if (strcmp("t", db->GetFieldValue(0, 0)) == 0) {
         return true;
     }
     return false;
 }
 
 int ccReg_EPP_i::GetZoneDotsMax(
+  DB *db,
   int id)
 {
     std::stringstream query;
     query << "SELECT dots_max FROM zone WHERE id=" << id << ";";
-    if (!db.ExecSelect(query.str().c_str())) {
+    if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve ``dots_max'' from the database");
         return 0;
     }
-    return atoi(db.GetFieldValue(0, 0));
+    return atoi(db->GetFieldValue(0, 0));
 }
 
 const char * ccReg_EPP_i::GetZoneFQDN(
+  DB *db,
   int id)
 {
     std::stringstream query;
     query << "SELECT fqdn FROM zone WHERE id=" << id << ";";
-    if (!db.ExecSelect(query.str().c_str())) {
+    if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve ``fqdn'' from the database");
         return "";
     }
-    return db.GetFieldValue(0, 0);
+    return db->GetFieldValue(0, 0);
 }
 
 int ccReg_EPP_i::getZone(
+  DB *db,
   const char *fqdn)
 {
     std::stringstream zoneQuery;
     std::string domain_fqdn(fqdn);
+    int pos = getZoneMax(db, fqdn);
+    if (pos == 0) {
+        LOGGER(PACKAGE).debug("getZone: dot position is zero");
+        return 0;
+    }
     zoneQuery
         << "SELECT id FROM zone WHERE lower(fqdn)=lower('"
-        << domain_fqdn.substr(getZoneMax(fqdn) + 1, std::string::npos)
+        << domain_fqdn.substr(pos + 1, std::string::npos)
         << "');";
-    if (!db.ExecSelect(zoneQuery.str().c_str())) {
+    if (!db->ExecSelect(zoneQuery.str().c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve zone id from the database");
         return 0;
     } else {
-        return atoi(db.GetFieldValue(0, 0));
+        return atoi(db->GetFieldValue(0, 0));
     }
     return 0;
 }
 
 int ccReg_EPP_i::getZoneMax(
+  DB *db,
   const char *fqdn)
 {
-    std::string query("SELECT fqdn FROM zone;");
-    if (!db.ExecSelect(query.c_str())) {
+    std::string query("SELECT fqdn FROM zone ORDER BY length(fqdn) DESC");
+    if (!db->ExecSelect(query.c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve list of fqdn from the database");
         return 0;
     }
-    int len = strlen(fqdn);
-    for (int i = 0; i < db.GetSelectRows(); i++) {
-        int slen = strlen(db.GetFieldValue(i, 0));
-        int l = len - slen;
-        if (l > 0) {
-            if (fqdn[l - 1] == '.') {
-                return l - 1;
-            }
-        }
+    if (db->GetSelectRows() == 0) {
+        LOGGER(PACKAGE).error("getZoneMax: result size is zero");
+        return 0;
     }
-    for (int l = len - 1; l > 0; l--) {
-        if (fqdn[l] == '.') {
-            return l - 1;
+    std::string domain(fqdn);
+    for (int i = 0; i < db->GetSelectRows(); i++) {
+        std::string zone(db->GetFieldValue(i, 0));
+        int from = domain.length() - zone.length();
+        if (from > 1) {
+            if (size_t idx = domain.find(zone, from) != std::string::npos) {
+                return from - 1;
+            }
         }
     }
     return 0;
 }
 
 bool ccReg_EPP_i::testFQDN(
+  DB *db,
   const char *fqdn)
 {
   Logging::Context::clear();
@@ -1329,21 +1370,22 @@ bool ccReg_EPP_i::testFQDN(
 
   char FQDN[164];
 
-  if (getFQDN(FQDN, fqdn) > 0)
+  if (getFQDN(db, FQDN, fqdn) > 0)
     return true;
   else
     return false;
 }
 
 int ccReg_EPP_i::getFQDN(
+  DB *db,
   char *FQDN, const char *fqdn)
 {
   int i, len, max;
   int z;
   int dot=0, dot_max;
   bool en;
-  z = getZone(fqdn);
-  max = getZoneMax(fqdn); // return the end
+  z = getZone(db, fqdn);
+  max = getZoneMax(db, fqdn); // return the end
 
   len = strlen(fqdn);
 
@@ -1387,14 +1429,14 @@ int ccReg_EPP_i::getFQDN(
   }
 
   // test on the number of maximal dots
-  dot_max = GetZoneDotsMax(z);
+  dot_max = GetZoneDotsMax(db, z);
 
   if (dot > dot_max) {
     LOG( LOG_DEBUG , "too much %d dots max %d" , dot , dot_max );
     return -1;
   }
 
-  en = GetZoneEnum(z);
+  en = GetZoneEnum(db, z);
 
   for (i = 0; i < max; i ++) {
 
@@ -1839,7 +1881,7 @@ ccReg_EPP_i::ClientCredit(ccReg::ZoneCredit_out credit, CORBA::Long clientID,
     EPPAction action(this, clientID, EPP_ClientCredit, clTRID, XML);
 
     try {
-        std::vector<int> zones = GetAllZonesIDs();
+        std::vector<int> zones = GetAllZonesIDs(action.getDB());
         for (z = 0; z < zones.size(); z++) {
             zoneID = zones[z];
             // credit of the registrar
@@ -1849,7 +1891,7 @@ ccReg_EPP_i::ClientCredit(ccReg::ZoneCredit_out credit, CORBA::Long clientID,
             {
                 credit->length(seq+1);
                 credit[seq].price = price;
-                credit[seq].zone_fqdn = CORBA::string_dup(GetZoneFQDN(zoneID) );
+                credit[seq].zone_fqdn = CORBA::string_dup(GetZoneFQDN(action.getDB(), zoneID) );
                 seq++;
             }
         }
@@ -3901,12 +3943,16 @@ ccReg_EPP_i::NSSetUpdate(const char* handle, const char* authInfo_chg,
     short int code = 0;
 
     int *tch_add = new int[ tech_add.length() ];
-    if (tech_add.length() > 0)
-      memset((void *)tch_add, 0, sizeof(tch_add));
+    if (tech_add.length() > 0) {
+        for (unsigned int i = 0; i < tech_add.length(); ++i)
+            tch_add[i] = 0;
+    }
 
     int *tch_rem = new int[ tech_rem.length() ];
-    if (tech_rem.length() > 0)
-      memset((void *)tch_rem, 0, sizeof(tch_rem));
+    if (tech_rem.length() > 0) {
+        for (unsigned int i = 0; i < tech_rem.length(); ++i)
+            tch_rem[i] = 0;
+    }
 
     ParsedAction paction;
     paction.add(1,(const char*)handle);
@@ -4025,7 +4071,7 @@ ccReg_EPP_i::NSSetUpdate(const char* handle, const char* authInfo_chg,
 
                 convert_hostname(NAME, dns_add[i].fqdn); // convert to lower case
                 // HOST is not in defined zone and contain ip address
-                if (getZone(dns_add[i].fqdn) == 0
+                if (getZone(action.getDB(), dns_add[i].fqdn) == 0
                         && (int ) dns_add[i].inet.length() > 0) {
                     for (j = 0; j < dns_add[i].inet.length() ; j ++) {
                         LOG( WARNING_LOG, "NSSetUpdate:  ipaddr  glue not allowed %s " , (const char *) dns_add[i].inet[j] );
@@ -4434,6 +4480,7 @@ ccReg::Response* ccReg_EPP_i::DomainInfo(
     ccReg::ENUMValidationExtension *enumVal =
         new ccReg::ENUMValidationExtension();
     enumVal->valExDate = CORBA::string_dup(to_iso_extended_string(dom->getValExDate()).c_str() );
+    enumVal->publish = dom->getPublish() ? ccReg::DISCL_DISPLAY : ccReg::DISCL_HIDE;
     d->ext.length(1);
     d->ext[0] <<= enumVal;
   }
@@ -4557,7 +4604,8 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
     std::auto_ptr<EPPNotifier> ntf;
-    char valexpiryDate[MAX_DATE+1];
+    std::string valexdate;
+    ccReg::Disclose publish;
     int id, nssetid, contactid, adminid, keysetid;
     int seq, zone;
     std::vector<int> ac_add, ac_rem, tc_rem;
@@ -4579,7 +4627,7 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
     tc_rem.resize(tmpcontact_rem.length());
 
     // parse enum.Exdate extension
-    GetValExpDateFromExtension(valexpiryDate, ext);
+    extractEnumDomainExtension(valexdate, publish, ext);
 
     if ( (id = getIdOfDomain(action.getDB(), fqdn, conf, true, &zone) ) <= 0) {
         LOG( WARNING_LOG, "domain  [%s] NOT_EXIST", fqdn );
@@ -4797,20 +4845,20 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
             }
 
         }
-        if (strlen(valexpiryDate) ) {
+        if (valexdate.length() > 0) {
             // Test for  enum domain
-            if (GetZoneEnum(zone) ) {
-                if (action.getDB()->TestValExDate(valexpiryDate, GetZoneValPeriod(zone) ,
+            if (GetZoneEnum(action.getDB(), zone) ) {
+                if (action.getDB()->TestValExDate(valexdate.c_str(), 
+                            GetZoneValPeriod(action.getDB(), zone),
                             DefaultValExpInterval() , id) == false) // test validace expirace
                 {
-                    LOG( WARNING_LOG, "DomainUpdate:  validity exp date is not valid %s" , valexpiryDate );
+                    LOG(WARNING_LOG, "DomainUpdate: validity exp date is not valid %s", valexdate.c_str());
                     code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
                             ccReg::domain_ext_valDate, 1, REASON_MSG_VALEXPDATE_NOT_VALID);
                 }
 
             } else {
-
-                LOG( WARNING_LOG, "DomainUpdate: can not  validity exp date %s" , valexpiryDate );
+                LOG(WARNING_LOG, "DomainUpdate: can not validity exp date %s", valexdate.c_str());
                 code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
                         ccReg::domain_ext_valDate, 1, REASON_MSG_VALEXPDATE_NOT_USED);
 
@@ -4887,14 +4935,26 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
                 if (code == 0) {
 
                     // change validity exdate  extension
-                    if (GetZoneEnum(zone) && strlen(valexpiryDate) > 0) {
-                        LOG( NOTICE_LOG, "change valExpDate %s ", valexpiryDate );
-                        action.getDB()->UPDATE("enumval");
-                        action.getDB()->SET("ExDate", valexpiryDate);
-                        action.getDB()->WHERE("domainID", id);
+                    if (GetZoneEnum(action.getDB(), zone)) {
+                        if (valexdate.length() > 0 || publish != ccReg::DISCL_EMPTY) {
+                            action.getDB()->UPDATE("enumval");
+                            if (valexdate.length() > 0) {
+                                LOG(NOTICE_LOG, "change valExpDate %s", valexdate.c_str());
+                                action.getDB()->SET("ExDate", valexdate.c_str());
+                            }
+                            if (publish == ccReg::DISCL_DISPLAY) {
+                                LOG(NOTICE_LOG, "change publish flag to YES");
+                                action.getDB()->SET("publish", true);
+                            }
+                            if (publish == ccReg::DISCL_HIDE) {
+                                LOG(NOTICE_LOG, "change publish flag to NO");
+                                action.getDB()->SET("publish", false);
+                            }
+                            action.getDB()->WHERE("domainID", id);
 
-                        if ( !action.getDB()->EXEC() )
-                            code = COMMAND_FAILED;
+                            if ( !action.getDB()->EXEC() )
+                                code = COMMAND_FAILED;
+                        }
                     }
 
                     // REM temp-c (must be befor ADD admin-c because of uniqueness)
@@ -5007,7 +5067,8 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
     std::auto_ptr<EPPNotifier> ntf;
-    char valexpiryDate[MAX_DATE+1];
+    std::string valexdate;
+    ccReg::Disclose publish;
     char FQDN[164];
     int contactid, nssetid, adminid, id, keysetid;
     int zone =0;
@@ -5053,7 +5114,7 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
             period.count , period.unit , period_count , periodStr);
 
     // parse enum.exdate extension for validitydate
-    GetValExpDateFromExtension(valexpiryDate, ext);
+    extractEnumDomainExtension(valexdate, publish, ext);
 
     try {
         std::auto_ptr<Register::Zone::Manager> zm( Register::Zone::Manager::create(action.getDB()) );
@@ -5083,7 +5144,7 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
                 break;
             case Register::Domain::CA_AVAILABLE: // if is free
                 // conver fqdn to lower case and get zone
-                zone = getFQDN(FQDN, fqdn);
+                zone = getFQDN(action.getDB(), FQDN, fqdn);
                 LOG( NOTICE_LOG , "domain %s avail zone %d" ,(const char * ) FQDN , zone );
                 break;
             case Register::Domain::CA_BAD_ZONE:
@@ -5148,20 +5209,20 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
 
                 // default period if not set from zone parametrs
                 if (period_count == 0) {
-                    period_count = GetZoneExPeriodMin(zone);
+                    period_count = GetZoneExPeriodMin(action.getDB(), zone);
                     LOG( NOTICE_LOG, "get defualt peridod %d month  for zone   %d ", period_count , zone );
                 }
 
                 // test period validity range and modulo
                 switch (TestPeriodyInterval(period_count,
-                            GetZoneExPeriodMin(zone) , GetZoneExPeriodMax(zone) ) ) {
+                            GetZoneExPeriodMin(action.getDB(), zone) , GetZoneExPeriodMax(action.getDB(), zone) ) ) {
                     case 2:
-                        LOG( WARNING_LOG, "period %d interval ot of range MAX %d MIN %d" , period_count , GetZoneExPeriodMax( zone ) , GetZoneExPeriodMin( zone ) );
+                        LOG( WARNING_LOG, "period %d interval ot of range MAX %d MIN %d" , period_count , GetZoneExPeriodMax(action.getDB(),  zone ) , GetZoneExPeriodMin(action.getDB(),  zone ) );
                         code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
                                 ccReg::domain_period, 1, REASON_MSG_PERIOD_RANGE);
                         break;
                     case 1:
-                        LOG( WARNING_LOG, "period %d  interval policy error MIN %d" , period_count , GetZoneExPeriodMin( zone ) );
+                        LOG( WARNING_LOG, "period %d  interval policy error MIN %d" , period_count , GetZoneExPeriodMin(action.getDB(),  zone ) );
                         code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
                                 ccReg::domain_period, 1, REASON_MSG_PERIOD_POLICY);
                         break;
@@ -5169,9 +5230,9 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
                 }
 
                 // test  validy date for enum domain
-                if (strlen(valexpiryDate) == 0) {
+                if (valexdate.length() == 0) {
                     // for enum domain must set validity date
-                    if (GetZoneEnum(zone) ) {
+                    if (GetZoneEnum(action.getDB(), zone) ) {
                         LOG( WARNING_LOG, "DomainCreate: validity exp date MISSING" );
                         code = action.setErrorReason(COMMAND_PARAMETR_MISSING,
                                 ccReg::domain_ext_valDate_missing, 0,
@@ -5179,18 +5240,18 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
                     }
                 } else {
                     // Test for enum domain
-                    if (GetZoneEnum(zone) ) {
+                    if (GetZoneEnum(action.getDB(), zone) ) {
                         // test
-                        if (action.getDB()->TestValExDate(valexpiryDate,
-                                    GetZoneValPeriod(zone) , DefaultValExpInterval() , 0)
+                        if (action.getDB()->TestValExDate(valexdate.c_str(),
+                                    GetZoneValPeriod(action.getDB(), zone) , DefaultValExpInterval() , 0)
                                 == false) {
-                            LOG( WARNING_LOG, "Validity exp date is not valid %s" , valexpiryDate );
+                            LOG(WARNING_LOG, "Validity exp date is not valid %s", valexdate.c_str());
                             code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
                                     ccReg::domain_ext_valDate, 1,
                                     REASON_MSG_VALEXPDATE_NOT_VALID);
                         }
                     } else {
-                        LOG( WARNING_LOG, "Validity exp date %s not user" , valexpiryDate );
+                        LOG(WARNING_LOG, "Validity exp date %s not used", valexdate.c_str());
                         code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
                                 ccReg::domain_ext_valDate, 1,
                                 REASON_MSG_VALEXPDATE_NOT_USED);
@@ -5305,10 +5366,17 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
                             exDate = CORBA::string_dup(action.getDB()->GetDomainExDate(id) );
 
                             // save  enum domain   extension validity date
-                            if (GetZoneEnum(zone) && strlen(valexpiryDate) > 0) {
+                            if (GetZoneEnum(action.getDB(), zone) && valexdate.length() > 0) {
                                 action.getDB()->INSERT("enumval");
                                 action.getDB()->VALUE(id);
-                                action.getDB()->VALUE(valexpiryDate);
+                                action.getDB()->VALUE(valexdate.c_str());
+                                if (publish == ccReg::DISCL_DISPLAY) {
+                                    action.getDB()->VALUE(true);
+                                }
+                                if (publish == ccReg::DISCL_HIDE) {
+                                    action.getDB()->VALUE(false);
+                                }
+
                                 if (action.getDB()->EXEC() == false)
                                     code = COMMAND_FAILED;
                             }
@@ -5401,7 +5469,8 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
 
     std::auto_ptr<EPPNotifier> ntf;
-    char valexpiryDate[MAX_DATE+1];
+    std::string valexdate;
+    ccReg::Disclose publish;
     int id, zone;
     int period_count;
     char periodStr[10];
@@ -5431,7 +5500,7 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
     LOG( NOTICE_LOG, "DomainRenew: period count %d unit %d period_count %d string [%s]" , period.count , period.unit , period_count , periodStr);
 
     // parse enum.ExDate extension
-    GetValExpDateFromExtension(valexpiryDate, ext);
+    extractEnumDomainExtension(valexdate, publish, ext);
 
     if ((id = getIdOfDomain(action.getDB(), fqdn, conf, true, &zone) ) <= 0) {
         LOG( WARNING_LOG, "domain  [%s] NOT_EXIST", fqdn );
@@ -5453,21 +5522,21 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
     } else {
         // set default renew  period from zone params
         if (period_count == 0) {
-            period_count = GetZoneExPeriodMin(zone);
+            period_count = GetZoneExPeriodMin(action.getDB(), zone);
             LOG( NOTICE_LOG, "get default peridod %d month  for zone   %d ", period_count , zone );
         }
 
         //  test period
         switch (TestPeriodyInterval(period_count,
-                    GetZoneExPeriodMin(zone) , GetZoneExPeriodMax(zone) ) ) {
+                    GetZoneExPeriodMin(action.getDB(), zone) , GetZoneExPeriodMax(action.getDB(), zone) ) ) {
             case 2:
-                LOG( WARNING_LOG, "period %d interval ot of range MAX %d MIN %d" , period_count , GetZoneExPeriodMax( zone ) , GetZoneExPeriodMin( zone ) );
+                LOG( WARNING_LOG, "period %d interval ot of range MAX %d MIN %d" , period_count , GetZoneExPeriodMax(action.getDB(),  zone ) , GetZoneExPeriodMin(action.getDB(),  zone ) );
                 code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
                         ccReg::domain_period, 1,
                         REASON_MSG_PERIOD_RANGE);
                 break;
             case 1:
-                LOG( WARNING_LOG, "period %d  interval policy error MIN %d" , period_count , GetZoneExPeriodMin( zone ) );
+                LOG( WARNING_LOG, "period %d  interval policy error MIN %d" , period_count , GetZoneExPeriodMin(action.getDB(),  zone ) );
                 code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
                         ccReg::domain_period, 1,
                         REASON_MSG_PERIOD_POLICY);
@@ -5475,7 +5544,7 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
             default:
                 // count new  ExDate
                 if (action.getDB()->CountExDate(id, period_count,
-                            GetZoneExPeriodMax(zone) ) == false) {
+                            GetZoneExPeriodMax(action.getDB(), zone) ) == false) {
                     LOG( WARNING_LOG, "period %d ExDate out of range" , period_count );
                     code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
                             ccReg::domain_period, 1,
@@ -5486,13 +5555,13 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
         }
 
         // test validity Date for enum domain
-        if (strlen(valexpiryDate) ) {
+        if (valexdate.length() > 0) {
             // Test for enum domain only
-            if (GetZoneEnum(zone) ) {
-                if (action.getDB()->TestValExDate(valexpiryDate,
-                            GetZoneValPeriod(zone) , DefaultValExpInterval() , id)
+            if (GetZoneEnum(action.getDB(), zone) ) {
+                if (action.getDB()->TestValExDate(valexdate.c_str(),
+                            GetZoneValPeriod(action.getDB(), zone) , DefaultValExpInterval() , id)
                         == false) {
-                    LOG( WARNING_LOG, "Validity exp date is not valid %s" , valexpiryDate );
+                    LOG(WARNING_LOG, "Validity exp date is not valid %s", valexdate.c_str());
                     code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
                             ccReg::domain_ext_valDate, 1,
                             REASON_MSG_VALEXPDATE_NOT_VALID);
@@ -5500,7 +5569,7 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
 
             } else {
 
-                LOG( WARNING_LOG, "Can not  validity exp date %s" , valexpiryDate );
+                LOG(WARNING_LOG, "Can not validity exp date %s", valexdate.c_str());
                 code = action.setErrorReason(COMMAND_PARAMETR_VALUE_POLICY_ERROR,
                         ccReg::domain_ext_valDate, 1,
                         REASON_MSG_VALEXPDATE_NOT_USED);
@@ -5534,12 +5603,21 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
             if (!code) {
 
                 // change validity date for enum domain
-                if (GetZoneEnum(zone) ) {
-                    if (strlen(valexpiryDate) > 0) {
-                        LOG( NOTICE_LOG, "change valExpDate %s ", valexpiryDate );
-
+                if (GetZoneEnum(action.getDB(), zone) ) {
+                    if (valexdate.length() > 0 || publish != ccReg::DISCL_EMPTY) {
                         action.getDB()->UPDATE("enumval");
-                        action.getDB()->SET("ExDate", valexpiryDate);
+                        if (valexdate.length() > 0) {
+                            LOG(NOTICE_LOG, "change valExpDate %s", valexdate.c_str());
+                            action.getDB()->SET("ExDate", valexdate.c_str());
+                        }
+                        if (publish == ccReg::DISCL_DISPLAY) {
+                            LOG(NOTICE_LOG, "change publish flag to YES");
+                            action.getDB()->SET("publish", true);
+                        }
+                        if (publish == ccReg::DISCL_HIDE) {
+                            LOG(NOTICE_LOG, "change publish flag to NO");
+                            action.getDB()->SET("publish", false);
+                        }
                         action.getDB()->WHERE("domainID", id);
 
                         if (action.getDB()->EXEC() == false)
@@ -5891,19 +5969,12 @@ ccReg_EPP_i::KeySetCreate(
         LOG(WARNING_LOG, "KeySetCreate: too many tech contacts (maximum is 10)");
         code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR, 
                 ccReg::keyset_tech, 0, REASON_MSG_TECHADMIN_LIMIT);
-    } else if (dsrec.length() < 1 && dnsk.length() < 1) {
-        if (dsrec.length() < 1) {
-            LOG(WARNING_LOG, "KeySetCreate: not any DS record");
-            code = action.setErrorReason(COMMAND_PARAMETR_MISSING, 
-                    ccReg::keyset_dsrecord, 0, REASON_MSG_NO_DSRECORD);
-        }
-        if (dnsk.length() < 1) {
+    } else if (dnsk.length() < 1) {
             LOG(WARNING_LOG, "KeySetCreate: not any DNSKey record");
             code = action.setErrorReason(COMMAND_PARAMETR_MISSING,
                     ccReg::keyset_dnskey, 0, REASON_MSG_NO_DNSKEY);
-        }
-    } else if (dsrec.length() > 10) {
-        LOG(WARNING_LOG, "KeySetCreate: too many ds-records (maximum is 10)");
+    } else if (dsrec.length() > 0) {
+        LOG(WARNING_LOG, "KeySetCreate: too many ds-records (maximum is 0)");
         code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
                 ccReg::keyset_dsrecord, 0, REASON_MSG_DSRECORD_LIMIT);
     } else if (dnsk.length() > 10) {
@@ -6059,15 +6130,16 @@ ccReg_EPP_i::KeySetCreate(
             }
         }
     }
-    // dnskey algorithm type (must be 1, 2, 3, 4, 5, 252, 253, 254 or 255)
+    // dnskey algorithm type (must be 1, 2, 3, 4, 5, 6, 7, 252, 253, 254 or 255)
+    // http://www.bind9.net/dns-sec-algorithm-numbers
     // http://rfc-ref.org/RFC-TEXTS/4034/kw-dnssec_algorithm_type.html
     // http://rfc-ref.org/RFC-TEXTS/4034/chapter7.html#d4e446172
     if (code == 0) {
         for (int ii = 0; ii < (int)dnsk.length(); ii++) {
-            if (!((dnsk[ii].alg >= 1 && dnsk[ii].alg <= 5) ||
+            if (!((dnsk[ii].alg >= 1 && dnsk[ii].alg <= 7) ||
                         (dnsk[ii].alg >= 252 && dnsk[ii].alg <=255))) {
                 LOG(WARNING_LOG,
-                        "dnskey algorithm is %d (must be 1,2,3,4,5,252,253,254 or 255)",
+                        "dnskey algorithm is %d (must be 1,2,3,4,5,6,7,252,253,254 or 255)",
                         dnsk[ii].alg);
                 code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
                         ccReg::keyset_dnskey, ii, REASON_MSG_DNSKEY_BAD_ALG);
@@ -6318,6 +6390,11 @@ ccReg_EPP_i::KeySetUpdate(
         code = action.setErrorReason(COMMAND_AUTOR_ERROR,
                 ccReg::registrar_autor, 0,
                 REASON_MSG_REGISTRAR_AUTOR);
+    }
+    if (dsrec_add.length() > 0) {
+       LOG(WARNING_LOG, "KeySetCreate: too many ds-records (maximum is 0)");
+       code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
+               ccReg::keyset_dsrecord, 0, REASON_MSG_DSRECORD_LIMIT);
     }
     try {
         if (!code && testObjectHasState(action.getDB(), keysetId, FLAG_serverUpdateProhibited)) {
@@ -6718,11 +6795,11 @@ ccReg_EPP_i::KeySetUpdate(
                         REASON_MSG_DNSKEY_BAD_PROTOCOL);
                 break;
             }
-            // dnskey algorithm type test (must be 1,2,3,4,5,252,253,254,255)
-            if (!((dnsk_add[ii].alg >= 1 && dnsk_add[ii].alg <= 5) ||
+            // dnskey algorithm type test (must be 1,2,3,4,5,6,7,252,253,254,255)
+            if (!((dnsk_add[ii].alg >= 1 && dnsk_add[ii].alg <= 7) ||
                         (dnsk_add[ii].alg >= 252 && dnsk_add[ii].alg <= 255))) {
                 LOG(WARNING_LOG,
-                        "dnskey algorithm is %d (must be 1,2,3,4,5,252,253,254 or 255)",
+                        "dnskey algorithm is %d (must be 1,2,3,4,5,6,7,252,253,254 or 255)",
                         dnsk_add[ii].alg);
                 code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
                         ccReg::keyset_dnskey_add, ii,
@@ -6958,7 +7035,7 @@ ccReg_EPP_i::KeySetUpdate(
 int
 countTailPads(const char *key)
 {
-    char *str;
+    const char *str;
     int count;
     str = strchr(key, '=');
     if (str == NULL) {
@@ -6977,7 +7054,7 @@ countTailPads(const char *key)
 int
 testPad(const char *key)
 {
-    char *str;
+    const char *str;
     if ((str = strchr(key, '=')) == NULL) {
         return -1;
     }
@@ -7278,7 +7355,7 @@ ccReg_EPP_i::ObjectSendAuthInfo(
                 code=COMMAND_OBJECT_NOT_EXIST;
             break;
         case EPP_DomainSendAuthInfo:
-            if ( (zone = getFQDN(FQDN, name) ) <= 0) {
+            if ( (zone = getFQDN(action.getDB(), FQDN, name) ) <= 0) {
                 LOG(WARNING_LOG, "domain in zone %s", name);
                 if (zone == 0) {
                     code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
@@ -7290,7 +7367,7 @@ ccReg_EPP_i::ObjectSendAuthInfo(
                             REASON_MSG_BAD_FORMAT_FQDN);
                 }
             } else {
-                if ( (id = action.getDB()->GetDomainID(FQDN, GetZoneEnum(zone) ) ) == 0) {
+                if ( (id = action.getDB()->GetDomainID(FQDN, GetZoneEnum(action.getDB(), zone) ) ) == 0) {
                     LOG( WARNING_LOG , "domain [%s] NOT_EXIST" , name );
                     code= COMMAND_OBJECT_NOT_EXIST;
                 }
@@ -7336,6 +7413,7 @@ ccReg_EPP_i::ObjectSendAuthInfo(
                         conn.get()));
 
             new_request->setEppActionId(action.getDB()->GetActionID());
+            new_request->setRegistrarId(GetRegistrarID(clientID));
             new_request->addObject(Register::PublicRequest::OID(id));
             if (!new_request->check()) {
                 LOG(WARNING_LOG, "authinfo request for %s is prohibited",name);

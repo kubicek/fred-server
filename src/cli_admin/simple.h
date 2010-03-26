@@ -5,6 +5,7 @@
 #define addOptStr(name)                     (name, boost::program_options::value<std::string>(), name##_DESC)
 #define addOptInt(name)                     (name, boost::program_options::value<int>(), name##_DESC)
 #define addOptUInt(name)                    (name, boost::program_options::value<unsigned int>(), name##_DESC)
+#define addOptULongLong(name)               (name, boost::program_options::value<unsigned long long>(), name##_DESC)
 #define addOptTID(name)                     (name, boost::program_options::value<Register::TID>(), name##_DESC)
 #define addOptBool(name)                    (name, boost::program_options::value<bool>(), name##_DESC)
 #define addOptType(name, type)              (name, boost::program_options::value<type>(), name##_DESC)
@@ -12,6 +13,7 @@
 #define addOptStrDef(name, val)           (name, boost::program_options::value<std::string>()->default_value(val), name##_DESC)
 #define addOptIntDef(name, val)           (name, boost::program_options::value<int>()->default_value(val), name##_DESC)
 #define addOptUIntDef(name, val)          (name, boost::program_options::value<unsigned int>()->default_value(val), name##_DESC)
+#define addOptULongLongDef(name, val)     (name, boost::program_options::value<unsigned long long>()->default_value(val), name##_DESC)
 #define addOptTIDDef(name, val)           (name, boost::program_options::value<Register::TID>()->default_value(val), name##_DESC)
 #define addOptBoolDef(name, val)          (name, boost::program_options::value<bool>()->default_value(val), name##_DESC)
 #define addOptTypeDef(name, type, val)    (name, boost::program_options::value<type>()->default_value(val), name##_DESC)
@@ -216,6 +218,11 @@
 #define ZONE_ID_NAME_DESC           "show only records with specific zone id number"
 #define add_ZONE_ID()               addOptUInt(ZONE_ID_NAME)
 #define apply_ZONE_ID(filter)       get_DID(filter, ZoneId, ZONE_ID_NAME)
+
+#define ZONE_FQDN_NAME              "zone_fqdn"
+#define ZONE_FQDN_NAME_DESC         "zone fully qualified domain name"
+#define add_ZONE_FQDN()             addOptStr(ZONE_FQDN_NAME)
+#define apply_ZONE_FQDN(filter)     get_Str(filter, ZoneFqdn, ZONE_FQDN_NAME)
 
 // almost all
 #define AUTH_PW_NAME                "auth_pw"

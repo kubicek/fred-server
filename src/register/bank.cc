@@ -494,12 +494,42 @@ namespace Register
       {
         return new OnlinePaymentListImpl(db);
       }
+      virtual bool insertBankAccount(unsigned int zone,
+              const std::string &account_number, const std::string &account_name,
+              const std::string &bank_code);
+      virtual bool insertBankAccount(const std::string &zone, 
+              const std::string &account_number, const std::string &account_name,
+              const std::string &bank_code);
     }; // ManagerImpl
     Manager *Manager::create(
       DB *db
     )
     {
       return new ManagerImpl(db);
-    }    
+    }
+    bool ManagerImpl::insertBankAccount(unsigned int zone,
+            const std::string &account_number, const std::string &account_name,
+            const std::string &bank_code)
+    {
+        std::stringstream sql;
+        sql << "INSERT INTO bank_account (zone, account_number, account_name, "
+            << "bank_code) VALUES (" << zone << ", "
+            << Database::Value(account_number) << ", "
+            << Database::Value(account_name) << ", "
+            << Database::Value(bank_code) << ");";
+        if (!db->ExecSQL(sql.str().c_str())) {
+            LOGGER(PACKAGE).error("Failed to insert new bank account.");
+            return false;
+        }
+        return true;
+    }
+    bool ManagerImpl::insertBankAccount(const std::string &zone,
+            const std::string &account_number, const std::string &account_name,
+            const std::string &bank_code)
+    {
+        return insertBankAccount(
+                db->GetNumericFromTable("zone", "id", "fqdn", zone.c_str()),
+                account_number, account_name, bank_code);
+    }
   }; // Invoicing
 }; // Register

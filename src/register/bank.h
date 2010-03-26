@@ -146,6 +146,12 @@ namespace Register
       virtual OnlinePaymentList *createOnlinePaymentList() const = 0;
       /// factory method
       static Manager *create(DB *db);      
+      virtual bool insertBankAccount(unsigned int zone,
+              const std::string &account_number, const std::string &account_name,
+              const std::string &bank_code) = 0;
+      virtual bool insertBankAccount(const std::string &zone, 
+              const std::string &account_number, const std::string &account_name,
+              const std::string &bank_code) = 0;
     };    
   }
 }

@@ -40,6 +40,8 @@ PollClient::PollClient()
     m_optionsInvis = new boost::program_options::options_description(
             "Poll related sub options");
     m_optionsInvis->add_options()
+        add_REGISTRAR_ID()
+        add_REGISTRAR_HANDLE()
         addOptUInt(POLL_TYPE_NAME)
         addOptUInt(POLL_REGID_NAME)
         addOpt(POLL_NONSEEN_NAME)
@@ -126,15 +128,32 @@ PollClient::list_next()
             Register::Poll::Manager::create(
                 &m_db)
             );
-    Register::TID reg = m_conf.get<unsigned int>(POLL_LIST_NEXT_NAME);
-    unsigned int count = pollMan->getMessageCount(reg);
-    if (!count) {
-        std::cout << "No message" << std::endl;
+    if (m_conf.hasOpt(POLL_LIST_NEXT_NAME)) {
+        Register::TID reg = m_conf.get<unsigned int>(POLL_LIST_NEXT_NAME);
+        unsigned int count = pollMan->getMessageCount(reg);
+        if (!count) {
+            std::cout << "No message" << std::endl;
+        } else {
+            std::auto_ptr<Register::Poll::Message> msg(pollMan->getNextMessage(reg));
+            std::cout << "Messages:" << count << std::endl;
+            msg->textDump(std::cout);
+            std::cout << std::endl;
+        }
+    } else if (m_conf.hasOpt(POLL_LIST_NEXT_HANDLE_NAME)) {
+        std::string reg = m_conf.get<std::string>(POLL_LIST_NEXT_HANDLE_NAME);
+        unsigned int count = pollMan->getMessageCount(reg);
+        if (!count) {
+            std::cout << "No message" << std::endl;
+        } else {
+            std::auto_ptr<Register::Poll::Message> msg(pollMan->getNextMessage(reg));
+            std::cout << "Messages:" << count << std::endl;
+            msg->textDump(std::cout);
+            std::cout << std::endl;
+        }
     } else {
-        std::auto_ptr<Register::Poll::Message> msg(pollMan->getNextMessage(reg));
-        std::cout << "Messages:" << count << std::endl;
-        msg->textDump(std::cout);
-        std::cout << std::endl;
+        std::cerr << "Registrar is not set, use ``--" << REGISTRAR_ID_NAME
+            << "'' or ``--" << REGISTRAR_HANDLE_NAME << "''" << std::endl;
+        return 1;
     }
     return 0;
 }
@@ -146,11 +165,20 @@ PollClient::set_seen()
                 &m_db)
             );
     try {
-        Register::TID reg = m_conf.get<unsigned int>(REGISTRAR_ID_NAME);
-        if (!reg) std::cout << "Owning registar must be set." << std::endl;
         Register::TID messageId = m_conf.get<unsigned int>(POLL_SET_SEEN_NAME); 
-        pollMan->setMessageSeen(messageId, reg);
-        std::cout << "NextId:" << pollMan->getNextMessageId(reg) << std::endl;
+        if (m_conf.hasOpt(REGISTRAR_ID_NAME)) {
+            Register::TID reg = m_conf.get<unsigned int>(REGISTRAR_ID_NAME);
+            pollMan->setMessageSeen(messageId, reg);
+            std::cout << "NextId:" << pollMan->getNextMessageId(reg) << std::endl;
+        } else if (m_conf.hasOpt(REGISTRAR_HANDLE_NAME)) {
+            std::string reg = m_conf.get<std::string>(REGISTRAR_ID_NAME);
+            pollMan->setMessageSeen(messageId, reg);
+            std::cout << "NextId:" << pollMan->getNextMessageId(reg) << std::endl;
+        } else {
+            std::cerr << "Registrar is not set, use ``--" << REGISTRAR_ID_NAME
+                << "'' or ``--" << REGISTRAR_HANDLE_NAME << "''" << std::endl;
+            return 1;
+        }
     } catch (...) {
         std::cout << "No message" << std::endl;
     }

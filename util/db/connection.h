@@ -211,6 +211,9 @@ public:
    * Need to check if connection was opened - support for lazy connection opening
    */
   virtual inline result_type exec(Statement &_stmt) throw (ResultFailed) {
+    if (!this->conn_) {
+      open(conn_info_);
+    }
     return super::exec(_stmt);
   }
 
@@ -220,6 +223,13 @@ public:
       open(conn_info_);
     }
     return super::exec(_stmt);
+  }
+
+  virtual inline std::string escape(const std::string &_in) {
+    if (!this->conn_) {
+      open(conn_info_);
+    }
+    return super::escape(_in);
   }
 
 

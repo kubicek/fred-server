@@ -27,6 +27,21 @@
 #define BANK_STATEMENT_LIST_NAME    "bank_statement_list"
 #define BANK_STATEMENT_LIST_NAME_DESC "list of bank statements"
 
+#define BANK_ADD_ACCOUNT_NAME           "bank_add_account"
+#define BANK_ADD_ACCOUNT_NAME_DESC      "add bank account"
+#define BANK_ADD_ACCOUNT_HELP_NAME      "bank_add_account_help"
+#define BANK_ADD_ACCOUNT_HELP_NAME_DESC "add bank account help"
+#define BANK_ZONE_ID_NAME               "zone_id"
+#define BANK_ZONE_ID_NAME_DESC          "zone id"
+#define BANK_ZONE_NAME_NAME             "zone_fqdn"
+#define BANK_ZONE_NAME_NAME_DESC        "zone fully qualified domain name"
+#define BANK_ACCOUNT_NAME_NAME          "account_name"
+#define BANK_ACCOUNT_NAME_NAME_DESC     "account name"
+#define BANK_ACCOUNT_NUMBER_NAME        "bank_account_number"
+#define BANK_ACCOUNT_NUMBER_NAME_DESC   "bank_account_number description"
+#define BANK_BANK_CODE_NAME             "bank_code"
+#define BANK_BANK_CODE_NAME_DESC        "bank_code description"
+
 #include <boost/program_options.hpp>
 #include <iostream>
 
@@ -61,6 +76,9 @@ public:
 
     int online_list();
     int statement_list();
+    void add_bank_account();
+
+    void add_bank_account_help();
 };
 
 } // namespace Admin;

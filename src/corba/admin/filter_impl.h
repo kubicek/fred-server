@@ -25,6 +25,7 @@ public:
   ccReg::Filters::Int_ptr addE(Database::Filters::Value<int>* f);
   ccReg::Filters::IntInterval_ptr addE(Database::Filters::Interval<int>* f);
   ccReg::Filters::Id_ptr addE(Database::Filters::Value<Database::ID>* f);
+  ccReg::Filters::Bool_ptr addE(Database::Filters::Value<bool>* f);
   ccReg::Filters::Str_ptr addE(Database::Filters::Value<std::string>* f);
   ccReg::Filters::Date_ptr addE(Database::Filters::Interval<Database::DateInterval>* f);
   ccReg::Filters::DateTime_ptr addE(Database::Filters::Interval<Database::DateTimeInterval>* f);
