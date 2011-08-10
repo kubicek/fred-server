@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -23,79 +23,33 @@
 
 namespace Admin {
 
-PublicRequestClient::PublicRequestClient()
+const struct options *
+PublicRequestClient::getOpts()
 {
-    m_options = new boost::program_options::options_description(
-            "Public request related options");
-    m_options->add_options()
-        addOpt(PUBLICREQ_LIST_NAME)
-        addOpt(PUBLICREQ_LIST_HELP_NAME)
-        addOpt(PUBLICREQ_SHOW_OPTS_NAME);
-
-    m_optionsInvis = new boost::program_options::options_description(
-            "Public request related sub options");
-    m_optionsInvis->add_options()
-        add_ID()
-        add_NAME()
-        addOptInt(PUBLICREQ_TYPE_NAME)
-        addOptUInt(PUBLICREQ_STATUS_NAME)
-        addOptStr(PUBLICREQ_ANSWER_EMAIL_NAME)
-        addOptUInt(PUBLICREQ_ANSWER_EMAIL_ID_NAME)
-	addOptUInt(PUBLICREQ_REGISTRAR_ID_NAME)
-	addOptStr(PUBLICREQ_REGISTRAR_HANDLE_NAME)
-	addOptStr(PUBLICREQ_REGISTRAR_NAME_NAME)
-        add_CRDATE()
-        addOptStr(PUBLICREQ_RESDATE_FROM_NAME)
-        addOptStr(PUBLICREQ_RESDATE_TO_NAME);
-}
-PublicRequestClient::PublicRequestClient(
-        std::string connstring,
-        std::string nsAddr) : BaseClient(connstring, nsAddr)
-{
-    m_db.OpenDatabase(connstring.c_str());
-    m_options = NULL;
-    m_optionsInvis = NULL;
-}
-
-PublicRequestClient::~PublicRequestClient()
-{
-  delete m_options;
-  delete m_optionsInvis;
+    return m_opts;
 }
 
 void
-PublicRequestClient::init(
-        std::string connstring,
-        std::string nsAddr,
-        Config::Conf &conf)
+PublicRequestClient::runMethod()
 {
-    BaseClient::init(connstring, nsAddr);
-    m_db.OpenDatabase(connstring.c_str());
-    m_conf = conf;
-}
-
-boost::program_options::options_description *
-PublicRequestClient::getVisibleOptions() const
-{
-    return m_options;
-}
-
-boost::program_options::options_description *
-PublicRequestClient::getInvisibleOptions() const
-{
-    return m_optionsInvis;
+    if (m_conf.hasOpt(PUBLICREQ_LIST_NAME)) {
+        list();
+    } else if (m_conf.hasOpt(PUBLICREQ_SHOW_OPTS_NAME)) {
+        show_opts();
+    }
 }
 
 void
-PublicRequestClient::show_opts() const 
+PublicRequestClient::show_opts()
 {
-    std::cout << *m_options << std::endl;
-    std::cout << *m_optionsInvis << std::endl;
+    callHelp(m_conf, no_help);
+    print_options("Public request", getOpts(), getOptsCount());
 }
 
 void
 PublicRequestClient::list()
 {
+    callHelp(m_conf, list_help);
     Database::Filters::PublicRequest *prFilter;
     prFilter = new Database::Filters::PublicRequestImpl();
 
@@ -110,7 +64,7 @@ PublicRequestClient::list()
     MailerManager mailMan(cc.getNS());
 
     std::auto_ptr<Register::Zone::Manager> zoneMan(
-            Register::Zone::Manager::create(&m_db));
+            Register::Zone::Manager::create());
     std::auto_ptr<Register::Domain::Manager> domMan(
             Register::Domain::Manager::create(&m_db, zoneMan.get()));
     std::auto_ptr<Register::Contact::Manager> conMan(
@@ -134,7 +88,6 @@ PublicRequestClient::list()
 
     std::auto_ptr<Register::PublicRequest::Manager> prMan(
             Register::PublicRequest::Manager::create(
-                m_dbman,
                 domMan.get(),
                 conMan.get(),
                 nssMan.get(),
@@ -179,18 +132,7 @@ PublicRequestClient::list()
 
 
     apply_CRDATE(prFilter);
-    if (m_conf.hasOpt(PUBLICREQ_RESDATE_FROM_NAME) || m_conf.hasOpt(PUBLICREQ_RESDATE_TO_NAME)) {
-        Database::DateTime resDateFrom("1901-01-01 00:00:00");
-        Database::DateTime resDateTo("2101-01-01 00:00:00");
-        if (m_conf.hasOpt(PUBLICREQ_RESDATE_FROM_NAME))
-            resDateFrom.from_string(
-                    m_conf.get<std::string>(PUBLICREQ_RESDATE_FROM_NAME));
-        if (m_conf.hasOpt(PUBLICREQ_RESDATE_TO_NAME))
-            resDateTo.from_string(
-                    m_conf.get<std::string>(PUBLICREQ_RESDATE_TO_NAME));
-        prFilter->addResolveTime().setValue(
-                Database::DateTimeInterval(resDateFrom, resDateTo));
-    }
+    apply_DATETIME(prFilter, PUBLICREQ_RESDATE_NAME, Resolve);
 
     Database::Filters::Union *unionFilter;
     unionFilter = new Database::Filters::Union();
@@ -242,11 +184,48 @@ void
 PublicRequestClient::list_help()
 {
     std::cout
-        << "** list authorizatin info **\n"
+        << "** list authorizatin info **\n\n"
+        << "  $ " << g_prog_name << " --" << PUBLICREQ_LIST_NAME << " \\\n"
+        << "    [--" << PUBLICREQ_TYPE_NAME << "=<public_request_type>] \\\n"
+        << "    [--" << PUBLICREQ_STATUS_NAME << "=<public_request_status>] \\\n"
+        << "    [--" << PUBLICREQ_ANSWER_EMAIL_NAME << "=<answer_email>] \\\n"
+        << "    [--" << PUBLICREQ_ANSWER_EMAIL_ID_NAME << "=<answer_email_id>] \\\n"
+        << "    [--" << PUBLICREQ_REASON_NAME << "=<public_request_reason>] \\\n"
+        << "    [--" << PUBLICREQ_REGISTRAR_ID_NAME << "=<registrar_id>] \\\n"
+        << "    [--" << PUBLICREQ_REGISTRAR_HANDLE_NAME << "=<registrar_handle>] \\\n"
+        << "    [--" << PUBLICREQ_REGISTRAR_NAME_NAME << "=<registrar_name>] \\\n"
+        << "    [--" << CRDATE_NAME << "=<create_date>] \\\n"
+        << "    [--" << PUBLICREQ_RESDATE_NAME << "=<resolve_date>] \n"
         << std::endl;
 }
 
+#define ADDOPT(name, type, callable, visible) \
+    {CLIENT_PUBLICREQUEST, name, name##_DESC, type, callable, visible}
+
+const struct options
+PublicRequestClient::m_opts[] = {
+    ADDOPT(PUBLICREQ_LIST_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(PUBLICREQ_SHOW_OPTS_NAME, TYPE_NOTYPE, true, true),
+    add_ID,
+    add_NAME,
+    ADDOPT(PUBLICREQ_TYPE_NAME, TYPE_INT, false, false),
+    ADDOPT(PUBLICREQ_STATUS_NAME, TYPE_UINT, false, false),
+    ADDOPT(PUBLICREQ_ANSWER_EMAIL_NAME, TYPE_STRING, false, false),
+    ADDOPT(PUBLICREQ_ANSWER_EMAIL_ID_NAME, TYPE_UINT, false, false),
+    ADDOPT(PUBLICREQ_REGISTRAR_ID_NAME, TYPE_UINT, false, false),
+    ADDOPT(PUBLICREQ_REGISTRAR_HANDLE_NAME, TYPE_STRING, false, false),
+    ADDOPT(PUBLICREQ_REGISTRAR_NAME_NAME, TYPE_STRING, false, false),
+    add_CRDATE,
+    ADDOPT(PUBLICREQ_RESDATE_NAME, TYPE_STRING, false, false),
+};
+
+#undef ADDOPT
+
+int
+PublicRequestClient::getOptsCount()
+{
+    return sizeof(m_opts) / sizeof(options);
+}
+
 } // namespace Admin;
-
-
 

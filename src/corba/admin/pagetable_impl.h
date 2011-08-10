@@ -5,6 +5,9 @@
 #include <string>
 #include <map>
 #include <vector>
+#include <exception>
+#include <limits>
+
 
 #include "common.h"
 #include "str_corbaout.h"
@@ -16,6 +19,7 @@
 #include "register/notify.h"
 #include "register/mail.h"
 #include "register/filter.h"
+#include "register/request.h"
 
 #include "old_utils/log.h"
 #include "old_utils/dbsql.h"
@@ -25,6 +29,8 @@
 #include "log/context.h"
 
 #include "model/model_filters.h"
+
+#include "corba/connection_releaser.h"
 
 using namespace Database;
 
@@ -54,8 +60,8 @@ using namespace Database;
 
 #define DECL_PAGETABLE_I \
   Registry::Table::ColumnHeaders* getColumnHeaders(); \
-  Registry::TableRow* getRow(CORBA::Short row) throw (ccReg::Table::INVALID_ROW);\
-  ccReg::TID getRowId(CORBA::Short row) throw (ccReg::Table::INVALID_ROW);\
+  Registry::TableRow* getRow(CORBA::UShort row) throw (ccReg::Table::INVALID_ROW);\
+  ccReg::TID getRowId(CORBA::UShort row) throw (ccReg::Table::INVALID_ROW);\
   char* outputCSV();\
   CORBA::Short numRows();\
   CORBA::Short numColumns();\
@@ -74,7 +80,6 @@ class ccReg_PageTable_i : virtual public POA_Registry::PageTable {
 protected:
   Database::Filters::Union uf;
   FilterIteratorImpl it;
-  Database::Manager* dbm;
   ccReg::FilterType filterType;
   int sorted_by_;
   bool sorted_dir_;
@@ -88,7 +93,7 @@ protected:
 public:
   ccReg_PageTable_i();
   virtual ~ccReg_PageTable_i();
-  void setDB(Database::Manager* dbm);
+  void setDB();
   CORBA::Short pageSize();
   void pageSize(CORBA::Short _v);
   CORBA::Short page();

@@ -30,11 +30,21 @@ enum MemberType {
   MT_REGISTRANT_HANDLE, ///< registrant
   MT_REGISTRANT_NAME, ///< registratn name
   MT_REGISTRANT_ORG, ///< registrant organization
+  MT_REGISTRANT_PHONE, ///< registrant phone
   MT_REGISTRAR_HANDLE, ///< registrar handle
   MT_ZONE_STATUS, ///< in/out zone flag
   MT_EXDATE, ///< expiration date
   MT_OUTZONEDATE, ///< out zone date
-  MT_CANCELDATE ///< cancel date
+  MT_CANCELDATE, ///< cancel date
+  MT_1ADMIN_NAME,///< 1. admin name
+  MT_1ADMIN_ORG,///< 1. admin organization
+  MT_1ADMIN_PHONE,///< 1. admin phone
+  MT_2ADMIN_NAME,///< 2. admin name
+  MT_2ADMIN_ORG,///< 2. admin organization
+  MT_2ADMIN_PHONE,///< 2. admin phone
+  MT_3ADMIN_NAME,///< 3. admin name
+  MT_3ADMIN_ORG,///< 3. admin organization
+  MT_3ADMIN_PHONE///< 3. admin phone
 };
 
 
@@ -83,6 +93,8 @@ public:
   virtual const std::string& getRegistrantName() const = 0;
   /// return registrant organization
   virtual const std::string& getRegistrantOrganization() const = 0;
+  /// return registrant phone
+  virtual const std::string& getRegistrantPhone() const = 0;
   /// return id of registrant
   virtual TID getRegistrantId() const = 0;
   /// set registrant 
@@ -100,6 +112,12 @@ public:
   virtual void removeAdminId(TID id) = 0;
   /// insert contact into admin contact list
   virtual void insertAdminId(TID id) = 0;
+  /// return name of admin
+  virtual const std::string getAdminNameByIdx(unsigned idx, unsigned role=1) const = 0;
+  /// return Admin organization
+  virtual const std::string getAdminOrganizationByIdx(unsigned idx, unsigned role=1) const = 0;
+  /// return Admin phone
+  virtual const std::string getAdminPhoneByIdx(unsigned idx, unsigned role=1) const = 0;
   /// return date of registration expiration
   virtual date getExpirationDate() const = 0;
   /// return date of validation expiration
@@ -165,7 +183,7 @@ public:
   /// set filter for zone generation status
   virtual void setZoneStatusFilter(unsigned status) = 0;
   /// testing new reload function
-  virtual void reload(Database::Filters::Union &uf, Database::Manager* dbm) = 0;
+  virtual void reload(Database::Filters::Union &uf) = 0;
   /// reload list with current filter
   virtual void reload() throw (SQL_ERROR) = 0;
   /// clear filter data
@@ -191,6 +209,8 @@ public:
                                     bool allowIDN = false) const throw (SQL_ERROR) = 0;
   /// return current count of domains by zone
   virtual unsigned long getDomainCount(const std::string& zone) const = 0;
+  /// return current count of signed domains by zone
+  virtual unsigned long getSignedDomainCount(const std::string & _fqdn) const = 0;
   /// return current count of enum numbers
   virtual unsigned long getEnumNumberCount() const = 0;
   /// create list of domains

@@ -32,7 +32,7 @@ Registry::Table::ColumnHeaders* ccReg_EPPActions_i::getColumnHeaders() {
   return ch;
 }
 
-Registry::TableRow* ccReg_EPPActions_i::getRow(CORBA::Short row)
+Registry::TableRow* ccReg_EPPActions_i::getRow(CORBA::UShort row)
     throw (ccReg::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
 
@@ -90,7 +90,7 @@ void ccReg_EPPActions_i::sortByColumn(CORBA::Short column, CORBA::Boolean dir) {
   }
 }
 
-ccReg::TID ccReg_EPPActions_i::getRowId(CORBA::Short row)
+ccReg::TID ccReg_EPPActions_i::getRowId(CORBA::UShort row)
     throw (ccReg::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
 
@@ -118,10 +118,11 @@ CORBA::Short ccReg_EPPActions_i::numColumns() {
 
 void ccReg_EPPActions_i::reload() {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE("[CALL] ccReg_EPPActions_i::reload()");
   eal->setPartialLoad(true);
-  eal->reload(uf, dbm);
+  eal->reload(uf);
 }
 
 void ccReg_EPPActions_i::clear() {
@@ -134,6 +135,7 @@ void ccReg_EPPActions_i::clear() {
 
 CORBA::ULongLong ccReg_EPPActions_i::resultSize() {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE("ccReg_EPPActions_i::resultSize()");
   return eal->getRealCount(uf);
@@ -141,6 +143,7 @@ CORBA::ULongLong ccReg_EPPActions_i::resultSize() {
 
 void ccReg_EPPActions_i::loadFilter(ccReg::TID _id) {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE(boost::format("[CALL] ccReg_EPPActions_i::loadFilter(%1%)") % _id);
   ccReg_PageTable_i::loadFilter(_id);
@@ -157,11 +160,12 @@ void ccReg_EPPActions_i::loadFilter(ccReg::TID _id) {
 
 void ccReg_EPPActions_i::saveFilter(const char* _name) {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE(boost::format("[CALL] ccReg_EPPActions_i::saveFilter('%1%')") % _name);
 
   std::auto_ptr<Register::Filter::Manager>
-      tmp_filter_manager(Register::Filter::Manager::create(dbm));
+      tmp_filter_manager(Register::Filter::Manager::create());
   tmp_filter_manager->save(Register::Filter::FT_ACTION, _name, uf);
 }
 

@@ -28,7 +28,7 @@
 #include <stdio.h>
 #include <string>
 
-#include "util.h"
+#include "util/util.h"
 #include "log/logger.h"
 #include "types/data_types.h"
 #include "types/convert_sql_pod.h"
@@ -170,7 +170,7 @@ public:
     if (_value == 0)
       is_null_ = true;
   }
-  
+
 
   CAST_OPERATOR(Database::ID, Database::ID())
 

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -46,25 +46,31 @@ private:
     ccReg::EPP_var m_epp;
     Config::Conf m_conf;
 
-    boost::program_options::options_description *m_options;
-    boost::program_options::options_description *m_optionsInvis;
+    static const struct options m_opts[];
 public:
-    InfoBuffClient();
-    InfoBuffClient(std::string connstring,
-            std::string nsAddr);
-    ~InfoBuffClient();
-    void init(std::string connstring,
-            std::string nsAddr,
-            Config::Conf &conf);
+    InfoBuffClient()
+    { }
+    InfoBuffClient(
+            const std::string &connstring,
+            const std::string &nsAddr,
+            const Config::Conf &conf):
+        BaseClient(connstring, nsAddr),
+        m_conf(conf)
+    {
+        m_db.OpenDatabase(connstring.c_str());
+    }
+    ~InfoBuffClient()
+    { }
 
-    boost::program_options::options_description *getVisibleOptions() const;
-    boost::program_options::options_description *getInvisibleOptions() const;
-    void show_opts() const;
+    static const struct options *getOpts();
+    static int getOptsCount();
+    void runMethod();
 
-    int make_info();
-    int get_chunk();
+    void show_opts() ;
+    void make_info();
+    void get_chunk();
 
-};
+}; // class InfoBuffClient
 
 } // namespace Admin;
 

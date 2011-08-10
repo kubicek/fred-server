@@ -4,6 +4,12 @@
 #include <boost/date_time/posix_time/ptime.hpp>
 #include <boost/date_time/posix_time/time_period.hpp>
 
+#include <memory>
+#include <string>
+#include <map>
+#include <vector>
+
+#include "common_impl_new.h"
 #include "common_object.h"
 #include "object.h"
 #include "types.h"
@@ -11,13 +17,20 @@
 #include "db_settings.h"
 #include "model/model_filters.h"
 
+#include "model_registrar_acl.h"
+#include "model_registrar.h"
+
 using namespace boost::posix_time;
 
 /// forward declared parameter type 
 class DB;
 
+
 namespace Register {
 namespace Registrar {
+
+///work around inability to forward declare member class Register::Registrar::Manager::RegistrarZoneAccess*
+typedef void* RZAPtr;
 
 /// member identification (i.e. for sorting)
 enum MemberType {
@@ -26,6 +39,21 @@ enum MemberType {
   MT_URL, ///< url
   MT_MAIL, ///< email address
   MT_CREDIT, ///< credit
+  MT_ICO, ///< ico
+  MT_DIC, ///< dic
+  MT_VARSYMB, ///< varsymbol
+  MT_VAT, ///< vat
+  MT_ORGANIZATION, ///< organization
+  MT_STREET1, ///< address part
+  MT_STREET2, ///< address part
+  MT_STREET3, ///< address part
+  MT_CITY, ///< city
+  MT_PROVINCE, ///< state or province
+  MT_POSTALCODE, ///< postal code
+  MT_COUNTRY, ///< country code
+  MT_TELEPHONE, ///< telephone
+  MT_FAX, ///< fax
+  MT_ZONE ///< zone
 };
 
 
@@ -44,14 +72,59 @@ public:
   virtual const std::string& getPassword() const = 0;
   /// Set password for EPP login command
   virtual void setPassword(const std::string& newPassword) = 0;
+  virtual void setRegistrarId(const TID &_registrar_id) = 0;
 };
 
+/// Registrar's active zone structure
+struct ZoneAccess
+{
+    TID id; /// registrarinvoice record id
+    std::string name; /// zone name
+    unsigned long credit; /// registrar's credit
+    Database::Date fromdate; /// from day
+    Database::Date todate;/// to day
+    ZoneAccess()
+    :id()
+        ,name()
+        ,credit()
+        ,fromdate()
+        ,todate()
+    {}
+    ZoneAccess(std::string _name
+            , unsigned long _credit
+            , Database::Date _fromdate
+            , Database::Date _todate)
+    :id()
+    ,name(_name)
+    ,credit(_credit)
+    ,fromdate(_fromdate)
+    ,todate(_todate)
+    {}
+    ZoneAccess(TID _id
+            ,std::string _name
+            , unsigned long _credit
+            , Database::Date _fromdate
+            , Database::Date _todate)
+    :id(_id)
+    ,name(_name)
+    ,credit(_credit)
+    ,fromdate(_fromdate)
+    ,todate(_todate)
+    {}
+};//struct ZoneAccess
+
 /// Registrar detail access
-class Registrar : virtual public Register::CommonObject {
+class Registrar
+	: virtual public Register::CommonObjectNew
+{
 public:
   /// Public destructor, user is responsible for object delete
   virtual ~Registrar() {
   }
+
+  virtual const TID& getId() const =0;
+  virtual void setId(const unsigned long long &_id) =0;
+
   ///
   virtual const std::string& getIco() const = 0;
   ///
@@ -128,10 +201,10 @@ public:
   virtual bool getSystem() const = 0;
   /// Set hidden flag for system registrar
   virtual void setSystem(bool _system) = 0;
-  /// Get actual credit 
+  /// Get total credit
   virtual unsigned long getCredit() const = 0;
-  /// Get credit for specific zone
-  virtual unsigned long getCredit(Database::ID _zone_id) = 0;
+  /// Get credit for specific zone, id = 0 is unspecified zone (converted from null in database table invoice)
+  virtual unsigned long getCredit(Database::ID _zone_id) const = 0;
   /// Set credit for specific zone
   virtual void setCredit(Database::ID _zone_id, unsigned long _credit) = 0;
   /// Create new ACL record
@@ -144,43 +217,65 @@ public:
   virtual void deleteACL(unsigned idx) = 0;
   /// Clear ACL list
   virtual void clearACLList() = 0;
+
+  /// Create new ZoneAccess record
+  virtual ZoneAccess* newZoneAccess() = 0;
+  /// Return ZoneAccess list size
+  virtual unsigned getZoneAccessSize() const = 0;
+  /// Return ZoneAccess list member by index
+  virtual ZoneAccess* getZoneAccess(unsigned idx) const = 0;
+  /// Delete ZoneAccess or do nothing
+  virtual void deleteZoneAccess(unsigned idx) = 0;
+  /// Clear ZoneAccess list
+  virtual void clearZoneAccessList() = 0;
+  /// Look if registrar have currently access to zone by zone id
+  virtual bool isInZone(unsigned id) const = 0;
+  /// Look if registrar have currently access to zone by zone fqdn
+  virtual bool isInZone(std::string zone_fqdn) const = 0;
+
   /// Save changes to database
   virtual void save() throw (SQL_ERROR) = 0;
+
+  /// Zones number for credit by zone
+  //virtual unsigned long getZonesNumber() = 0;
+
+  ///Registrar smart pointer
+  typedef std::auto_ptr<Registrar> AutoPtr;
+
 };
 
+
+
+
 /// List of registrar object
-class RegistrarList : virtual public Register::CommonList {
-protected:
-  /// Protected destructor, object is manager by Manager
-  virtual ~RegistrarList() {
-  }
+class RegistrarList : virtual public Register::CommonListNew
+{
 public:
-  /// Filter in id
-  virtual void setIdFilter(TID id) = 0;
-  /// Filter in handle
-  virtual void setHandleFilter(const std::string& handle) = 0;
-  /// Filter in name
-  virtual void setNameFilter(const std::string& name) = 0;
-  /// Filter for zone
-  virtual void setZoneFilter(const std::string& zone) = 0;
-  /// Reload actual list of registrars
-  virtual void reload() throw (SQL_ERROR) = 0;
+  /// public virtual destructor
+  virtual ~RegistrarList()
+  {}
+  ///RegistrarList smart pointer
+  typedef std::auto_ptr<RegistrarList> AutoPtr;
   /// testing new reload function
-  virtual void reload(Database::Filters::Union &uf, Database::Manager* dbm) = 0;
-  /// Get registrar detail object by list index
-//  virtual const Registrar* get(unsigned idx) const = 0;
+  virtual void reload(Database::Filters::Union &uf) = 0;
   /// Get registrar detail object by list index for update
   virtual Registrar* get(unsigned idx) const = 0;
-  /// Create new registrar in list
-  virtual Registrar* create() = 0;
-  /// clear filter data
-  virtual void clearFilter() = 0;
+  /// XXX get method with releaseing ownership functionality 
+  virtual Registrar* getAndRelease(unsigned idx) = 0;
   /// sort by column
-  virtual void sort(MemberType _member, bool _asc) = 0;
-  
-  virtual void makeQuery(bool, bool, std::stringstream&) const = 0;
+  virtual void sort(MemberType _member, bool _asc, unsigned _zone_id = 0
+          , RZAPtr rzaptr =0 ) = 0;
+  //virtual void makeQuery(bool, bool, std::stringstream&) const = 0;
   virtual const char* getTempTableName() const = 0;
+
+  virtual Register::Registrar::Registrar* findId(Database::ID id) const =0;
 };
+//Add access to zone for registrar
+unsigned long addRegistrarZone(
+          const std::string& registrarHandle,
+          const std::string zone,
+          const Database::Date &fromDate,
+          const Database::Date &toDate) throw (SQL_ERROR);
 
 
 /// member identification (i.e. for sorting)
@@ -245,7 +340,7 @@ public:
 
 
 /// List of EPPAction objects
-class EPPActionList : virtual public Register::CommonList { 
+class EPPActionList : virtual public Register::CommonList {
 public:
   /// Public destructor, user is responsible for destruction
   virtual ~EPPActionList() {
@@ -279,7 +374,7 @@ public:
   /// Reload list according actual filter settings
   virtual void reload() = 0;
   /// testing new reload function
-  virtual void reload(Database::Filters::Union &uf, Database::Manager* dbm) = 0;
+  virtual void reload(Database::Filters::Union &uf) = 0;
   /// Return deatil of action by index in list
   virtual EPPAction* get(unsigned idx) const = 0;
   /// clear filter data
@@ -312,10 +407,7 @@ public:
 class Manager {
 public:
   /// Public destructor, user is responsible for delete
-  virtual ~Manager() {
-  }
-  /// Return list of registrars
-  virtual RegistrarList *getList() = 0;
+  virtual ~Manager() {}
   /// Return list of EPP actions
   virtual EPPActionList *getEPPActionList() = 0;
   /// Return new empty list of EPP actions
@@ -326,22 +418,50 @@ public:
   virtual const EPPActionType& getEPPActionTypeByIdx(unsigned idx) const
       throw (NOT_FOUND) = 0;
   virtual bool checkHandle(const std::string) const throw (SQL_ERROR) = 0;
-  virtual void addRegistrar(const std::string& registrarHandle)
-      throw (SQL_ERROR) = 0;
-  virtual Registrar *createRegistrar() = 0;
+
+  virtual Registrar::AutoPtr createRegistrar() = 0;
+  ///add Registrar acl record  used by fred-admin option registrar_acl_add
   virtual void addRegistrarAcl(
           const std::string &registrarHandle,
           const std::string &cert,
           const std::string &pass)
       throw (SQL_ERROR) = 0;
-  virtual void addRegistrarZone(
-          const std::string& registrarHandle, 
-          const std::string zone,
+
+  virtual void updateRegistrarZone(
+          const TID& id,
           const Database::Date &fromDate,
           const Database::Date &toDate) throw (SQL_ERROR) = 0;
+
+  ///list factory
+  virtual RegistrarList::AutoPtr createList() =0;
+  ///registrar instance factory
+  virtual Registrar::AutoPtr getRegistrarByHandle(const std::string& handle) =0;
+
+  virtual unsigned long long getRegistrarByPayment(const std::string &varsymb,
+                                                   const std::string &memo) = 0;
+
+  ///storage for flag of registrar's access to zone, used in registrar pagetable
+  class RegistrarZoneAccess
+  {
+      enum ColIndex {RegistrarCol, ZoneCol, IsInZone};///order of query columns
+      unsigned long long max_registrar_id;///maximal registrar id with access to zone in database
+      unsigned long long max_zone_id;///maximal zone id accessed by some registrar in database
+      typedef std::vector<bool> RegistrarZoneAccessRow;///registrar's zones flags
+      typedef std::vector<RegistrarZoneAccessRow> RegistrarZoneAccessArray;///container of registrars rows
+      RegistrarZoneAccessArray flag; ///zone access flag array
+      unsigned long long max_id(ColIndex idx, Database::Result& result);///for size of flag array
+  public:
+      void reload();///load from database
+      bool isInZone(unsigned long long registrar_id,unsigned long long zone_id);///look if registrar currently have access to zone by id
+  };
+
+  typedef std::auto_ptr<Register::Registrar::Manager> AutoPtr;
+
   /// Factory method
-  static Manager *create(DB *db);
+  static AutoPtr create(DB* db);
 };
+
+
 
 }
 ;

@@ -74,7 +74,7 @@ public:
    * @param _query object representing query statement
    * @return       result
    */
-  virtual inline result_type exec(Statement& _stmt) throw (ResultFailed) {
+  virtual inline result_type exec(Statement& _stmt) /*throw (ResultFailed)*/ {
     return this->exec(_stmt.toSql(boost::bind(&ConnectionBase_<connection_driver, manager_type>::escape, this, _1)));
   }
 
@@ -110,7 +110,7 @@ public:
   /**
    * String escape method by specific connection_driver
    */
-  virtual inline std::string escape(const std::string &_in) const {
+  virtual inline std::string escape(const std::string &_in) {
     return conn_->escape(_in);
   }
 
@@ -121,6 +121,12 @@ public:
    */
   virtual inline bool inTransaction() const {
     return conn_->inTransaction();
+  }
+
+
+  /* HACK! HACK! HACK! (use with construct with old DB connection) */
+  typename driver_type::__conn_type__ __getConn__() const {
+    return conn_->__getConn__();
   }
 
 
@@ -293,7 +299,8 @@ public:
 
 
   virtual ~TSSConnection_() {
-    manager_type::release();
+    // Connection should be returned to the pool either explicitly or at thread exit
+    // manager_type::release();
   }
 
 

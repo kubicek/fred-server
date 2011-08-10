@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -22,79 +22,35 @@
 
 namespace Admin {
 
-MailClient::MailClient()
+const struct options *
+MailClient::getOpts()
 {
-    m_options = new boost::program_options::options_description(
-            "Mail related options");
-    m_options->add_options()
-        addOpt(MAIL_LIST_NAME)
-        addOpt(MAIL_LIST_HELP_NAME)
-        addOpt(MAIL_SHOW_OPTS_NAME);
-
-    m_optionsInvis = new boost::program_options::options_description(
-            "Mail related sub options");
-    m_optionsInvis->add_options()
-        add_ID()
-        add_HANDLE()
-        addOptInt(MAIL_TYPE_NAME)
-        addOptInt(MAIL_STATUS_NAME)
-        addOptInt(MAIL_ATTEMPT_NAME)
-        addOptStr(MAIL_MESSAGE_NAME)
-        add_CRDATE()
-        addOptStr(MAIL_MODDATE_FROM_NAME)
-        addOptStr(MAIL_MODDATE_TO_NAME);
-}
-
-MailClient::MailClient(
-        std::string connstring,
-        std::string nsAddr) : BaseClient(connstring, nsAddr)
-{
-    m_db.OpenDatabase(connstring.c_str());
-    m_options = NULL;
-    m_optionsInvis = NULL;
-}
-
-MailClient::~MailClient()
-{
-    delete m_options;
-    delete m_optionsInvis;
+    return m_opts;
 }
 
 void
-MailClient::init(
-        std::string connstring,
-        std::string nsAddr,
-        Config::Conf &conf)
+MailClient::runMethod()
 {
-    BaseClient::init(connstring, nsAddr);
-    m_db.OpenDatabase(connstring.c_str());
-    m_conf = conf;
-}
-
-boost::program_options::options_description *
-MailClient::getVisibleOptions() const
-{
-    return m_options;
-}
-
-boost::program_options::options_description *
-MailClient::getInvisibleOptions() const
-{
-    return m_optionsInvis;
+    if (m_conf.hasOpt(MAIL_LIST_NAME)) {
+        list();
+    } else if (m_conf.hasOpt(MAIL_SHOW_OPTS_NAME)) {
+        show_opts();
+    }
 }
 
 void
-MailClient::show_opts() const
+MailClient::show_opts() 
 {
-    std::cout << *m_options << std::endl;
-    std::cout << *m_optionsInvis << std::endl;
+    callHelp(m_conf, no_help);
+    print_options("Mail", getOpts(), getOptsCount());
 }
 
 void
 MailClient::list()
 {
+    callHelp(m_conf, list_help);
     std::auto_ptr<Register::Mail::Manager> mailMan(
-            Register::Mail::Manager::create(m_dbman));
+            Register::Mail::Manager::create());
     std::auto_ptr<Register::Mail::List> mailList(
             mailMan->createList());
 
@@ -124,18 +80,7 @@ MailClient::list()
         mailFilter->addAttachment().addName().setValue(
                 m_conf.get<std::string>(MAIL_ATTACHMENT_NAME_NAME));
 
-    if (m_conf.hasOpt(MAIL_MODDATE_FROM_NAME) || m_conf.hasOpt(MAIL_MODDATE_TO_NAME)) {
-        Database::Date modDateFrom("1901-01-01 00:00:00");
-        Database::Date modDateTo("2101-01-01 00:00:00");
-        if (m_conf.hasOpt(MAIL_MODDATE_FROM_NAME))
-            modDateFrom.from_string(
-                    m_conf.get<std::string>(MAIL_MODDATE_FROM_NAME));
-        if (m_conf.hasOpt(MAIL_MODDATE_TO_NAME))
-            modDateTo.from_string(
-                    m_conf.get<std::string>(MAIL_MODDATE_TO_NAME));
-        mailFilter->addModifyTime().setValue(
-                Database::DateTimeInterval(modDateFrom, modDateTo));
-    }
+    apply_DATETIME(mailFilter, MAIL_MODDATE_NAME, Modify);
 
     Database::Filters::Union *unionFilter;
     unionFilter = new Database::Filters::Union();
@@ -173,8 +118,6 @@ MailClient::list()
     std::cout << "</object>" << std::endl;
 
     unionFilter->clear();
-    // XXX this delete cause segfault :(
-    // delete mailFilter;
     delete unionFilter;
 }
 
@@ -182,6 +125,31 @@ void
 MailClient::list_help()
 {
     std::cout << "mail client list help" << std::endl;
+}
+
+#define ADDOPT(name, type, callable, visible) \
+    {CLIENT_MAIL, name, name##_DESC, type, callable, visible}
+
+const struct options
+MailClient::m_opts[] = {
+    ADDOPT(MAIL_LIST_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(MAIL_SHOW_OPTS_NAME, TYPE_NOTYPE, true, true),
+    add_ID,
+    add_HANDLE,
+    ADDOPT(MAIL_TYPE_NAME, TYPE_INT, false, false),
+    ADDOPT(MAIL_STATUS_NAME, TYPE_INT, false, false),
+    ADDOPT(MAIL_ATTEMPT_NAME, TYPE_INT, false, false),
+    ADDOPT(MAIL_MESSAGE_NAME, TYPE_STRING, false, false),
+    add_CRDATE,
+    ADDOPT(MAIL_MODDATE_NAME, TYPE_STRING, false, false),
+};
+
+#undef ADDOPT
+
+int 
+MailClient::getOptsCount()
+{
+    return sizeof(m_opts) / sizeof(options);
 }
 
 } // namespace Admin;

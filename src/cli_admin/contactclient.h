@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -30,8 +30,6 @@
 #define CONTACT_SHOW_OPTS_NAME_DESC     "show all contact command line options"
 #define CONTACT_INFO_NAME               "contact_info"
 #define CONTACT_INFO_NAME_DESC          "contact info"
-#define CONTACT_INFO2_NAME              "contact_info2"
-#define CONTACT_INFO2_NAME_DESC         "contact info 2"
 #define CONTACT_LIST_NAME               "contact_list"
 #define CONTACT_LIST_NAME_DESC          "list of all contacts (via filters)"
 #define CONTACT_LIST_PLAIN_NAME         "contact_list_plain"
@@ -48,27 +46,33 @@ private:
     DB m_db;
     ccReg::EPP_var m_epp;
 
-    boost::program_options::options_description *m_options;
-    boost::program_options::options_description *m_optionsInvis;
+    static const struct options m_opts[];
 public:
-    ContactClient();
-    ContactClient(std::string connstring,
-            std::string nsAddr);
-    ~ContactClient();
-    void init(std::string connstring,
-            std::string nsAddr,
-            Config::Conf &conf);
+    ContactClient()
+    { }
+    ContactClient(
+            const std::string &connstring,
+            const std::string &nsAddr,
+            const Config::Conf &conf):
+        BaseClient(connstring, nsAddr),
+        m_conf(conf)
+    {
+        m_db.OpenDatabase(connstring.c_str());
+    }
+    ~ContactClient()
+    { }
 
-    boost::program_options::options_description *getVisibleOptions() const;
-    boost::program_options::options_description *getInvisibleOptions() const;
-    void show_opts() const;
+    static const struct options *getOpts();
+    static int getOptsCount();
 
+    void runMethod();
+
+    void show_opts();
     void list();
-    int info();
-    int info2();
+    void info();
 
     void list_help();
-};
+}; // class ContactClient
 
 } // namespace Admin;
 

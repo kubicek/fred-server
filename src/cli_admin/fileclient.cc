@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -22,79 +22,40 @@
 
 namespace Admin {
 
-FileClient::FileClient()
+const struct options *
+FileClient::getOpts()
 {
-    m_options = new boost::program_options::options_description(
-            "File related options");
-    m_options->add_options()
-        addOpt(FILE_LIST_NAME)
-        addOpt(FILE_LIST_HELP_NAME)
-        addOpt(FILE_SHOW_OPTS_NAME);
-
-    m_optionsInvis = new boost::program_options::options_description(
-            "File related sub options");
-    m_optionsInvis->add_options()
-        add_ID()
-        add_NAME()
-        addOptInt(FILE_TYPE_NAME)
-        addOptStr(FILE_PATH_NAME)
-        addOptStr(FILE_MIME_NAME)
-        addOptInt(FILE_SIZE_NAME)
-        add_CRDATE();
-
-}
-FileClient::FileClient(
-        std::string connstring,
-        std::string nsAddr) : BaseClient(connstring, nsAddr)
-{
-    m_db.OpenDatabase(connstring.c_str());
-    m_options = NULL;
-    m_optionsInvis = NULL;
-}
-
-FileClient::~FileClient()
-{
-    delete m_options;
-    delete m_optionsInvis;
+    return m_opts;
 }
 
 void
-FileClient::init(
-        std::string connstring,
-        std::string nsAddr,
-        Config::Conf &conf)
+FileClient::runMethod()
 {
-    BaseClient::init(connstring, nsAddr);
-    m_db.OpenDatabase(connstring.c_str());
-    m_conf = conf;
-}
-
-boost::program_options::options_description *
-FileClient::getVisibleOptions() const
-{
-    return m_options;
-}
-
-boost::program_options::options_description *
-FileClient::getInvisibleOptions() const
-{
-    return m_optionsInvis;
+    if (m_conf.hasOpt(FILE_LIST_NAME)) {
+        list();
+    } else if (m_conf.hasOpt(FILE_SHOW_OPTS_NAME)) {
+        show_opts();
+    }
 }
 
 void
-FileClient::show_opts() const
+FileClient::show_opts()
 {
-    std::cout << *m_options << std::endl;
-    std::cout << *m_optionsInvis << std::endl;
+    callHelp(m_conf, no_help);
+    print_options("File", getOpts(), getOptsCount());
 }
 
 void
 FileClient::list()
 {
-    std::auto_ptr<Register::File::Manager> fileMan(
-            Register::File::Manager::create(m_dbman));
-    std::auto_ptr<Register::File::List> fileList(
-            fileMan->createList());
+    callHelp(m_conf, list_help);
+
+    /* init file manager */
+    CorbaClient corba_client(0, 0, m_nsAddr, m_conf.get<std::string>(NS_CONTEXT_NAME));
+    FileManagerClient fm_client(corba_client.getNS());
+    Register::File::ManagerPtr file_manager(Register::File::Manager::create(&fm_client));
+
+    std::auto_ptr<Register::File::List> fileList(file_manager->createList());
 
     Database::Filters::File *fileFilter;
     fileFilter = new Database::Filters::FileImpl(true);
@@ -125,7 +86,7 @@ FileClient::list()
     fileList->reload(*unionFilter);
 
     std::cout << "<object>\n";
-    for (unsigned int i = 0; i < fileList->getCount(); i++) {
+    for (unsigned int i = 0; i < fileList->getSize(); i++) {
         Register::File::File *file = fileList->get(i);
         std::cout
             << "\t<file>\n"
@@ -133,10 +94,10 @@ FileClient::list()
             << "\t\t<name>" << file->getName() << "</name>\n"
             << "\t\t<path>" << file->getPath() << "</path>\n"
             << "\t\t<mime>" << file->getMimeType() << "</mime>\n"
-            << "\t\t<type>" << file->getType() << "</type>\n"
-            << "\t\t<type_desc>" << file->getTypeDesc() << "</type_desc>\n"
-            << "\t\t<crdate>" << file->getCreateTime() << "</crdate>\n"
-            << "\t\t<size>" << file->getSize() << "</size>\n"
+            << "\t\t<type>" << file->getFileTypeId() << "</type>\n"
+            << "\t\t<type_desc>" << file->getFileTypeDesc() << "</type_desc>\n"
+            << "\t\t<crdate>" << file->getCrDate() << "</crdate>\n"
+            << "\t\t<size>" << file->getFilesize() << "</size>\n"
             << "\t</file>\n";
     }
     std::cout << "</object>" << std::endl;
@@ -145,12 +106,46 @@ FileClient::list()
     // XXX this delete cause segfault :(
     // delete fileFilter;
     delete unionFilter;
-}
+} // FileClient::list
 
 void
 FileClient::list_help()
 {
-    std::cout << "file client list help" << std::endl;
+    std::cout
+        << "** File list **\n\n"
+        << "  $ " << g_prog_name << " --" << FILE_LIST_NAME << " \\\n"
+        << "  [--" << ID_NAME << "=<id_number>] \\\n"
+        << "  [--" << NAME_NAME << "=<name>] \\\n"
+        << "  [--" << FILE_TYPE_NAME << "=<type_name>] \\\n"
+        << "  [--" << FILE_PATH_NAME << "=<path>] \\\n"
+        << "  [--" << FILE_MIME_NAME << "=<mime_type>] \\\n"
+        << "  [--" << FILE_SIZE_NAME << "=<size>] \\\n"
+        << "  [--" << CRDATE_NAME << "=<create_time>]\n"
+        << std::endl;
+}
+
+#define ADDOPT(name, type, callable, visible) \
+    {CLIENT_FILE, name, name##_DESC, type, callable, visible}
+
+const struct options
+FileClient::m_opts[] = {
+    ADDOPT(FILE_LIST_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(FILE_SHOW_OPTS_NAME, TYPE_NOTYPE, true, true),
+    add_ID,
+    add_NAME,
+    ADDOPT(FILE_TYPE_NAME, TYPE_INT, false, false),
+    ADDOPT(FILE_PATH_NAME, TYPE_STRING, false, false),
+    ADDOPT(FILE_MIME_NAME, TYPE_STRING, false, false),
+    ADDOPT(FILE_SIZE_NAME, TYPE_INT, false, false),
+    add_CRDATE,
+};
+
+#undef ADDOPT
+
+int 
+FileClient::getOptsCount()
+{
+    return sizeof(m_opts) / sizeof(options);
 }
 
 } // namespace Admin;

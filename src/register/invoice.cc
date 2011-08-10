@@ -28,11 +28,11 @@
 #include <boost/checked_delete.hpp>
 
 #include "common_impl.h"
-#include "old_utils/dbsql.h" 
 #include "invoice.h"
 #include "log/logger.h"
 #include "types/convert_sql_db_types.h"
 #include "types/sqlize.h"
+#include "old_utils/dbsql.h"
 
 #include "documents.h"
 #include "sql.h"
@@ -42,23 +42,79 @@
 using namespace boost::gregorian;
 using namespace boost::posix_time;
 
+class SQL_ERROR;
+
+#ifdef MAKE_TIME_DEF
+#undef MAKE_TIME_DEF
+#endif
+
+#ifdef MAKE_DATE_DEF
+#undef MAKE_DATE_DEF
+#endif
+
 #define MAKE_TIME_DEF(ROW,COL,DEF)  \
   (ptime(db->IsNotNull(ROW,COL) ? \
-   time_from_string(db->GetFieldValue(ROW,COL)) : DEF))         
+   time_from_string(db->GetFieldValue(ROW,COL)) : DEF))
 #define MAKE_TIME(ROW,COL) \
-  MAKE_TIME_DEF(ROW,COL,ptime(not_a_date_time))         
+  MAKE_TIME_DEF(ROW,COL,ptime(not_a_date_time))
+
+
+/*
+#define MAKE_TIME_DEF(ROW,COL,DEF)  \
+  (ptime(!res[ROW][COL].isnull() ? \
+   time_from_string(res[ROW][COL]) : DEF))
+#define MAKE_TIME(ROW,COL) \
+  MAKE_TIME_DEF(ROW,COL,ptime(not_a_date_time))
 #define MAKE_TIME_NEG(ROW,COL) \
-  MAKE_TIME_DEF(ROW,COL,ptime(neg_infin))         
+  MAKE_TIME_DEF(ROW,COL,ptime(neg_infin))
 #define MAKE_TIME_POS(ROW,COL) \
-  MAKE_TIME_DEF(ROW,COL,ptime(pos_infin))         
+  MAKE_TIME_DEF(ROW,COL,ptime(pos_infin))
+ **/
+
+/*
+#define MAKE_TIME_DEF(ROW,COL,DEF)  \
+  (ptime(db->IsNotNull(ROW,COL) ? \
+   time_from_string(db->GetFieldValue(ROW,COL)) : DEF))
+#define MAKE_DATE_DEF(ROW,COL,DEF)  \
+ (date(db->IsNotNull(ROW,COL) ? from_string(db->GetFieldValue(ROW,COL)) : DEF))
+ **/
+
+
 #define MAKE_DATE_DEF(ROW,COL,DEF)  \
  (date(db->IsNotNull(ROW,COL) ? from_string(db->GetFieldValue(ROW,COL)) : DEF))
 #define MAKE_DATE(ROW,COL)  \
   MAKE_DATE_DEF(ROW,COL,date(not_a_date_time))
 #define MAKE_DATE_NEG(ROW,COL) \
-  MAKE_DATE_DEF(ROW,COL,date(neg_infin))         
+  MAKE_DATE_DEF(ROW,COL,date(neg_infin))
 #define MAKE_DATE_POS(ROW,COL) \
-  MAKE_DATE_DEF(ROW,COL,date(pos_infin))         
+  MAKE_DATE_DEF(ROW,COL,date(pos_infin))
+
+
+class autoDB : public DB {
+public:
+    autoDB(const char *conn_string) : DB(), succ(false) {
+        succ = OpenDatabase(conn_string);
+    }
+
+    autoDB(const std::string &conn_string) : DB(), succ(false) {
+        succ = OpenDatabase(conn_string);
+    }
+    
+    ~autoDB() {
+        if(succ) {
+            Disconnect();
+        }
+    }
+    
+    bool success() {
+        return succ;
+    }
+
+private:
+    /// was the database opened successfully?
+    bool succ;
+};
+
 
 #define STR_TO_MONEY(x) atol(x)
 
@@ -99,28 +155,26 @@ public:
   date validity; ///< valid to this date
 };
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-//   ManagerImpl
+//  ManagerImpl
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-/// implementation for Manager interface
+/// implementation forManagerAbstr interface
 class ManagerImpl : public Manager {
-  DB *db;
-  Database::Manager *db_manager_;
-  Database::Connection *conn_;
-  
+    
   Document::Manager *docman;
   Mailer::Manager *mailman;
-  std::vector<VAT> vatList;
+  std::vector<VAT> vatList;  
   
-  void initVATList() throw (SQL_ERROR);
+  void initVATList() ;
   
 public:
-  ManagerImpl(DB *_db, Document::Manager *_docman, Mailer::Manager *_mailman) :
-    db(_db), docman(_docman), mailman(_mailman) {
+
+  ManagerImpl() :docman(NULL), mailman(NULL) {
     initVATList();
   }
+
   
-  ManagerImpl(Database::Manager *_db_manager, Document::Manager *_doc_manager, Mailer::Manager *_mail_manager) :
-    db_manager_(_db_manager), conn_(_db_manager->getConnection()), docman(_doc_manager), mailman(_mail_manager) {
+  ManagerImpl(Document::Manager *_doc_manager, Mailer::Manager *_mail_manager) :
+    docman(_doc_manager), mailman(_mail_manager) {
     initVATList();
   }
   /// count vat from price
@@ -133,12 +187,178 @@ public:
   virtual List* createList() const;
   /// return credit for registrar by zone
   virtual Money
-      getCreditByZone(const std::string& registrarHandle, TID zone) const
-          throw (SQL_ERROR);
+      getCreditByZone(const std::string& registrarHandle, TID zone);
   virtual bool insertInvoicePrefix(unsigned long long zoneId,
           int type, int year, unsigned long long prefix);
   virtual bool insertInvoicePrefix(const std::string &zoneName,
           int type, int year, unsigned long long prefix);
+
+  /** this is now usable only for create domain
+   */
+  virtual bool domainBilling(
+            DB *db, 
+            const Database::ID &zone,
+            const Database::ID &registrar,
+            const Database::ID &objectId,
+            const Database::Date &exDate,
+            const int &units_count,
+            bool renew) {
+      TRACE("[CALL] Register::Invoicing::Manager::domainBilling()");
+
+      if(!renew) {
+          return db->BillingCreateDomain(registrar, zone, objectId);
+      } else {
+          return db->BillingRenewDomain(registrar, zone, objectId, units_count, exDate.to_string().c_str());
+      }
+  };
+
+    /**
+     *returns 0 in case of failure, id of invoice otherwise
+     * type is int just because MakeNewInoviceAdvance returns it.
+     */
+int createDepositInvoice(Database::Date date, int zoneId, int registrarId, long price) {
+
+    /* HACK! we need to use same transaction */
+    Database::Connection conn = Database::Manager::acquire();
+    DB db(conn);
+    // if(!db.OpenDatabase(Database::Manager::getConnectionString())) {
+    //     LOGGER(PACKAGE).error(" autoDB: Failed to open the database. ");
+    //     return 0;
+    // }
+
+    // TODO conversion with loss of precision
+    int ret = db.MakeNewInvoiceAdvance(date.to_string().c_str(), zoneId, registrarId, price);
+
+    switch(ret)  {
+        case -1:
+                throw std::runtime_error(" Insert into table invoice has failed. ");
+                break;
+        case -2: 
+                throw std::runtime_error(" Couldn't find invoice prefix. ");
+                break;
+        case -3:
+                throw std::runtime_error(" Select from registrar table failed. ");
+                break;
+        case -4:
+                throw std::runtime_error(" Number of selected rows is not 1 as it should be.");
+                break;
+        default:
+                // this shouldn't happen
+                break;
+    }
+    return ret;
+}
+
+
+bool factoring_all(const char *database, const char *zone_fqdn, const char *taxdateStr, const char *todateStr)
+{
+  autoDB db(database);
+  int *regID = 0;
+  int i, num =-1;
+  char timestampStr[32];
+  int invoiceID = 0;
+  int zone;
+  int ret = 0;
+
+  if (db.success() ) {
+
+      LOGGER(PACKAGE).debug ( boost::format("successfully  connect to DATABASE %1%") % database);
+
+    if (db.BeginTransaction() ) {
+      get_timestamp(timestampStr, get_utctime_from_localdate(todateStr) );
+
+      if ( (zone = db.GetNumericFromTable("zone", "id", "fqdn", zone_fqdn) )) {
+        std::stringstream sql;
+        sql
+            << "SELECT r.id FROM registrar r, registrarinvoice i WHERE r.id=i.registrarid "
+            << "AND r.system=false AND i.zone=" << zone
+            << " AND i.fromdate<=CURRENT_DATE";
+        if (db.ExecSelect(sql.str().c_str()) && db.GetSelectRows() > 0) {
+          num = db.GetSelectRows();
+          regID= new int[num];
+          for (i = 0; i < num; i ++) {
+            regID[i] = atoi(db.GetFieldValue(i, 0) );
+          }
+          db.FreeSelect();
+
+          if (num > 0) {
+            for (i = 0; i < num; i ++) {
+              invoiceID = db.MakeFactoring(regID[i], zone, timestampStr,
+                taxdateStr);
+              LOGGER(PACKAGE).notice(boost::format("Vygenerovana fa %1% pro regID %2% ") % invoiceID % regID[i] );
+
+              if (invoiceID >=0)
+                ret = CMD_OK;
+              else {
+                ret = 0;
+                break;
+              }
+
+            }
+          }
+          delete[] regID;
+        }
+      } else {
+        LOGGER(PACKAGE).error( boost::format("unkown zone %1% \n") % zone_fqdn );
+      }
+
+      db.QuitTransaction(ret);
+    }
+
+    // db.Disconnect(); not needed anymore
+  }
+
+  if (ret)
+    return invoiceID;
+  else
+    return -1; // err
+}
+
+// close invoice to registar handle for zone make taxDate to the todateStr
+int factoring(const char *database, const char *registrarHandle, const char *zone_fqdn, const char *taxdateStr, const char *todateStr)
+{
+  autoDB db(database);
+  int regID;
+  char timestampStr[32];
+  int invoiceID = -1;
+  int zone;
+  int ret = 0;
+
+  if (db.success() ) {
+
+    LOGGER(PACKAGE).debug ( boost::format("successfully  connect to DATABASE %1%") % database);
+
+    if (db.BeginTransaction() ) {
+
+      if ( (regID = db.GetRegistrarID(  registrarHandle ) )) {
+        if ( (zone = db.GetNumericFromTable("zone", "id", "fqdn", zone_fqdn) )) {
+
+          get_timestamp(timestampStr, get_utctime_from_localdate(todateStr) );
+          // make invoice
+          invoiceID = db.MakeFactoring(regID, zone, timestampStr, taxdateStr);
+
+        } else {
+          LOGGER(PACKAGE).error( boost::format("unknown zone %1% \n") % zone_fqdn );
+        }
+      } else {
+        LOGGER(PACKAGE).error( boost::format("unknown registrarHandle %1% ") % registrarHandle );
+      }
+
+      if (invoiceID >=0)
+        ret = CMD_OK; // OK succesfully invocing
+
+      db.QuitTransaction(ret);
+    }
+
+    // db.Disconnect(); not needed anymore
+  }
+
+  if (ret)
+    return invoiceID;
+  else
+    return -1; // err
+}
+
 }; // ManagerImpl
 
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -287,6 +507,7 @@ class PaymentSourceImpl : public PaymentImpl, virtual public PaymentSource {
   ptime crtime; ///< creation time of advance invoice 
 public:
   /// init content from sql result (ignore first column)
+    
   PaymentSourceImpl(DB *db, unsigned l, ManagerImpl *man) :
     PaymentImpl(
     STR_TO_MONEY(db->GetFieldValue(l,2)),
@@ -297,6 +518,7 @@ public:
         true
     )), number(atoll(db->GetFieldValue(l, 1))), credit(STR_TO_MONEY(db->GetFieldValue(l,3))), id(STR_TO_ID(db->GetFieldValue(l,4))), totalPrice(STR_TO_MONEY(db->GetFieldValue(l,5))), totalVat(STR_TO_MONEY(db->GetFieldValue(l,7))), crtime(MAKE_TIME(l,8)) {
   }
+     
   
   PaymentSourceImpl(Money _price, unsigned _vat_rate, Money _vat, 
                     unsigned long long _number, Money _credit, TID _id,
@@ -347,6 +569,9 @@ class PaymentActionImpl : public PaymentImpl, virtual public PaymentAction {
   TID objectId; ///< id of object affected by payment action
 public:
   /// init content from sql result (ignore first column)
+
+    // TODO db shouldn't be saved anywhere in the dtor because caller reload()
+    // doesnt count on it and it retains the ownership of the db resource
   PaymentActionImpl(DB *db, unsigned l, ManagerImpl *man) :
     PaymentImpl(
     STR_TO_MONEY(db->GetFieldValue(l,7)),
@@ -355,11 +580,17 @@ public:
         STR_TO_MONEY(db->GetFieldValue(l,7)),
         STR_TO_ID(db->GetFieldValue(l,9)),
         true
-    )), objectName(db->GetFieldValue(l, 1)), actionTime(MAKE_TIME(l,2)), exDate(MAKE_DATE(l,3)), action(atoi(db->GetFieldValue(l, 4)) == 1 ? PAT_CREATE_DOMAIN
-                                                         : PAT_RENEW_DOMAIN),
-        unitsCount(atoi(db->GetFieldValue(l, 5))), pricePerUnit(STR_TO_MONEY(db->GetFieldValue(l,6))), objectId(STR_TO_ID(db->GetFieldValue(l,8))) {
+    )), 
+        objectName(db->GetFieldValue(l, 1)),
+        actionTime(MAKE_TIME(l,2)),
+        exDate(MAKE_DATE(l,3)),
+        action(atoi(db->GetFieldValue(l, 4)) == 1 ? PAT_CREATE_DOMAIN
+                                                     : PAT_RENEW_DOMAIN),
+    unitsCount(atoi(db->GetFieldValue(l, 5))),
+        pricePerUnit(STR_TO_MONEY(db->GetFieldValue(l,6))),
+        objectId(STR_TO_ID(db->GetFieldValue(l,8))) {
   }
-  
+    
   PaymentActionImpl(Money _price, unsigned _vat_rate, Money _vat, 
                     std::string& _object_name, ptime _action_time, date _exdate,
                     PaymentActionType _type, unsigned _units, Money _price_per_unit, TID _id) :
@@ -394,6 +625,22 @@ public:
   virtual Money getPricePerUnit() const {
     return pricePerUnit;
   }
+  virtual std::string getActionStr() const
+    {        
+        switch (getAction()) {
+            case PAT_CREATE_DOMAIN:
+                return "CREATE";
+                break;
+            case PAT_RENEW_DOMAIN:
+                return "RENEW";
+                break;
+            default:
+                return "UNKNOWN";
+                break;
+        }
+
+        return "UNKNOWN";
+    }
 };
 /// hold list of sum of proportional parts of prices for every year
 class AnnualPartitioningImpl : public virtual AnnualPartitioning {
@@ -484,6 +731,8 @@ public:
 //   InvoiceImpl
 // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 /// implementation of interface Invoice
+
+
 class InvoiceImpl : public Register::CommonObjectImpl, 
                     virtual public Invoice {
   DB *dbc;
@@ -513,6 +762,7 @@ class InvoiceImpl : public Register::CommonObjectImpl,
   AnnualPartitioningImpl ap; ///< total prices partitioned by year
   std::vector<PaymentImpl> paid; ///< list of paid vat rates
   ManagerImpl *man; ///< backlink to manager for VAT and others
+  TID id;
 
   void clearLists() {
     for (unsigned i=0; i<sources.size(); i++)
@@ -521,10 +771,13 @@ class InvoiceImpl : public Register::CommonObjectImpl,
       delete actions[i];
   }
 public:
-  /// initialize invoice from result set=db with row=l 
+  /// initialize invoice from result set=db with row=l
+
+    
   InvoiceImpl(DB *db, ManagerImpl *_man, unsigned l) :
       CommonObjectImpl(STR_TO_ID(db->GetFieldValue(l,0))),
-      dbc(db),  
+      // this class should not store pointer to DB
+      dbc(NULL),  
       zone(STR_TO_ID(db->GetFieldValue(l,1))), 
       zoneName(db->GetFieldValue(l, 26)), 
       crTime(MAKE_TIME(l,2)), 
@@ -562,6 +815,8 @@ public:
       ap(_man), 
       man(_man) {
   }
+
+     
   
   InvoiceImpl(TID _id, TID _zone, std::string& _zoneName, ptime _crTime, date _taxDate,
               date_period& _accountPeriod, Type _type, unsigned long long _number,
@@ -590,9 +845,10 @@ public:
                                        filexml_name(_filexml_name),
                                        storeFileFlag(false),
                                        ap(_manager),
-                                       man(_manager) {
+                                       man(_manager),
+                                       id(_id) {
   }
-  
+
   ~InvoiceImpl() {
     clearLists();
   }
@@ -611,6 +867,10 @@ public:
   ptime getCrTime() const {
     return crTime;
   }
+  // new interface
+  ptime getCrDate() const {
+    return getCrTime();
+  }
   date getTaxDate() const {
     return taxDate;
   }
@@ -625,6 +885,9 @@ public:
   }
   TID getRegistrar() const {
     return registrar;
+  }
+  TID getRegistrarId() const {
+    return getRegistrar();
   }
   Money getCredit() const {
     return credit;
@@ -683,17 +946,23 @@ public:
       catch (...) {}
     }
   }
-  void storeFile() throw (SQL_ERROR) {
+  void storeFile()  {
     // cannot rollback generated files so ignoring if XML file hasn't
     // been generated
+    autoDB dbc(Database::Manager::getConnectionString());
+    if(!dbc.success()) {
+        LOGGER(PACKAGE).error(" autoDB: Failed to open the database. ");
+        throw SQL_ERROR();
+    }
+
     if (storeFileFlag && filePDF) {
       std::stringstream sql;
       sql << "UPDATE invoice SET file=" << filePDF;
       if (fileXML) {
         sql << ",fileXML=" << fileXML;
       };
-      sql << " WHERE id=" << getId();
-      if (!dbc->ExecSQL(sql.str().c_str()))
+      sql << " WHERE id=" << getId();      
+      if (!dbc.ExecSQL(sql.str().c_str()))
         throw SQL_ERROR();
     }
   }
@@ -702,10 +971,13 @@ public:
     exp->doExport(this);
   }
   /// initialize list of actions from sql result
+
+  // ownership of db remains in the caller
   void addAction(DB *db, unsigned row) {
     actions.push_back(new PaymentActionImpl(db,row,man));
     ap.addAction(actions.back()); // update partitioning
   }
+   
   void addAction(Database::Row::Iterator& _col) {
     Database::Money    price       = *_col;
     unsigned           vat_rate    = *(++_col);
@@ -732,6 +1004,8 @@ public:
     ap.addAction(actions.back());
   }
   /// initialize list of sources from sql result
+
+  
   void addSource(DB *db, unsigned row) {
     PaymentSourceImpl *ps = new PaymentSourceImpl(db,row,man);
     sources.push_back(ps);
@@ -743,7 +1017,8 @@ public:
       i->add(ps);
     else
       paid.push_back(PaymentImpl(ps));
-  }
+  }  
+
   void addSource(Database::Row::Iterator& _col) {
     Database::Money price       = *_col;
     unsigned vat_rate           = *(++_col);
@@ -791,7 +1066,48 @@ public:
   virtual const Payment *getPaymentByIdx(unsigned idx) const {
     return idx >= paid.size() ? NULL : &paid[idx];
   }
+   
+    virtual  TID getZoneId() const {
+        return getZone();
+    };
+    
+    virtual  TID getPrefix() const {
+        return getNumber();
+    };
+    virtual const int getVat() const {
+        return getVatRate();
+    };
+    virtual const Database::Money getTotalVat() const {
+        return getTotalVAT();
+    };    
+    virtual  TID getFileId() const {
+        return getFilePDF();
+    };
+    virtual  std::string getFileHandle() const {
+        return getFileNamePDF();
+    };
+    virtual  TID getFileXmlId() const {
+        return getFileXML();
+    };
+    virtual  std::string getFileXmlHandle() const {
+        return getFileNameXML();
+    };
+    
+    virtual std::string getZoneFqdn() const {
+        return getZoneName();
+    };
+  
+    virtual const Payment *getPayment(const unsigned int &index) const {
+        return (const Payment*)getAction(index); 
+    };
+
+  virtual bool save() {
+        return true;
+  };
+ 
 };
+
+
 // TODO: should be initalized somewhere else
 /// static supplier in every invoice
 SubjectImpl
@@ -1000,7 +1316,8 @@ public:
         ii->setFile(filePDF,fileXML);
       }
       catch (...) {
-        // TODO: LOG ERROR
+          // TODO log something more specific
+        LOGGER(PACKAGE).error("Exception in ExporterArchiver::doExport.");
       }
     }
   };
@@ -1038,21 +1355,14 @@ public:
     ManagerImpl *man; ///< backlink to manager for VAT and others
 
   public:
-    ListImpl(DB *_db, ManagerImpl *_man) : CommonListImpl(_db),
+    ListImpl(ManagerImpl *_man) : CommonListImpl(),
     idFilter(0), registrarFilter(0), zoneFilter(0), typeFilter(0),
     crDateFilter(ptime(neg_infin),ptime(pos_infin)),
     taxDateFilter(ptime(neg_infin),ptime(pos_infin)),
     archiveFilter(AF_IGNORE), objectIdFilter(0), partialLoad(false),
     man(_man)
     {}
-    
-    ListImpl(Database::Connection *_conn, ManagerImpl *_manager) : CommonListImpl(_conn),
-                                                                crDateFilter(ptime(neg_infin),ptime(pos_infin)),
-                                                                taxDateFilter(ptime(neg_infin),ptime(pos_infin)),
-                                                                partialLoad(false),
-                                                                man(_manager) {
-    }
-    
+          
     ~ListImpl() {
       clearList();
     }
@@ -1086,6 +1396,9 @@ public:
           break;
         case MT_PRICE:
           stable_sort(data_.begin(), data_.end(), ComparePrice(_asc));
+          break;
+        case MT_CRTIME:
+          stable_sort(data_.begin(), data_.end(), CompareCrTime(_asc));
           break;
       }
     }
@@ -1167,7 +1480,7 @@ public:
       partialLoad = _partialLoad;
     }
     
-    virtual void reload(Database::Filters::Union& _uf, Database::Manager *_db_manager) {
+    virtual void reload(Database::Filters::Union& _uf) {
       TRACE("[CALL] Invoicing::ListImpl::reload()");
       clear();
       _uf.clearQueries();
@@ -1191,6 +1504,7 @@ public:
         return;
       }
 
+      id_query.order_by() << "id DESC";
       id_query.limit(load_limit_);
       _uf.serialize(id_query);
 
@@ -1203,8 +1517,8 @@ public:
       object_info_query.select() << "t_1.id, t_1.zone, t_2.fqdn, "
                                  << "t_1.crdate::timestamptz AT TIME ZONE 'Europe/Prague', "
                                  << "t_1.taxdate, t_5.fromdate, t_5.todate, t_4.typ, t_1.prefix, "
-                                 << "t_1.registrarid, t_1.credit * 100, t_1.price * 100, "
-                                 << "t_1.vat, t_1.total * 100, t_1.totalvat * 100, "
+                                 << "t_1.registrarid, t_1.credit, t_1.price, "
+                                 << "t_1.vat, t_1.total, t_1.totalvat, "
                                  << "t_1.file, t_1.fileXML, t_3.organization, t_3.street1, "
                                  << "t_3.city, t_3.postalcode, "
                                  << "TRIM(t_3.ico), TRIM(t_3.dic), TRIM(t_3.varsymb), "
@@ -1223,16 +1537,14 @@ public:
       object_info_query.order_by() << "tmp.id";
 
       try {
-        std::auto_ptr<Database::Connection> conn(_db_manager->getConnection());
+        Database::Connection conn = Database::Manager::acquire();
 
         Database::Query create_tmp_table("SELECT create_tmp_table('" + std::string(getTempTableName()) + "')");
-        conn->exec(create_tmp_table);
-        conn->exec(tmp_table_query);
+        conn.exec(create_tmp_table);
+        conn.exec(tmp_table_query);
 
-        // TODO: use this and rewrite conn to conn_ specified in CommonListImpl
-        // fillTempTable(tmp_table_query);
 
-        Database::Result r_info = conn->exec(object_info_query);
+        Database::Result r_info = conn.exec(object_info_query);
         for (Database::Result::Iterator it = r_info.begin(); it != r_info.end(); ++it) {
           Database::Row::Iterator col = (*it).begin();
 
@@ -1310,16 +1622,16 @@ public:
          */
         resetIDSequence();
         Database::SelectQuery source_query;
-        source_query.select() << "tmp.id, ipm.credit * 100, sri.vat, sri.prefix, "
-                              << "ipm.balance * 100, sri.id, sri.total * 100, "
-                              << "sri.totalvat * 100, sri.crdate";
+        source_query.select() << "tmp.id, ipm.credit, sri.vat, sri.prefix, "
+                              << "ipm.balance, sri.id, sri.total, "
+                              << "sri.totalvat, sri.crdate";
         source_query.from() << "tmp_invoice_filter_result tmp "
                             << "JOIN invoice_credit_payment_map ipm ON (tmp.id = ipm.invoiceid) "
                             << "JOIN invoice sri ON (ipm.ainvoiceid = sri.id) ";
         source_query.order_by() << "tmp.id";
         
         resetIDSequence();
-        Database::Result r_sources = conn->exec(source_query);
+        Database::Result r_sources = conn.exec(source_query);
         for (Database::Result::Iterator it = r_sources.begin(); it != r_sources.end(); ++it) {
           Database::Row::Iterator col = (*it).begin();
           Database::ID invoice_id = *col;
@@ -1336,12 +1648,12 @@ public:
          */
         if (!partialLoad) {
           Database::SelectQuery action_query;
-          action_query.select() << "tmp.id, SUM(ipm.price) * 100, i.vat, o.name, "
+          action_query.select() << "tmp.id, SUM(ipm.price), i.vat, o.name, "
                                 << "ior.crdate::timestamptz AT TIME ZONE 'Europe/Prague', "
                                 << "ior.exdate, ior.operation, ior.period, "
                                 << "CASE "
                                 << "  WHEN ior.period = 0 THEN 0 "
-                                << "  ELSE 100 * SUM(ipm.price) * 12 / ior.period END, "
+                                << "  ELSE SUM(ipm.price) * 12 / ior.period END, "
                                 << "o.id";
           action_query.from() << "tmp_invoice_filter_result tmp "
                               << "JOIN invoice_object_registry ior ON (tmp.id = ior.invoiceid) "
@@ -1353,7 +1665,7 @@ public:
           action_query.order_by() << "tmp.id";
         
           resetIDSequence();
-          Database::Result r_actions = conn->exec(action_query);
+          Database::Result r_actions = conn.exec(action_query);
           for (Database::Result::Iterator it = r_actions.begin(); it != r_actions.end(); ++it) {
             Database::Row::Iterator col = (*it).begin();
             Database::ID invoice_id = *col;
@@ -1375,13 +1687,20 @@ public:
         clear();
       }
 
-    }
-    
-    virtual void reload() throw (SQL_ERROR) {
-      clearList();
-      std::stringstream sql;
-      // id that conform to filter will be stored in temporary table
-      // sql is contructed from two sections 'from' and 'where'
+    }    
+    virtual void reload() {
+
+        // auto_ptr just to avoid changing -> into . in 1000 places :)
+        std::auto_ptr<autoDB> db(new autoDB(Database::Manager::getConnectionString()));
+        if (!db->success()) {
+            LOGGER(PACKAGE).error(" autoDB: Failed to open the database. ");
+            throw SQL_ERROR();
+        }
+
+        clearList();
+        std::stringstream sql;
+        // id that conform to filter will be stored in temporary table
+        // sql is contructed from two sections 'from' and 'where'
       // that are pasted into final 'sql' stream 
       sql << "SELECT DISTINCT i.id "
       << "INTO TEMPORARY tmp_invoice_filter_result ";
@@ -1460,7 +1779,7 @@ public:
               " ORDER BY crdate DESC "
           )) throw SQL_ERROR();
       for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++)
-      data_.push_back(new InvoiceImpl(db,man,i));
+      data_.push_back(new InvoiceImpl(db.get(),man,i));
       db->FreeSelect();
       // append list of actions to all selected invoices
       // it handle situation when action come from source advance invoices
@@ -1485,11 +1804,15 @@ public:
                 " it.id, o.name, ior.crdate, ior.exdate, ior.operation, "
                 " ior.period, o.id, i.vat "
             )) throw SQL_ERROR();
+
         for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++) {
           InvoiceImpl *inv = dynamic_cast<InvoiceImpl*>(findId(STR_TO_ID(db->GetFieldValue(i,0))));
-          if (inv) inv->addAction(db,i);
+
+          // addAction only uses db, it doesnt want to own it
+          if (inv) inv->addAction(db.get(),i);
           else {
-            // TODO: log error - some database problem 
+            LOGGER(PACKAGE).error(" dynamic_cast failed for Invoice. ");
+            // TODO: log error - more specific error
           }
         }
         db->FreeSelect();
@@ -1506,9 +1829,11 @@ public:
           )) throw SQL_ERROR();
       for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++) {
         InvoiceImpl *inv = dynamic_cast<InvoiceImpl*>(findId(STR_TO_ID(db->GetFieldValue(i,0))));
-        if (inv) inv->addSource(db,i);
+        if (inv) inv->addSource(db.get(),i);
         else {
-          // TODO: log error - some database problem 
+          // TODO: log error - more specific
+            LOGGER(PACKAGE).error(" autoDB: Failed to open the database. ");
+            throw SQL_ERROR();
         }
       }
       db->FreeSelect();
@@ -1516,6 +1841,7 @@ public:
       if (!db->ExecSQL("DROP TABLE tmp_invoice_filter_result "))
       throw SQL_ERROR();
     }
+    
     
     /// export all invoices on the list using given exporter
     void doExport(Exporter *_exporter) {
@@ -1552,6 +1878,15 @@ public:
     virtual void makeQuery(bool, bool, std::stringstream&) const {
       
     }
+
+
+  
+  virtual bool isEmpty() { return (size() == 0); }
+
+  virtual unsigned int getSize() const 
+  {
+        return size();
+  }
     
   }; // ListImpl 
   
@@ -1597,9 +1932,10 @@ public:
     typedef std::vector<Item> MailItems; ///< type for notification list
     MailItems items; ///< list of notifications to send
     Mailer::Manager *mm; ///< mail sending interface
-    DB *db; ///< database connectivity
+    Database::Connection conn;    
     /// store information about sending email 
-    void store(unsigned idx) throw (SQL_ERROR) {
+    void store(unsigned idx) {
+       
       std::stringstream sql;
       sql << "INSERT INTO invoice_mails (invoiceid,genid,mailid) VALUES (";
       if (items[idx].invoice) sql << items[idx].invoice;
@@ -1610,14 +1946,14 @@ public:
       sql << ","
       << items[idx].mail
       << ")";
-      if (!db->ExecSQL(sql.str().c_str())) throw SQL_ERROR();
+      conn.exec(sql.str());
     }
     
   public:
-    Mails(Mailer::Manager *_mm, DB *_db) : mm(_mm), db(_db) {
+    Mails(Mailer::Manager *_mm) : mm(_mm), conn(Database::Manager::acquire()) {
     }
     /// send all mails and store information about sending
-    void send() throw (SQL_ERROR) {
+    void send() { //throw (SQL_ERROR) {
       for (unsigned i=0; i<items.size(); i++) {
         Item *it = &items[i];
         Mailer::Parameters params;
@@ -1646,13 +1982,23 @@ public:
         );
         if (!it->mail) {
           // TODO: LOG ERROR 
+            LOGGER(PACKAGE).error(" Error while send mail in Mails class. ");
+            throw SQL_ERROR();
         }
         store(i);
       }
     }
-    /// load invoices that need to be sent
+ 
     void load() throw (SQL_ERROR) {
+
+        std::auto_ptr<autoDB> db(new autoDB(Database::Manager::getConnectionString()));
+        if(!db->success()) {
+            LOGGER(PACKAGE).error(" autoDB: Failed to open the database. ");
+            throw SQL_ERROR();
+        }
+
       std::stringstream sql;
+
       sql << "SELECT r.email, g.fromdate, g.todate, "
       << "i.file, i.fileXML, g.id, i.id, z.fqdn "
       << "FROM registrar r, invoice i "
@@ -1670,6 +2016,7 @@ public:
       << "WHERE g.registrarid=r.id AND g.invoiceid ISNULL "
       << "AND im.mailid ISNULL "
       << "AND NOT(r.email ISNULL OR TRIM(r.email)='')";
+
       if (!db->ExecSelect(sql.str().c_str())) throw SQL_ERROR();
       for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++)
       items.push_back(Item(
@@ -1685,14 +2032,19 @@ public:
           ));
       db->FreeSelect();
     }
+
   }; // Mails
   
-  
-  // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-  //   ManagerImpl - impl.
-  // -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
-  void ManagerImpl::initVATList() throw (SQL_ERROR) {
+
+  void ManagerImpl::initVATList()  {
+
     if (vatList.empty()) {
+      std::auto_ptr<autoDB> db(new autoDB(Database::Manager::getConnectionString()));
+      if(!db->success()) {
+          LOGGER(PACKAGE).error(" autoDB: Failed to open the database. ");
+         throw SQL_ERROR();
+      }
+
       if (!db->ExecSelect("SELECT vat, 10000*koef, valid_to FROM price_vat"))
       throw SQL_ERROR();
       for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++) {
@@ -1707,7 +2059,8 @@ public:
       db->FreeSelect();
     }
   }
-  
+
+
   Money ManagerImpl::countVAT(Money price, unsigned vatRate, bool base) {
     const VAT *v = getVAT(vatRate);
     unsigned coef = v ? v->koef : 0;
@@ -1724,44 +2077,60 @@ public:
   }
   
   void ManagerImpl::archiveInvoices(bool send) const {
+      
+      if(docman == NULL || mailman == NULL) {
+        LOGGER(PACKAGE).error("archiveInvoices: No docman or mailman specified in c-tor. ");    
+      }
+      
     try {
       // archive unarchived invoices
       ExporterArchiver exporter(docman);
-      ListImpl l(db,(ManagerImpl *)this);
+      ListImpl l((ManagerImpl *)this);
+
+
+
+
+
+
       l.setArchivedFilter(ListImpl::AF_UNSET);
       l.reload();
       l.doExport(&exporter);
       if (send) {
-        Mails m(mailman,db);
+        Mails m(mailman);
         m.load();
         m.send();
       }
     }
     catch (...) {
-      //TODO: LOG ERROR
+      LOGGER(PACKAGE).error("Exception in archiveInvoices.");
+      //TODO: LOG more specific ERROR
     }
   }
   
   List* ManagerImpl::createList() const {
-    return new ListImpl(db, (ManagerImpl *)this);
+    return new ListImpl((ManagerImpl *)this);
     // return new ListImpl(conn_, (ManagerImpl *)this);
   }
   
-  Money ManagerImpl::getCreditByZone(const std::string& registrarHandle, TID zone) const throw (SQL_ERROR) {
+  Money ManagerImpl::getCreditByZone(const std::string& registrarHandle, TID zone) {
+      Database::Connection conn = Database::Manager::acquire();
     std::stringstream sql;
-    sql << "SELECT SUM(credit)*100 "
+    sql << "SELECT SUM(credit) "
     << "FROM invoice i JOIN registrar r ON (i.registrarid=r.id) "
     << "WHERE i.zone=" << zone << " AND r.handle='"
     << registrarHandle << "'";
-    if (!db->ExecSelect(sql.str().c_str())) throw SQL_ERROR();
-    Money result = STR_TO_MONEY(db->GetFieldValue(0,0));
-    db->FreeSelect();
+
+    Database::Result res = conn.exec(sql.str());
+    Database::Money result = res[0][0];
     return result;
+    
   }
+
   bool ManagerImpl::insertInvoicePrefix(unsigned long long zoneId,
           int type, int year, unsigned long long prefix) 
   {
-      TRACE("Invoicing::ManagerImpl::insertInvoicePrefix(...)");
+      TRACE("Invoicing::Manager::insertInvoicePrefix(...)");
+      Database::Connection conn = Database::Manager::acquire();
       std::stringstream query;
       query << "INSERT INTO invoice_prefix (zone, typ, year, prefix) VALUES"
           << "(" << zoneId << ", "
@@ -1769,32 +2138,36 @@ public:
           << year << ", "
           << prefix << ");";
       try {
-          if (!db->ExecSQL(query.str().c_str())) {
-              return false;
-          }
+          conn.exec(query.str());
       } catch (...) {
           return false;
       }
       return true;
   }
+
   bool ManagerImpl::insertInvoicePrefix(const std::string &zoneName,
           int type, int year, unsigned long long prefix) 
   {
-      TRACE("Invoicing::ManagerImpl::insertInvoicePrefix(...)");
-      return insertInvoicePrefix(
-              db->GetNumericFromTable("zone", "id", "fqdn", zoneName.c_str()),
-              type, year, prefix);
+      TRACE("Invoicing::Manager::insertInvoicePrefix(...)");
+
+      Database::Connection conn = Database::Manager::acquire();
+      boost::format query = boost::format("select id from zone where fqdn = %1%")
+                                          % Database::Value(zoneName);
+      Database::Result res = conn.exec(query.str());
+
+      return insertInvoicePrefix((unsigned long long)res[0][0], type, year, prefix);
   }
   
-  Manager* Manager::create(DB *db, Document::Manager *docman, Mailer::Manager *mailman) {
-    return new ManagerImpl(db,docman,mailman);
-  }
-  
-  Manager* Manager::create(Database::Manager *_db_manager, 
+ Manager *Manager::create(
                            Document::Manager *_doc_manager, 
                            Mailer::Manager *_mail_manager) {
-    return new ManagerImpl(_db_manager, _doc_manager, _mail_manager);
+    return new ManagerImpl(_doc_manager, _mail_manager);
   }
+
+ Manager *Manager::create()
+ {
+     return new ManagerImpl();
+ }
 
   
 }; // Invoicing

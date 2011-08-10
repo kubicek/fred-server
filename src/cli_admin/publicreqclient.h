@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -24,7 +24,7 @@
 #define PUBLICREQ_LIST_NAME             "public_request_list"
 #define PUBLICREQ_LIST_NAME_DESC        "list of all public requests"
 
-#define PUBLICREQ_LIST_HELP_NAME        "public_request_list_name"
+#define PUBLICREQ_LIST_HELP_NAME        "public_request_list_help"
 #define PUBLICREQ_LIST_HELP_NAME_DESC   "help for public request list"
 
 #define PUBLICREQ_STATUS_NAME               "status"
@@ -42,10 +42,8 @@
 #define PUBLICREQ_REGISTRAR_NAME_NAME	    "registrar name"
 #define PUBLICREQ_REGISTRAR_NAME_NAME_DESC  "registrar name description"
 
-#define PUBLICREQ_RESDATE_FROM_NAME         "res_date_from"
-#define PUBLICREQ_RESDATE_FROM_NAME_DESC    "response datetime from"
-#define PUBLICREQ_RESDATE_TO_NAME           "res_date_to"
-#define PUBLICREQ_RESDATE_TO_NAME_DESC      "response datetime to"
+#define PUBLICREQ_RESDATE_NAME              "resdate"
+#define PUBLICREQ_RESDATE_NAME_DESC         "response date"
 #define PUBLICREQ_TYPE_NAME                 "public_request_type"
 #define PUBLICREQ_TYPE_NAME_DESC            "......."
 
@@ -68,24 +66,30 @@ private:
     ccReg::EPP_var m_epp;
     Config::Conf m_conf;
 
-    boost::program_options::options_description *m_options;
-    boost::program_options::options_description *m_optionsInvis;
+    static const struct options m_opts[];
 public:
-    PublicRequestClient();
-    PublicRequestClient(std::string connstring,
-            std::string nsAddr);
-    ~PublicRequestClient();
-    void init(std::string connstring,
-            std::string nsAddr,
-            Config::Conf &conf);
+    PublicRequestClient()
+    { }
+    PublicRequestClient(
+            const std::string &connstring,
+            const std::string &nsAddr,
+            const Config::Conf &conf):
+        BaseClient(connstring, nsAddr),
+        m_conf(conf)
+    {
+        m_db.OpenDatabase(connstring.c_str());
+    }
+    ~PublicRequestClient()
+    { }
 
-    boost::program_options::options_description *getVisibleOptions() const;
-    boost::program_options::options_description *getInvisibleOptions() const;
-    void show_opts() const;
+    static const struct options *getOpts();
+    static int getOptsCount();
+    void runMethod();
 
+    void show_opts();
     void list();
     void list_help();
-};
+}; // class PublicRequestClient
 
 } // namespace Admin;
 

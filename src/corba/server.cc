@@ -31,6 +31,13 @@
 #include "admin/admin_impl.h"
 #endif
 
+#ifdef LOGD
+#include "admin/admin_impl.h"
+#include "log/log_impl_wrap.h"
+#endif
+
+#include "corba/mailer_manager.h"
+
 #include <cstdlib>
 #include <time.h>
 
@@ -47,21 +54,26 @@
 #include "conf/manager.h"
 #include "log/logger.h"
 
+#include "pidfile.h"
+#include "daemonize.h"
+
 /* pointer to ORB which have to be destroyed on signal received */
 static CORBA::ORB_ptr orb_to_shutdown = NULL;
-static PortableServer::POAManager_ptr poa_manager = NULL; 
+static PortableServer::POAManager_ptr poa_manager = NULL;
 
 /* proper cleanup in case of SIGINT signal */
 static void sigint_handler(int signal) {
   LOGGER(PACKAGE).info("server is closing...");
+
   if (orb_to_shutdown)
     orb_to_shutdown->shutdown(0);
 }
 
-/** 
- * server config reload in case of SIGHUP signal 
+/**
+ * server config reload in case of SIGHUP signal
  * TESTING NOT USE ON PRODUCTION (check that sighup signal is not connected to this function)
  */
+/*
 static void sighup_handler(int signal) {
   assert(signal == SIGHUP);
   try {
@@ -72,18 +84,34 @@ static void sighup_handler(int signal) {
     LOGGER(PACKAGE).info("configuration reloaded -- setting server to ACTIVE state");
   }
   catch(std::exception &_ex) {
-    LOGGER(PACKAGE).error(boost::format("config reload error: %1%") 
+    LOGGER(PACKAGE).error(boost::format("config reload error: %1%")
                                          % _ex.what());
   }
 
 }
+*/
+
+// this handler was added because gcov needs the program to call exit
+// in order to generate graph files (*.gcda)
+static void sigterm_handler(int signal) {
+	assert(signal == SIGTERM);
+	LOGGER(PACKAGE).info(" Signal TERM caught, exiting... ");
+	/* TODO this fails ..... somehow
+	   * message: omniORB: AsyncInvoker: Warning: unexpected exception caught while executing a task.
+	   *
+	  if (orb_to_shutdown)
+	    orb_to_shutdown->shutdown(0);
+	    */
+
+	exit(0);
+}
 
 int main(int argc, char** argv) {
 
-  // orb must be initialized before options are parsed to eat all omniorb
-  // program options
+  /* initialize orb, eat all omniorb program options */
   CORBA::ORB_var orb;
   try {
+
     /* initialize ORB */
     orb = CORBA::ORB_init(argc, argv);
   } catch (...) {
@@ -93,7 +121,10 @@ int main(int argc, char** argv) {
 
     /* program options definition */
     po::options_description cmd_opts;
+
     cmd_opts.add_options()
+      ("pidfile", po::value<std::string>(), "Process id file location")
+      ("daemonize", "Turn foreground process into daemon")
       ("view-config", "View actual configuration");
 
     po::options_description database_opts("Database");
@@ -139,10 +170,13 @@ int main(int argc, char** argv) {
     adifd_opts.add_options()
       ("adifd.session_max",     po::value<unsigned>()->default_value(0),    "ADIFD maximum number of sessions (0 mean not limited)")
       ("adifd.session_timeout", po::value<unsigned>()->default_value(3600), "ADIFD session timeout")
-      ("adifd.session_garbage", po::value<unsigned>()->default_value(150),  "ADIFD session garbage interval");    
+      ("adifd.session_garbage", po::value<unsigned>()->default_value(150),  "ADIFD session garbage interval");
+    po::options_description logd_opts("LOGD specific");
+	logd_opts.add_options()
+	  ("logd.monitoring_hosts_file", po::value<std::string>()->default_value("/usr/local/etc/fred/monitoring_hosts.conf"), "File containing list of monitoring machines");
 
     po::options_description file_opts;
-    file_opts.add(database_opts).add(nameservice_opts).add(log_opts).add(registry_opts).add(rifd_opts).add(adifd_opts);
+    file_opts.add(database_opts).add(nameservice_opts).add(log_opts).add(registry_opts).add(rifd_opts).add(adifd_opts).add(logd_opts);
 
     Config::Manager cfm = Config::ConfigManager::instance_ref();
     try {
@@ -162,10 +196,10 @@ int main(int argc, char** argv) {
       cfm.printAvailableOptions(std::cout);
       return 0;
     }
-   
+
     if (cfm.isVersion()) {
-      std::cout << PACKAGE_STRING 
-                << " (built " << __DATE__ << " " << __TIME__ << ")" 
+      std::cout << PACKAGE_STRING
+                << " (built " << __DATE__ << " " << __TIME__ << ")"
                 << std::endl;
       return 0;
     }
@@ -181,10 +215,11 @@ int main(int argc, char** argv) {
     /* setting up logger */
     Logging::Log::Level log_level = static_cast<Logging::Log::Level>(cfg.get<unsigned>("log.level"));
     Logging::Log::Type  log_type  = static_cast<Logging::Log::Type>(cfg.get<unsigned>("log.type"));
-    boost::any param;          
+    boost::any param;
     if (log_type == Logging::Log::LT_FILE) {
       param = cfg.get<std::string>("log.file");
     }
+
     if (log_type == Logging::Log::LT_SYSLOG) {
       param = cfg.get<unsigned>("log.syslog_facility");
     }
@@ -207,12 +242,12 @@ int main(int argc, char** argv) {
     unsigned    dbtime = cfg.get<unsigned>("database.timeout");
     std::string conn_info = str(boost::format("%1%port=%2% dbname=%3% user=%4% %5%connect_timeout=%6%")
                                               % dbhost
-                                              % dbport 
+                                              % dbport
                                               % dbname
                                               % dbuser
                                               % dbpass
                                               % dbtime);
-                              
+
     LOGGER(PACKAGE).info(boost::format("database connection set to: `%1%'")
                                         % conn_info);
 
@@ -223,6 +258,7 @@ int main(int argc, char** argv) {
   try {
     orb_to_shutdown = orb;
     signal(SIGINT, sigint_handler);
+    signal(SIGTERM, sigterm_handler);
 
     /* obtain a reference to the root POA */
     CORBA::Object_var obj = orb->resolve_initial_references("RootPOA");
@@ -238,15 +274,18 @@ int main(int argc, char** argv) {
 
     /* configure CORBA nameservice */
     std::string nameservice = str(boost::format("%1%:%2%")
-                                                % cfg.get<std::string>("nameservice.host") 
+                                                % cfg.get<std::string>("nameservice.host")
                                                 % cfg.get<unsigned>("nameservice.port"));
 
-    LOGGER(PACKAGE).info(boost::format("nameservice host set to: `%1%' context used: `%2%'") 
+    LOGGER(PACKAGE).info(boost::format("nameservice host set to: `%1%' context used: `%2%'")
                                        % nameservice
                                        % cfg.get<std::string>("nameservice.context"));
     NameService ns(orb, nameservice, cfg.get<std::string>("nameservice.context"));
 
     /* register specific object at nameservice */
+
+    Database::Manager::init(new Database::ConnectionFactory(conn_info));
+
 #ifdef ADIF
     PortableServer::ObjectId_var adminObjectId = PortableServer::string_to_ObjectId("Admin");
     ccReg_Admin_i* myccReg_Admin_i = new ccReg_Admin_i(conn_info, &ns, cfg);
@@ -272,14 +311,14 @@ int main(int argc, char** argv) {
     /* create session use values from config */
     unsigned rifd_session_max     = cfg.get<unsigned>("rifd.session_max");
     unsigned rifd_session_timeout = cfg.get<unsigned>("rifd.session_timeout");
-    LOGGER(PACKAGE).info(boost::format("sessions max: %1%; timeout: %2%") 
+    LOGGER(PACKAGE).info(boost::format("sessions max: %1%; timeout: %2%")
                                         % rifd_session_max
                                         % rifd_session_timeout);
     myccReg_EPP_i->CreateSession(rifd_session_max, rifd_session_timeout);
 
     ccReg::timestamp_var ts;
     char *version = myccReg_EPP_i->version(ts);
-    LOGGER(PACKAGE).info(boost::format("RIFD server version: %1% (%2%)") 
+    LOGGER(PACKAGE).info(boost::format("RIFD server version: %1% (%2%)")
                                           % version
                                           % ts);
 
@@ -292,13 +331,13 @@ int main(int argc, char** argv) {
     }
 
     /* load error messages to memory */
-    if (myccReg_EPP_i->LoadErrorMessages() <= 0) { 
+    if (myccReg_EPP_i->LoadErrorMessages() <= 0) {
       LOGGER(PACKAGE).alert("database error: load error messages");
       exit(-6);
     }
 
     /* loead reason messages to memory */
-    if (myccReg_EPP_i->LoadReasonMessages() <= 0) { 
+    if (myccReg_EPP_i->LoadReasonMessages() <= 0) {
       LOGGER(PACKAGE).alert("database error: load reason messages" );
       exit(-7);
     }
@@ -309,18 +348,62 @@ int main(int argc, char** argv) {
     ns.bind("EPP", myccReg_EPP_i->_this());
 #endif
 
-    /** 
-     * obtain a POAManager, and tell the POA to start accepting
-     * requests on its objects
-     */
+#ifdef LOGD
+    PortableServer::ObjectId_var loggerObjectId =
+    PortableServer::string_to_ObjectId("Logger");
+    ccReg_Log_i* myccReg_Log_i;
+
+	if (cfg.hasOpt("logd.monitoring_hosts_file")) {
+		myccReg_Log_i = new ccReg_Log_i(conn_info, cfg.get<std::string>("logd.monitoring_hosts_file"));
+	} else {
+		myccReg_Log_i = new ccReg_Log_i(conn_info);
+	}
+
+    poa->activate_object_with_id(loggerObjectId,myccReg_Log_i);
+    CORBA::Object_var loggerObj = myccReg_Log_i->_this();
+    myccReg_Log_i->_remove_ref();
+    ns.bind("Logger",loggerObj);
+#endif
+
+    // Obtain a POAManager, and tell the POA to start accepting
+    // requests on its objects.
+
     PortableServer::POAManager_var pman = poa->the_POAManager();
     poa_manager = pman;
     // signal(SIGHUP, sighup_handler);
     pman->activate();
     LOGGER(PACKAGE).notice(boost::format("starting server %1%") % argv[0]);
 
-    /* disconnect from terminal */
-    setsid();
+    try
+    {
+  	  if (cfg.hasOpt("daemonize"))
+	  {
+	    daemonize();
+	  }
+	  else
+	  {
+        /* disconnect from terminal */
+        setsid();
+	  }
+
+      /* manage pidfile */
+      if(cfg.hasOpt("pidfile"))
+      {
+        const std::string & pidfilename =  cfg.get<std::string>("pidfile");
+        PidFileNS::PidFileS::writePid(getpid(), pidfilename);
+      }
+    }
+    catch (std::exception& e)
+    {
+      std::cerr << "std::exception: " << e.what() << std::endl;
+      exit (-1);
+    }
+    catch (...)
+    {
+      std::cerr << "nonstd exception." << std::endl;
+      exit (-1);
+    }
+
     orb->run();
     orb->destroy();
   }
@@ -337,8 +420,7 @@ int main(int argc, char** argv) {
   }
   catch (CORBA::Exception& ex) {
     LOGGER(PACKAGE).error(boost::format("CORBA exception: %1%") % ex._name());
-  }
-  catch (omniORB::fatalException& fe) {
+  } catch (omniORB::fatalException& fe) {
     LOGGER(PACKAGE).error(boost::format("omniORB fatal exception: %1% line: %2% mesg: %3%")
                                          % fe.file()
                                          % fe.line()
@@ -357,9 +439,15 @@ int main(int argc, char** argv) {
     exit(-10);
   }
 #endif
-#ifdef PIFD 
+#ifdef PIFD
   catch (ccReg_Admin_i::DB_CONNECT_FAILED&) {
     LOGGER(PACKAGE).error("database: connection error");
+    exit(-10);
+  }
+#endif
+#ifdef LOGD
+  catch (ccReg_Log_i::DB_CONNECT_FAILED&) {
+    std::cerr << "Error: can't connect to database." << std::endl;
     exit(-10);
   }
 #endif

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -55,18 +55,12 @@
 #define DOMAIN_LIST_HELP_NAME           "domain_list_help"
 #define DOMAIN_LIST_HELP_NAME_DESC      "help on domain list"
 
-#define DOMAIN_EXP_DATE_FROM_NAME       "exp_date_from"
-#define DOMAIN_EXP_DATE_FROM_NAME_DESC  "expiration date from (date format: \"YYYY-MM-DD\")"
-#define DOMAIN_EXP_DATE_TO_NAME         "exp_date_to"
-#define DOMAIN_EXP_DATE_TO_NAME_DESC    "expiration date to (date format: \"YYYY-MM-DD\")"
-#define DOMAIN_OUT_DATE_FROM_NAME       "out_zone_date_from"
-#define DOMAIN_OUT_DATE_FROM_NAME_DESC  "out zone date from (date format: \"YYYY-MM-DD\")"
-#define DOMAIN_OUT_DATE_TO_NAME         "out_zone_date_to"
-#define DOMAIN_OUT_DATE_TO_NAME_DESC    "out zone date to (date format: \"YYYY-MM-DD\")"
-#define DOMAIN_CANC_DATE_FROM_NAME      "cancel_date_from"
-#define DOMAIN_CANC_DATE_FROM_NAME_DESC "cancel date from (date format: \"YYYY-MM-DD\")"
-#define DOMAIN_CANC_DATE_TO_NAME        "cancel_date_to"
-#define DOMAIN_CANC_DATE_TO_NAME_DESC   "cancel date to (date format: \"YYYY-MM-DD\")"
+#define DOMAIN_EXP_DATE_NAME            "exp_date"
+#define DOMAIN_EXP_DATE_NAME_DESC       "expiration date (type ``./fred-admin --help_dates'' for further date&time information)"
+#define DOMAIN_OUT_DATE_NAME            "out_zone_date"
+#define DOMAIN_OUT_DATE_NAME_DESC       "out zone date (type ``./fred-admin --help_dates'' for further date&time information)"
+#define DOMAIN_CANC_DATE_NAME           "cancel_date"
+#define DOMAIN_CANC_DATE_NAME_DESC      "cancel date (type ``./fred-admin --help_dates'' for further date&time information)"
 
 namespace Admin {
 
@@ -77,36 +71,40 @@ private:
     ccReg::EPP_var m_epp;
     Config::Conf m_conf;
 
-    boost::program_options::options_description *m_options;
-    boost::program_options::options_description *m_optionsInvis;
+    static const struct options m_opts[];
 public:
-    DomainClient();
-    DomainClient(std::string connstring,
-            std::string nsAddr);
-    ~DomainClient();
-    void init(std::string connstring,
-            std::string nsAddr,
-            Config::Conf &conf);
+    DomainClient()
+    { }
+    DomainClient(
+            const std::string &connstring,
+            const std::string &nsAddr,
+            const Config::Conf &conf):
+        BaseClient(connstring, nsAddr),
+        m_conf(conf)
+    {
+        m_db.OpenDatabase(connstring.c_str());
+    }
 
-    boost::program_options::options_description *getVisibleOptions() const;
-    boost::program_options::options_description *getInvisibleOptions() const;
-    void show_opts() const;
+    ~DomainClient()
+    { }
 
+    static const struct options *getOpts();
+    static int getOptsCount();
+
+    void runMethod();
+
+    void show_opts();
     void domain_list();
-
-    int domain_list_plain();
-
-    int domain_create();
-
-    int domain_update();
-
-    int domain_info();
+    void domain_list_plain();
+    void domain_create();
+    void domain_update();
+    void domain_info();
 
     void domain_list_help();
     void domain_update_help();
     void domain_create_help();
     void list_help();
-};
+}; // class DomainClient
 
 } // namespace Admin;
 

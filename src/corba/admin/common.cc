@@ -39,10 +39,11 @@ formatTime(ptime p, bool date, bool _to_local)
 }
 
 std::string
-formatMoney(Register::Invoicing::Money m)
+formatMoney(Database::Money m)
 {
   std::stringstream buf;
-  buf << m / 100 << "." << std::setw(2) << std::setfill('0') << m % 100;
+  buf << m;
+  // buf << m / 100 << "." << std::setw(2) << std::setfill('0') << m % 100;
   return buf.str();
 }
 
@@ -94,7 +95,7 @@ makeCorbaTime(ptime p, bool _to_local)
 }
 
 ccReg::DateType 
-makeCorbaDate(date p) {
+makeCorbaDate(const date& p) {
   ccReg::DateType d;
   if (p.is_special()) {
     d.day = 0;

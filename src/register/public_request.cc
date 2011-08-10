@@ -62,13 +62,13 @@ ObjectType2Str(ObjectType type)
 
 
 static bool checkState(Database::ID objectId, 
-                       unsigned state, 
-                       Database::Connection *c) {
+                       unsigned state) {
   Database::Query sql;
   sql.buffer() << "SELECT COUNT(*) FROM object_state WHERE state_id=" 
                << state << " AND object_id=" << objectId 
                << " AND valid_to ISNULL";
-  Database::Result r_objects = c->exec(sql);
+  Database::Connection conn = Database::Manager::acquire();
+  Database::Result r_objects = conn.exec(sql);
   int res = (r_objects.size() == 0 ? 0 : (int)r_objects[0][0]);
   return res > 0;
 }
@@ -76,18 +76,19 @@ static bool checkState(Database::ID objectId,
 // static Database::ID insertNewStateRequest(
 static void insertNewStateRequest(Database::ID blockRequestID, 
                                   Database::ID objectId,
-                                  unsigned state, Database::Connection *c) {
+                                  unsigned state) {
   Database::InsertQuery osr("object_state_request");
   osr.add("object_id", objectId);
   osr.add("state_id", state);  
-  c->exec(osr);
+  Database::Connection conn = Database::Manager::acquire();
+  conn.exec(osr);
   Database::Query prsrm;
   prsrm.buffer() << "INSERT INTO public_request_state_request_map ("
                  << " state_request_id, block_request_id "
                  << ") VALUES ( " 
                  << "CURRVAL('object_state_request_id_seq')," 
                  << blockRequestID << ")";
-  c->exec(prsrm);               
+  conn.exec(prsrm);               
 }
 
 /** check if already blocked request interfere with requested states
@@ -97,8 +98,7 @@ static void insertNewStateRequest(Database::ID blockRequestID,
 static bool queryBlockRequest(Database::ID objectId, 
                               Database::ID blockRequestID, 
                               const std::string& states, 
-                              bool unblock, 
-                              Database::Connection *c) {
+                              bool unblock) {
   // number of states in csv list of states
   unsigned numStates = count(states.begin(),states.end(),',') + 1; 
   
@@ -113,7 +113,8 @@ static bool queryBlockRequest(Database::ID objectId,
                << "WHERE osr.object_id=" << objectId << " "                 
                << "ORDER BY st ASC ";
 
-  Database::Result result = c->exec(sql);
+  Database::Connection conn = Database::Manager::acquire();
+  Database::Result result = conn.exec(sql);
   // in case of unblocking, it's error when no block request states are found
   if (!result.size() && unblock) 
     return false;
@@ -136,13 +137,13 @@ static bool queryBlockRequest(Database::ID objectId,
     sql1.buffer() << "UPDATE public_request_state_request_map "
                   << "SET block_request_id=" << blockRequestID << " "  
                   << "WHERE state_request_id=" << stateRequestID;
-    c->exec(sql1);
+    conn.exec(sql1);
 
     Database::Query sql2;
     sql2.buffer() << "UPDATE object_state_request "
                   << "SET canceled=CURRENT_TIMESTAMP "
                   << "WHERE id= " << stateRequestID;
-    c->exec(sql2);  
+    conn.exec(sql2);  
   }
   return true;
 }
@@ -169,7 +170,6 @@ private:
   
 protected:
   Manager* man_;
-  Database::Connection* conn_;
   
 public:
   PublicRequestImpl() : CommonObjectImpl(0), status_(PRS_NEW) {
@@ -199,9 +199,8 @@ public:
               registrar_name_(_registrar_name), registrar_url_(_registrar_url) {
   }
   
-  void setManager(Manager* _man, Database::Connection* _conn) {
+  void setManager(Manager* _man) {
     man_ = _man;
-    conn_ = _conn;
   }
   
   void init(Database::Row::Iterator& _it) {
@@ -220,13 +219,14 @@ public:
     registrar_url_    = (std::string)*(++_it);
   }
   
-  virtual void save(Database::Connection *_conn) {
+  virtual void save() {
     TRACE("[CALL] Register::Request::RequestImpl::save()");
     if (objects_.empty()) {
       LOGGER(PACKAGE).error("can't create or update request with no object specified!");
       throw;
     }
 
+    Database::Connection conn = Database::Manager::acquire();
     if (id_) {
       Database::Query update_request;
       update_request.buffer() << "UPDATE public_request SET "
@@ -235,7 +235,7 @@ public:
                               << "answer_email_id = " << Database::Value(answer_email_id_) << " "
                               << "WHERE id = " << id_;
       try {
-        _conn->exec(update_request);
+        conn.exec(update_request);
   
         LOGGER(PACKAGE).info(boost::format("request id='%1%' updated successfully -- %2%") % 
                           id_ % (status_ == PRS_INVALID ? "invalidated" : "answered"));
@@ -262,7 +262,7 @@ public:
       insert_request.add("registrar_id", registrar_id_);
         
       try {
-        Database::Transaction transaction(*_conn);
+        Database::Transaction transaction(conn);
         transaction.exec(insert_request);
 
         std::string objects_str = "";
@@ -273,11 +273,11 @@ public:
                                  << "(request_id, object_id) VALUES ("
                                  << "currval('public_request_id_seq')" << ", "
                                  << it->id << ")";
-          transaction.exec(insert_object);
+          conn.exec(insert_object);
           objects_str += sqlize(it->id) + (it == objects_.end() - 1 ? "" : " ");
         }
         
-        Database::Sequence pp_seq(*_conn, "public_request_id_seq");
+        Database::Sequence pp_seq(conn, "public_request_id_seq");
         id_ = pp_seq.getCurrent();
         
         transaction.commit();
@@ -432,7 +432,8 @@ public:
           break;
       };
 
-      Database::Result r_emails = conn_->exec(sql);
+      Database::Connection conn = Database::Manager::acquire();
+      Database::Result r_emails = conn.exec(sql);
       for (Database::Result::Iterator it = r_emails.begin(); it != r_emails.end(); ++it) {
         emails += (std::string)(*it)[0] + (it == r_emails.end() - 1 ? "" : " ");
       }
@@ -469,7 +470,6 @@ public:
 
   /// process request (or just close in case of invalid flag)
   virtual void process(bool invalid, bool check) throw (REQUEST_BLOCKED, Mailer::NOT_SEND, Database::Exception) {
-    Database::Transaction transaction(*conn_); 
 
     if (invalid) {
       status_ = PRS_INVALID;
@@ -480,8 +480,7 @@ public:
       answer_email_id_ = sendEmail();
     }
     resolve_time_ = ptime(boost::posix_time::second_clock::local_time());
-    save(conn_);
-    transaction.commit();
+    save();
   }
 
   /// type for PDF letter template in case there is no template
@@ -508,7 +507,7 @@ public:
   virtual bool check() const {
     bool res = true;
     for (unsigned i=0; res && i<getObjectSize(); i++)
-     res = !checkState(getObject(i).id,SERVER_TRANSFER_PROHIBITED,conn_);
+     res = !checkState(getObject(i).id,SERVER_TRANSFER_PROHIBITED);
     return res;
   }
   virtual void processAction(bool _check) throw (REQUEST_BLOCKED, Database::Exception) {
@@ -521,7 +520,8 @@ public:
     sql.buffer() << "SELECT o.AuthInfoPw "
                  << "FROM object o "
                  << "WHERE o.id=" << getObject(0).id;
-    Database::Result res = conn_->exec(sql);
+    Database::Connection conn = Database::Manager::acquire();
+    Database::Result res = conn.exec(sql);
     if (!res.size()) {
       return "";
     }
@@ -634,8 +634,8 @@ public:
   virtual bool check() const {
     bool res = true;
     for (unsigned i=0; res && i<getObjectSize(); i++)
-     res = !checkState(getObject(i).id,SERVER_UPDATE_PROHIBITED,conn_) &&
-      queryBlockRequest(getObject(i).id,0,"3",false,conn_);
+     res = !checkState(getObject(i).id,SERVER_UPDATE_PROHIBITED) &&
+      queryBlockRequest(getObject(i).id,0,"3",false);
     return res;    
   }
   virtual short blockType() const {
@@ -645,15 +645,16 @@ public:
   	return 2;
   }
 	virtual void processAction(bool check) throw (REQUEST_BLOCKED, Database::Exception){
+    Database::Connection conn = Database::Manager::acquire();
     for (unsigned i = 0; i < getObjectSize(); i++) {
-    	if (!checkState(getObject(i).id, SERVER_UPDATE_PROHIBITED, conn_) &&
-    	      queryBlockRequest(getObject(i).id, getId(), "3", false, conn_)) {
-    		insertNewStateRequest(getId(),getObject(i).id, 3, conn_);
+    	if (!checkState(getObject(i).id, SERVER_UPDATE_PROHIBITED) &&
+    	      queryBlockRequest(getObject(i).id, getId(), "3", false)) {
+    		insertNewStateRequest(getId(),getObject(i).id, 3);
     	} else throw REQUEST_BLOCKED();
 
       Database::Query q;
       q.buffer() << "SELECT update_object_states(" << getObject(i).id << ")";      
-      conn_->exec(q);
+      conn.exec(q);
     }
 	}
 };
@@ -663,8 +664,8 @@ public:
   virtual bool check() const {
     bool res = true;
     for (unsigned i = 0; res && i < getObjectSize(); i++)
-     res = !checkState(getObject(i).id, SERVER_UPDATE_PROHIBITED, conn_) &&
-      queryBlockRequest(getObject(i).id, 0, "3,4", false, conn_);
+     res = !checkState(getObject(i).id, SERVER_UPDATE_PROHIBITED) &&
+      queryBlockRequest(getObject(i).id, 0, "3,4", false);
     return res;    
   }
   virtual short blockType() const {
@@ -674,15 +675,16 @@ public:
   	return 1;
   }
 	virtual void processAction(bool check) throw (REQUEST_BLOCKED, Database::Exception){
+    Database::Connection conn = Database::Manager::acquire();
     for (unsigned i = 0; i < getObjectSize(); i++) {
-    	if (!checkState(getObject(i).id, SERVER_UPDATE_PROHIBITED, conn_) &&
-    	      queryBlockRequest(getObject(i).id, getId(), "3,4", false, conn_)) {
-    		insertNewStateRequest(getId(),getObject(i).id, SERVER_TRANSFER_PROHIBITED, conn_);
-    		insertNewStateRequest(getId(),getObject(i).id, SERVER_UPDATE_PROHIBITED, conn_);
+    	if (!checkState(getObject(i).id, SERVER_UPDATE_PROHIBITED) &&
+    	      queryBlockRequest(getObject(i).id, getId(), "3,4", false)) {
+    		insertNewStateRequest(getId(),getObject(i).id, SERVER_TRANSFER_PROHIBITED);
+    		insertNewStateRequest(getId(),getObject(i).id, SERVER_UPDATE_PROHIBITED);
     	} else throw REQUEST_BLOCKED();
       Database::Query q;
       q.buffer() << "SELECT update_object_states(" << getObject(i).id << ")";      
-      conn_->exec(q);
+      conn.exec(q);
     }
 	}
 };
@@ -692,7 +694,7 @@ public:
   virtual bool check() const {
     bool res = true;
     for (unsigned i=0; res && i<getObjectSize(); i++)
-     res = queryBlockRequest(getObject(i).id,0,"3",true,conn_);
+     res = queryBlockRequest(getObject(i).id,0,"3",true);
     return res;    
   }
   virtual short blockType() const {
@@ -702,12 +704,13 @@ public:
   	return 2;
   }
 	virtual void processAction(bool check) throw (REQUEST_BLOCKED, Database::Exception){
+    Database::Connection conn = Database::Manager::acquire();
     for (unsigned i = 0; i < getObjectSize(); i++) {
-    	if (!queryBlockRequest(getObject(i).id, getId(), "3", true, conn_))
+    	if (!queryBlockRequest(getObject(i).id, getId(), "3", true))
         throw REQUEST_BLOCKED();
       Database::Query q;
       q.buffer() << "SELECT update_object_states(" << getObject(i).id << ")";      
-      conn_->exec(q);
+      conn.exec(q);
     }
 	}
 };
@@ -717,7 +720,7 @@ public:
   virtual bool check() const {
     bool res = true;
     for (unsigned i = 0; res && i < getObjectSize(); i++)
-     res = queryBlockRequest(getObject(i).id, 0, "3,4", true, conn_);
+     res = queryBlockRequest(getObject(i).id, 0, "3,4", true);
     return res;    
   }
   virtual short blockType() const {
@@ -727,12 +730,13 @@ public:
   	return 1;
   }
 	virtual void processAction(bool check) throw (REQUEST_BLOCKED, Database::Exception){
+    Database::Connection conn = Database::Manager::acquire();
     for (unsigned i = 0; i < getObjectSize(); i++) {
-    	if (!queryBlockRequest(getObject(i).id, getId(), "3,4", true, conn_))
+    	if (!queryBlockRequest(getObject(i).id, getId(), "3,4", true))
         throw REQUEST_BLOCKED();
       Database::Query q;
       q.buffer() << "SELECT update_object_states(" << getObject(i).id << ")";      
-      conn_->exec(q);
+      conn.exec(q);
     }
 	}
 };
@@ -776,7 +780,7 @@ private:
   Manager *manager_;
   
 public:
-  ListImpl(Database::Connection *_conn, Manager *_manager) : CommonListImpl(_conn),
+  ListImpl(Manager *_manager) : CommonListImpl(),
                                                              manager_(_manager) {
   }
   
@@ -823,6 +827,7 @@ public:
       return;
     }
 
+    id_query.order_by() << "id DESC";
     id_query.limit(load_limit_);
     _filter.serialize(id_query);
     
@@ -835,23 +840,22 @@ public:
     object_info_query.select() << "t_1.request_type, t_1.id, t_1.epp_action_id, "
                                << "t_1.create_time, t_1.status, t_1.resolve_time, "
                                << "t_1.reason, t_1.email_to_answer, t_1.answer_email_id, "
-                               << "t_2.servertrid, t_4.id, t_4.handle, t_4.name, t_4.url";
+                               << "'ccReg-' || to_char(t_1.epp_action_id, 'FM0999999999'), t_4.id, t_4.handle, t_4.name, t_4.url";
     object_info_query.from() << getTempTableName() << " tmp " 
                              << "JOIN public_request t_1 ON (t_1.id = tmp.id) "
-                             << "LEFT JOIN action t_2 ON (t_1.epp_action_id = t_2.id) "
-                             << "LEFT JOIN login t_3 ON (t_2.clientid = t_3.id) "
-                             << "LEFT JOIN registrar t_4 ON (t_3.registrarid = t_4.id) ";
+                             << "LEFT JOIN registrar t_4 ON (t_1.registrar_id = t_4.id) ";
     object_info_query.order_by() << "t_1.id";
     
+    Database::Connection conn = Database::Manager::acquire();
     try {
       fillTempTable(tmp_table_query);
       
-      Database::Result r_info = conn_->exec(object_info_query);
+      Database::Result r_info = conn.exec(object_info_query);
       for (Database::Result::Iterator it = r_info.begin(); it != r_info.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
         Register::PublicRequest::Type type = (Register::PublicRequest::Type)(int)*col;
-        PublicRequest* request = manager_->createRequest(type, conn_);
+        PublicRequest* request = manager_->createRequest(type);
         request->init(++col);
         data_.push_back(request);
       }
@@ -871,7 +875,7 @@ public:
                            << "JOIN object_registry t_2 ON (t_1.object_id = t_2.id)";
       objects_query.order_by() << "tmp.id";
 
-      Database::Result r_objects = conn_->exec(objects_query);
+      Database::Result r_objects = conn.exec(objects_query);
       for (Database::Result::Iterator it = r_objects.begin(); it != r_objects.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
@@ -928,7 +932,6 @@ public:
 
 class ManagerImpl : virtual public Manager {
 private:
-  Database::Manager *db_manager_;
   Domain::Manager   *domain_manager_;
   Contact::Manager  *contact_manager_;
   NSSet::Manager    *nsset_manager_;
@@ -936,28 +939,23 @@ private:
   Mailer::Manager   *mailer_manager_;
   Document::Manager *doc_manager_;
   
-  Database::Connection *conn_;
     
 public:
-  ManagerImpl(Database::Manager *_db_manager,
-              Domain::Manager   *_domain_manager,
+  ManagerImpl(Domain::Manager   *_domain_manager,
               Contact::Manager  *_contact_manager,
               NSSet::Manager    *_nsset_manager,
               KeySet::Manager   *_keyset_manager,
               Mailer::Manager   *_mailer_manager,
               Document::Manager *_doc_manager) :
-              db_manager_(_db_manager),
               domain_manager_(_domain_manager),
               contact_manager_(_contact_manager),
               nsset_manager_(_nsset_manager),
               keyset_manager_(_keyset_manager),
               mailer_manager_(_mailer_manager),
-              doc_manager_(_doc_manager),
-              conn_(db_manager_->getConnection()) {
+              doc_manager_(_doc_manager) {
   }
 
   virtual ~ManagerImpl() {
-    boost::checked_delete<Database::Connection>(conn_);
   }
   
   virtual Mailer::Manager* getMailerManager() const {
@@ -973,7 +971,7 @@ public:
      * List destruction.
      */
     // return new ListImpl(db_manager_->getConnection(), (Manager *)this);
-    return new ListImpl(conn_, (Manager *)this);
+    return new ListImpl((Manager *)this);
   }
   
   virtual void getPdf(Database::ID _id, 
@@ -1016,10 +1014,10 @@ public:
   }
   
   virtual PublicRequest* createRequest(
-    Type _type, Database::Connection* _conn
+    Type _type
   ) const throw (NOT_FOUND, SQL_ERROR, Mailer::NOT_SEND, REQUEST_BLOCKED) {
     // TRACE("[CALL] Register::Request::Manager::createRequest()");
-    PublicRequestImpl *request;
+    PublicRequestImpl *request = 0;
     switch(_type) {
       case PRT_AUTHINFO_AUTO_RIF :
         request = new AuthInfoRequestEPPImpl(); break;
@@ -1047,7 +1045,7 @@ public:
       	request = new UnBlockUpdateRequestPIFPostImpl(); break;
     }
     request->setType(_type);
-    request->setManager((Manager *)this,_conn);
+    request->setManager((Manager *)this);
     return request;
   }
   
@@ -1076,8 +1074,7 @@ public:
   
 };
 
-Manager* Manager::create(Database::Manager  *_db_manager,
-                         Domain::Manager    *_domain_manager,
+Manager* Manager::create(Domain::Manager    *_domain_manager,
                          Contact::Manager   *_contact_manager,
                          NSSet::Manager     *_nsset_manager,
                          KeySet::Manager    *_keyset_manager,
@@ -1086,7 +1083,6 @@ Manager* Manager::create(Database::Manager  *_db_manager,
     
     TRACE("[CALL] Register::Request::Manager::create()");
     return new ManagerImpl(
-      _db_manager,
       _domain_manager,
       _contact_manager, 
       _nsset_manager,

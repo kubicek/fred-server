@@ -32,6 +32,8 @@
 #include <corba/ccReg.hh>
 #include "epp_impl.h"
 
+#include "corba/connection_releaser.h"
+
 #include "config.h"
 
 // database functions
@@ -57,6 +59,7 @@
 #include "register/keyset.h"
 #include "register/info_buffer.h"
 #include "register/poll.h"
+#include "register/invoice.h"
 #include <memory>
 #include "tech_check.h"
 
@@ -66,6 +69,7 @@
 // logger
 #include "log/logger.h"
 #include "log/context.h"
+
 
 #define FLAG_serverDeleteProhibited 1
 #define FLAG_serverRenewProhibited 2
@@ -97,15 +101,15 @@ static bool testObjectHasState(
   std::stringstream sql;
   sql << "SELECT COUNT(*) FROM object_state " << "WHERE object_id="
       << object_id << " AND state_id=" << state_id << " AND valid_to ISNULL";
+  DBSharedPtr  db_freeselect_guard = DBFreeSelectPtr(db);
   if (!db->ExecSelect(sql.str().c_str()))
     throw Register::SQL_ERROR();
   returnState = atoi(db->GetFieldValue(0, 0));
-  db->FreeSelect();
   return returnState;
 }
 
 
-/* HACK - for disable notification when delete commands called through cli_admin 
+/* HACK - for disable notification when delete commands called through cli_admin
  * Ticket #1622
  */
 static bool disableNotification(DB *db, int _reg_id, const char* _cltrid)
@@ -113,13 +117,13 @@ static bool disableNotification(DB *db, int _reg_id, const char* _cltrid)
   LOGGER(PACKAGE).debug(boost::format("disable delete command notification check (registrator=%1% cltrid=%2%)")
                                       % _reg_id % _cltrid);
 
-  if (std::strcmp(_cltrid, "delete_contact")       != 0 && 
+  if (std::strcmp(_cltrid, "delete_contact")       != 0 &&
       std::strcmp(_cltrid, "delete_nsset")         != 0 &&
       std::strcmp(_cltrid, "delete_keyset")        != 0 &&
       std::strcmp(_cltrid, "delete_unpaid_zone_0") != 0 &&
       std::strcmp(_cltrid, "delete_unpaid_zone_1") != 0 &&
       std::strcmp(_cltrid, "delete_unpaid_zone_2") != 0 &&
-      std::strcmp(_cltrid, "delete_unpaid_zone_3") != 0) 
+      std::strcmp(_cltrid, "delete_unpaid_zone_3") != 0)
     return false;
 
   return db->GetRegistrarSystem(_reg_id);
@@ -136,6 +140,7 @@ class EPPAction
   int regID;
   int clientID;
   int code; ///< needed for destructor where Response is invalidated
+  EPPNotifier *notifier;
 public:
   struct ACTION_START_ERROR
   {
@@ -145,7 +150,8 @@ public:
     const char *xml, ParsedAction *paction = NULL
   ) throw (ccReg::EPP::EppError) :
     ret(new ccReg::Response()), errors(new ccReg::Errors()), epp(_epp),
-    regID(_epp->GetRegistrarID(_clientID)), clientID(_clientID)
+    regID(_epp->GetRegistrarID(_clientID)), clientID(_clientID),
+    notifier(0)
   {
     Logging::Context::push(str(boost::format("action-%1%") % action));
 
@@ -177,6 +183,9 @@ public:
   {
     db.QuitTransaction(code);
     db.EndAction(code);
+    if (notifier) {
+        notifier->Send();
+    }
     db.Disconnect();
 
     Logging::Context::pop();
@@ -245,7 +254,30 @@ public:
   {
     code = ret->code = _code;
   }
+  void setNotifier(EPPNotifier *_notifier)
+  {
+      notifier = _notifier;
+  }
 };
+
+/* Ticket #3197 - wrap/overload for function
+ * testObjectHasState(DB *db, Register::TID object_id, unsigned state_id)
+ * to test system registrar (should have no restriction)
+ */
+static bool testObjectHasState(EPPAction &action, Register::TID object_id,
+        unsigned state_id)
+{
+    DB *db = action.getDB();
+    if (!db) {
+        throw Register::SQL_ERROR();
+    }
+    if (db->GetRegistrarSystem(action.getRegistrar())) {
+        return 0;
+    }
+    else {
+        return testObjectHasState(db, object_id, state_id);
+    }
+}
 
 /// timestamp formatting function
 static std::string formatTime(
@@ -281,7 +313,7 @@ static long int getIdOfNSSet(
 {
   if (lock && !c.get<bool>("registry.lock_epp_commands")) lock = false;
   std::auto_ptr<Register::Zone::Manager>
-      zman(Register::Zone::Manager::create(db) );
+      zman(Register::Zone::Manager::create() );
   std::auto_ptr<Register::NSSet::Manager> man(Register::NSSet::Manager::create(
       db, zman.get(), c.get<bool>("registry.restricted_handles")) );
   Register::NSSet::Manager::CheckAvailType caType;
@@ -322,7 +354,7 @@ static long int getIdOfDomain(
 {
   if (lock && !c.get<bool>("registry.lock_epp_commands")) lock = false;
   std::auto_ptr<Register::Zone::Manager> zm(
-    Register::Zone::Manager::create(db)
+    Register::Zone::Manager::create()
   );
   std::auto_ptr<Register::Domain::Manager> dman(
     Register::Domain::Manager::create(db,zm.get())
@@ -348,7 +380,7 @@ static long int getIdOfDomain(
         ret = 0;
         break;
     }
-    const Register::Zone::Zone *z = zm->findZoneId(handle);
+    const Register::Zone::Zone *z = zm->findApplicableZone(handle);
     if (zone && z) *zone = z->getId();
   } catch (...) {}
   return ret;
@@ -383,7 +415,6 @@ ccReg_EPP_i::~ccReg_EPP_i()
   Logging::Context::clear();
   Logging::Context ctx("rifd");
 
-  delete CC;
   delete ReasonMsg;
   delete ErrorMsg;
   delete [] session;
@@ -437,6 +468,7 @@ void ccReg_EPP_i::CreateSession(
   }
 
 }
+
 // session manager
 bool ccReg_EPP_i::LoginSession(
   long loginID, int registrarID, int language)
@@ -564,26 +596,6 @@ int ccReg_EPP_i::GetRegistrarLang(
   return 0;
 }
 
-// test connection to database when server starting
-bool ccReg_EPP_i::TestDatabaseConnect(
-  const std::string& db)
-{
-  DB DBsql;
-
-  // connection info
-  database = db;
-
-  if (DBsql.OpenDatabase(database) ) {
-    LOG( NOTICE_LOG , "successfully  connect to DATABASE" );
-    DBsql.Disconnect();
-    return true;
-  } else {
-    LOG( ALERT_LOG , "can not connect to DATABASE" );
-    return false;
-  }
-
-}
-
 // Load table to memory for speed
 
 int ccReg_EPP_i::LoadReasonMessages()
@@ -673,14 +685,6 @@ short ccReg_EPP_i::SetErrorReason(
   return errCode;
 }
 
-short ccReg_EPP_i::SetReasonUnknowCC(
-  ccReg::Errors_var& err, const char *value, int lang)
-{
-  LOG( WARNING_LOG, "Reason: unknown country code: %s" , value );
-  return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::contact_cc, 1,
-  REASON_MSG_COUNTRY_NOTEXIST, lang);
-}
-
 short ccReg_EPP_i::SetReasonContactHandle(
   ccReg::Errors_var& err, const char *handle, int lang)
 {
@@ -726,298 +730,30 @@ short ccReg_EPP_i::SetReasonDomainFQDN(
   return 0;
 }
 
-short ccReg_EPP_i::SetReasonDomainNSSet(
-  ccReg::Errors_var& err, const char * nsset_handle, int nssetid, int lang)
-{
-
-  if (nssetid < 0) {
-    LOG( WARNING_LOG, "bad format of domain nsset  [%s]" , nsset_handle );
-    return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::domain_nsset, 1,
-    REASON_MSG_BAD_FORMAT_NSSET_HANDLE, lang);
-  } else if (nssetid == 0) {
-    LOG( WARNING_LOG, " domain nsset not exist [%s]" , nsset_handle );
-    return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::domain_nsset, 1,
-    REASON_MSG_NSSET_NOTEXIST, lang);
-  }
-
-  return 0;
-}
-
-short int
-ccReg_EPP_i::SetReasonDomainKeySet(
-        ccReg::Errors_var &err,
-        const char *keyset_handle,
-        int keysetid,
-        int lang)
-{
-    if (keysetid < 0) {
-        LOG(WARNING_LOG, "bad format of domain keyset [%s]", keyset_handle);
-        return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::domain_keyset,
-                1, REASON_MSG_BAD_FORMAT_KEYSET_HANDLE, lang);
-    } else if (keysetid == 0) {
-        LOG(WARNING_LOG, "domain keyset not exist [%s]", keyset_handle);
-        return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::domain_keyset,
-                1, REASON_MSG_KEYSET_NOTEXIST, lang);
-    }
-    return 0;
-}
-
-short ccReg_EPP_i::SetReasonDomainRegistrant(
-  ccReg::Errors_var& err, const char * contact_handle, int contactid, int lang)
-{
-
-  if (contactid < 0) {
-    LOG( WARNING_LOG, "bad format of registrant  [%s]" , contact_handle );
-    return SetErrorReason(err, COMMAND_PARAMETR_ERROR,
-        ccReg::domain_registrant, 1, REASON_MSG_BAD_FORMAT_CONTACT_HANDLE, lang);
-  } else if (contactid == 0) {
-    LOG( WARNING_LOG, " domain registrant not exist [%s]" , contact_handle );
-    return SetErrorReason(err, COMMAND_PARAMETR_ERROR,
-        ccReg::domain_registrant, 1, REASON_MSG_REGISTRANT_NOTEXIST, lang);
-  }
-
-  return 0;
-}
-
-short ccReg_EPP_i::SetReasonProtectedPeriod(
-  ccReg::Errors_var& err, const char *value, int lang, ccReg::ParamError param)
-{
-  LOG( WARNING_LOG, "object [%s] in history period" , value );
-  return SetErrorReason(err, COMMAND_PARAMETR_ERROR, param, 1,
-  REASON_MSG_PROTECTED_PERIOD, lang);
-}
-
-short ccReg_EPP_i::SetReasonContactMap(
-  ccReg::Errors_var& err, ccReg::ParamError paramCode, const char *handle,
-  int id, int lang, short position, bool tech_or_admin)
-{
-
-  if (id < 0) {
-    LOG( WARNING_LOG, "bad format of Contact %s" , (const char *) handle );
-    return SetErrorReason(err, COMMAND_PARAMETR_ERROR, paramCode, position +1,
-    REASON_MSG_BAD_FORMAT_CONTACT_HANDLE, lang);
-  } else if (id == 0) {
-    LOG( WARNING_LOG, "Contact %s not exist" , (const char *) handle );
-    if (tech_or_admin)
-      return SetErrorReason(err, COMMAND_PARAMETR_ERROR, paramCode, position,
-      REASON_MSG_TECH_NOTEXIST, lang);
-    else
-      return SetErrorReason(err, COMMAND_PARAMETR_ERROR, paramCode, position+1,
-      REASON_MSG_ADMIN_NOTEXIST, lang);
-  }
-
-  return 0;
-}
-
-short ccReg_EPP_i::SetReasonContactDuplicity(
-  ccReg::Errors_var& err, const char * handle, int lang, short position,
-  ccReg::ParamError paramCode)
-{
-  LOG( WARNING_LOG, "Contact [%s] duplicity " , (const char *) handle );
-  return SetErrorReason(err, COMMAND_PARAMETR_ERROR, paramCode, position,
-  REASON_MSG_DUPLICITY_CONTACT, lang);
-}
-
-short ccReg_EPP_i::SetReasonNSSetTech(
-  ccReg::Errors_var& err, const char * handle, int techID, int lang,
-  short position)
-{
-  return SetReasonContactMap(err, ccReg::nsset_tech, handle, techID, lang,
-      position, true);
-}
-
-short ccReg_EPP_i::SetReasonNSSetTechADD(
-  ccReg::Errors_var& err, const char * handle, int techID, int lang,
-  short position)
-{
-  return SetReasonContactMap(err, ccReg::nsset_tech_add, handle, techID, lang,
-      position, true);
-}
-
-short ccReg_EPP_i::SetReasonNSSetTechREM(
-  ccReg::Errors_var& err, const char * handle, int techID, int lang,
-  short position)
-{
-  return SetReasonContactMap(err, ccReg::nsset_tech_rem, handle, techID, lang,
-      position, true);
-}
-
-short int
-ccReg_EPP_i::SetReasonKeySetTech( ccReg::Errors_var &err, const char *handle, int techID, int lang, short int position)
-{
-    return SetReasonContactMap(err, ccReg::keyset_tech, handle, techID, lang, position, true);
-}
-
-short int
-ccReg_EPP_i::SetReasonKeySetTechADD( ccReg::Errors_var &err, const char *handle, int techID,
-        int lang, short int position)
-{
-    return SetReasonContactMap(err, ccReg::keyset_tech_add, handle, techID, lang, position, true);
-}
-
-short int
-ccReg_EPP_i::SetReasonKeySetTechREM( ccReg::Errors_var &err, const char *handle, int techID,
-        int lang, short int position)
-{
-    return SetReasonContactMap(err, ccReg::keyset_tech_rem, handle, techID, lang, position, true);
-}
-
-short ccReg_EPP_i::SetReasonDomainAdmin(
-  ccReg::Errors_var& err, const char * handle, int adminID, int lang,
-  short position)
-{
-  return SetReasonContactMap(err, ccReg::domain_admin, handle, adminID, lang,
-      position, false);
-}
-
-short ccReg_EPP_i::SetReasonDomainAdminADD(
-  ccReg::Errors_var& err, const char * handle, int adminID, int lang,
-  short position)
-{
-  return SetReasonContactMap(err, ccReg::domain_admin_add, handle, adminID,
-      lang, position, false);
-}
-
-short ccReg_EPP_i::SetReasonDomainAdminREM(
-  ccReg::Errors_var& err, const char * handle, int adminID, int lang,
-  short position)
-{
-  return SetReasonContactMap(err, ccReg::domain_admin_rem, handle, adminID,
-      lang, position, false);
-}
-
-short ccReg_EPP_i::SetReasonDomainTempCREM(
-  ccReg::Errors_var& err, const char * handle, int adminID, int lang,
-  short position)
-{
-  return SetReasonContactMap(err, ccReg::domain_tmpcontact, handle, adminID,
-      lang, position, false);
-}
-
-short ccReg_EPP_i::SetReasonNSSetTechExistMap(
-  ccReg::Errors_var& err, const char * handle, int lang, short position)
-{
-  LOG( WARNING_LOG, "Tech Contact [%s] exist in contact map table" , (const char *) handle );
-  return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::nsset_tech_add,
-      position +1, REASON_MSG_TECH_EXIST, lang);
-}
-
-short ccReg_EPP_i::SetReasonNSSetTechNotExistMap(
-  ccReg::Errors_var& err, const char * handle, int lang, short position)
-{
-  LOG( WARNING_LOG, "Tech Contact [%s] notexist in contact map table" , (const char *) handle );
-  return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::nsset_tech_rem,
-      position+1, REASON_MSG_TECH_NOTEXIST, lang);
-}
-
-short int
-ccReg_EPP_i::SetReasonKeySetTechExistMap(
-        ccReg::Errors_var &err,
-        const char *handle,
-        int lang,
-        short int position)
-{
-    LOG(WARNING_LOG, "Tech contact [%s] exist in contact map table",
-            (const char *)handle);
-    return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::keyset_tech_add,
-            position+1, REASON_MSG_TECH_EXIST, lang);
-}
-
-short int
-ccReg_EPP_i::SetReasonKeySetTechNotExistMap(
-        ccReg::Errors_var &err,
-        const char *handle,
-        int lang,
-        short int position)
-{
-    LOG(WARNING_LOG, "Tech contact [%s] does not exist in contact map table",
-            (const char *)handle);
-    return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::keyset_tech_rem,
-            position+1, REASON_MSG_TECH_NOTEXIST, lang);
-}
-
-short ccReg_EPP_i::SetReasonDomainAdminExistMap(
-  ccReg::Errors_var& err, const char * handle, int lang, short position)
-{
-  LOG( WARNING_LOG, "Admin Contact [%s] exist in contact map table" , (const char *) handle );
-  return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::domain_admin_add,
-      position+1, REASON_MSG_ADMIN_EXIST, lang);
-}
-
-short ccReg_EPP_i::SetReasonDomainAdminNotExistMap(
-  ccReg::Errors_var& err, const char * handle, int lang, short position)
-{
-  LOG( WARNING_LOG, "Admin Contact [%s] notexist in contact map table" , (const char *) handle );
-  return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::domain_admin_rem,
-      position+1, REASON_MSG_ADMIN_NOTEXIST, lang);
-}
-
-short ccReg_EPP_i::SetReasonDomainTempCNotExistMap(
-  ccReg::Errors_var& err, const char * handle, int lang, short position)
-{
-  LOG( WARNING_LOG, "Temp Contact [%s] notexist in contact map table" , (const char *) handle );
-  return SetErrorReason(err, COMMAND_PARAMETR_ERROR, ccReg::domain_tmpcontact,
-      position+1, REASON_MSG_ADMIN_NOTEXIST, lang);
-}
-
-short
-ccReg_EPP_i::SetReasonWrongRegistrar(
-        ccReg::Errors_var &err,
-        int registrarId,
-        int lang)
-{
-    return SetErrorReason(
-            err,
-            COMMAND_AUTOR_ERROR,
-            ccReg::registrar_autor,
-            0,
-            REASON_MSG_REGISTRAR_AUTOR,
-            lang);
-}
-
 // load country code table  enum_country from database
 int ccReg_EPP_i::LoadCountryCode()
 {
   Logging::Context::clear();
   Logging::Context ctx("rifd");
+  ConnectionReleaser releaser;
 
-  DB DBsql;
-  int i, rows;
-
-  if (DBsql.OpenDatabase(database) ) {
-    rows=0;
-    if (DBsql.ExecSelect("SELECT id FROM enum_country order by id;") ) {
-      rows = DBsql.GetSelectRows();
-      CC = new CountryCode( rows );
-      for (i = 0; i < rows; i ++)
-        CC->AddCode(DBsql.GetFieldValue(i, 0) );
-      DBsql.FreeSelect();
-    }
-
-    DBsql.Disconnect();
-  } else
-    return -1;
-
-  return rows;
+  try
+  {
+      CC.reset(new CountryCode);
+      CC->load();
+      return CC->GetNum();
+  }
+  catch(...)
+  {
+      return -1;
+  }
 }
 
 bool ccReg_EPP_i::TestCountryCode(
   const char *cc)
 {
-  LOG( NOTICE_LOG , "CCREG:: TestCountryCode  [%s]" , cc );
-
-  // if not country code
-  if (strlen(cc) == 0)
-    return true;
-  else {
-    if (strlen(cc) == 2) // must by two counry code
-    {
-      LOG( NOTICE_LOG , "TestCountryCode [%s]" , cc);
-      return CC->TestCountryCode(cc);
-    } else
-      return false;
-  }
-
+    LOG( NOTICE_LOG , "CCREG:: TestCountryCode  [%s]" , cc );
+    return CC->TestCountryCode(cc);
 }
 
 // get version of the server and actual time
@@ -1026,6 +762,7 @@ char* ccReg_EPP_i::version(
 {
   Logging::Context::clear();
   Logging::Context ctx("rifd");
+  ConnectionReleaser releaser;
 
   time_t t;
   char dateStr[MAX_DATE+1];
@@ -1214,6 +951,7 @@ ccReg_EPP_i::GetAllZonesIDs(
 {
     std::vector<int> ret;
     std::string query("SELECT id FROM zone;");
+    DBSharedPtr  db_freeselect_guard = DBFreeSelectPtr(db);
     if (!db->ExecSelect(query.c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve zones ids from the database");
         return ret;
@@ -1236,6 +974,7 @@ int ccReg_EPP_i::GetZoneExPeriodMin(
 {
     std::stringstream query;
     query << "SELECT ex_period_min FROM zone WHERE id=" << id << ";";
+    DBSharedPtr  db_freeselect_guard = DBFreeSelectPtr(db);
     if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("Cannot retrieve ``ex_period_min'' from the database");
         return 0;
@@ -1249,6 +988,7 @@ int ccReg_EPP_i::GetZoneExPeriodMax(
 {
     std::stringstream query;
     query << "SELECT ex_period_max FROM zone WHERE id=" << id << ";";
+    DBSharedPtr  db_freeselect_guard = DBFreeSelectPtr(db);
     if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("Cannot retrieve ``ex_period_max'' from the database");
         return 0;
@@ -1262,6 +1002,7 @@ int ccReg_EPP_i::GetZoneValPeriod(
 {
     std::stringstream query;
     query << "SELECT val_period FROM zone WHERE id=" << id << ";";
+    DBSharedPtr  db_freeselect_guard = DBFreeSelectPtr(db);
     if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("Cannot retrieve ``val_period'' from the database");
         return 0;
@@ -1275,6 +1016,7 @@ bool ccReg_EPP_i::GetZoneEnum(
 {
     std::stringstream query;
     query << "SELECT enum_zone FROM zone WHERE id=" << id << ";";
+    DBSharedPtr  db_freeselect_guard = DBFreeSelectPtr(db);
     if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve ``enum_zone'' from the database");
         return false;
@@ -1291,6 +1033,7 @@ int ccReg_EPP_i::GetZoneDotsMax(
 {
     std::stringstream query;
     query << "SELECT dots_max FROM zone WHERE id=" << id << ";";
+    DBSharedPtr  db_freeselect_guard = DBFreeSelectPtr(db);
     if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve ``dots_max'' from the database");
         return 0;
@@ -1298,17 +1041,18 @@ int ccReg_EPP_i::GetZoneDotsMax(
     return atoi(db->GetFieldValue(0, 0));
 }
 
-const char * ccReg_EPP_i::GetZoneFQDN(
+std::string ccReg_EPP_i::GetZoneFQDN(
   DB *db,
   int id)
 {
     std::stringstream query;
     query << "SELECT fqdn FROM zone WHERE id=" << id << ";";
+    DBSharedPtr  db_freeselect_guard = DBFreeSelectPtr(db);
     if (!db->ExecSelect(query.str().c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve ``fqdn'' from the database");
-        return "";
+        return std::string("");
     }
-    return db->GetFieldValue(0, 0);
+    return std::string(db->GetFieldValue(0, 0));
 }
 
 int ccReg_EPP_i::getZone(
@@ -1326,6 +1070,7 @@ int ccReg_EPP_i::getZone(
         << "SELECT id FROM zone WHERE lower(fqdn)=lower('"
         << domain_fqdn.substr(pos + 1, std::string::npos)
         << "');";
+    DBSharedPtr  db_freeselect_guard = DBFreeSelectPtr(db);
     if (!db->ExecSelect(zoneQuery.str().c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve zone id from the database");
         return 0;
@@ -1340,6 +1085,7 @@ int ccReg_EPP_i::getZoneMax(
   const char *fqdn)
 {
     std::string query("SELECT fqdn FROM zone ORDER BY length(fqdn) DESC");
+    DBSharedPtr  db_freeselect_guard = DBFreeSelectPtr(db);
     if (!db->ExecSelect(query.c_str())) {
         LOGGER(PACKAGE).error("cannot retrieve list of fqdn from the database");
         return 0;
@@ -1353,27 +1099,12 @@ int ccReg_EPP_i::getZoneMax(
         std::string zone(db->GetFieldValue(i, 0));
         int from = domain.length() - zone.length();
         if (from > 1) {
-            if (size_t idx = domain.find(zone, from) != std::string::npos) {
+            if (domain.find(zone, from) != std::string::npos) {
                 return from - 1;
             }
         }
     }
     return 0;
-}
-
-bool ccReg_EPP_i::testFQDN(
-  DB *db,
-  const char *fqdn)
-{
-  Logging::Context::clear();
-  Logging::Context ctx("rifd");
-
-  char FQDN[164];
-
-  if (getFQDN(db, FQDN, fqdn) > 0)
-    return true;
-  else
-    return false;
 }
 
 int ccReg_EPP_i::getFQDN(
@@ -1487,6 +1218,7 @@ void ccReg_EPP_i::sessionClosed(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   LOG( DEBUG_LOG , "SESSION CLOSED by clientID %ld, Calling SESSION LOGOUT", clientID );
   LogoutSession(clientID);
@@ -1512,6 +1244,7 @@ CORBA::Boolean ccReg_EPP_i::SaveOutXML(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("%1%") % svTRID));
+  ConnectionReleaser releaser;
 
   DB DBsql;
   int ok;
@@ -1557,6 +1290,7 @@ ccReg::Response* ccReg_EPP_i::GetTransaction(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   DB DBsql;
   ccReg::Response_var ret;
@@ -1648,6 +1382,7 @@ ccReg::Response* ccReg_EPP_i::PollAcknowledgement(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   LOG(
       NOTICE_LOG,
@@ -1711,6 +1446,7 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   LOG(
       NOTICE_LOG,
@@ -1865,8 +1601,9 @@ ccReg_EPP_i::ClientCredit(ccReg::ZoneCredit_out credit, CORBA::Long clientID,
         const char* clTRID, const char* XML)
 {
     Logging::Context::clear();
-    Logging::Context ctx("rifd");
+  Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     long price;
     unsigned int z, seq, zoneID;
@@ -1886,12 +1623,12 @@ ccReg_EPP_i::ClientCredit(ccReg::ZoneCredit_out credit, CORBA::Long clientID,
             zoneID = zones[z];
             // credit of the registrar
             price = action.getDB()->GetRegistrarCredit(action.getRegistrar(), zoneID);
-    
+
             //  return all not depend on            if( price >  0)
             {
                 credit->length(seq+1);
                 credit[seq].price = price;
-                credit[seq].zone_fqdn = CORBA::string_dup(GetZoneFQDN(action.getDB(), zoneID) );
+                credit[seq].zone_fqdn = CORBA::string_dup(GetZoneFQDN(action.getDB(), zoneID).c_str() );
                 seq++;
             }
         }
@@ -1929,8 +1666,9 @@ ccReg::Response *
 ccReg_EPP_i::ClientLogout(CORBA::Long clientID, const char *clTRID, const char* XML)
 {
     Logging::Context::clear();
-    Logging::Context ctx("rifd");
+  Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     int lang=0; // default
     short int code = 0;
@@ -1984,6 +1722,7 @@ ccReg::Response * ccReg_EPP_i::ClientLogin(
 {
   Logging::Context::clear();
   Logging::Context ctx("rifd");
+  ConnectionReleaser releaser;
 
   DB DBsql;
   int regID=0, id=0;
@@ -2112,8 +1851,8 @@ ccReg::Response * ccReg_EPP_i::ClientLogin(
  ***********************************************************************/
 
 ccReg::Response *
-ccReg_EPP_i::ObjectCheck(short act, const char * table, const char *fname, 
-        const ccReg::Check& chck, ccReg::CheckResp_out a, CORBA::Long clientID, 
+ccReg_EPP_i::ObjectCheck(short act, const char * table, const char *fname,
+        const ccReg::Check& chck, ccReg::CheckResp_out a, CORBA::Long clientID,
         const char* clTRID, const char* XML)
 {
     unsigned long i, len;
@@ -2242,7 +1981,7 @@ ccReg_EPP_i::ObjectCheck(short act, const char * table, const char *fname,
             case EPP_NSsetCheck:
 
                 try {
-                    std::auto_ptr<Register::Zone::Manager> zman( Register::Zone::Manager::create(action.getDB()) );
+                    std::auto_ptr<Register::Zone::Manager> zman( Register::Zone::Manager::create() );
                     std::auto_ptr<Register::NSSet::Manager> nman( Register::NSSet::Manager::create(action.getDB(),zman.get(),conf.get<bool>("registry.restricted_handles")) );
 
                     LOG( NOTICE_LOG , "nsset checkAvail handle [%s]" , (const char * ) chck[i] );
@@ -2287,7 +2026,7 @@ ccReg_EPP_i::ObjectCheck(short act, const char * table, const char *fname,
             case EPP_DomainCheck:
 
                 try {
-                    std::auto_ptr<Register::Zone::Manager> zm( Register::Zone::Manager::create(action.getDB()) );
+                    std::auto_ptr<Register::Zone::Manager> zm( Register::Zone::Manager::create() );
                     std::auto_ptr<Register::Domain::Manager> dman( Register::Domain::Manager::create(action.getDB(),zm.get()) );
 
                     LOG( NOTICE_LOG , "domain checkAvail fqdn [%s]" , (const char * ) chck[i] );
@@ -2370,6 +2109,7 @@ ccReg::Response* ccReg_EPP_i::ContactCheck(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return ObjectCheck( EPP_ContactCheck , "CONTACT" , "handle" , handle , a , clientID , clTRID , XML);
 }
@@ -2381,6 +2121,7 @@ ccReg::Response* ccReg_EPP_i::NSSetCheck(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return ObjectCheck( EPP_NSsetCheck , "NSSET" , "handle" , handle , a , clientID , clTRID , XML);
 }
@@ -2392,6 +2133,7 @@ ccReg::Response* ccReg_EPP_i::DomainCheck(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return ObjectCheck( EPP_DomainCheck , "DOMAIN" , "fqdn" , fqdn , a , clientID , clTRID , XML);
 }
@@ -2407,6 +2149,7 @@ ccReg_EPP_i::KeySetCheck(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
     return ObjectCheck(
             EPP_KeySetCheck, "KEYSET", "handle", handle,
@@ -2435,6 +2178,7 @@ ccReg::Response* ccReg_EPP_i::ContactInfo(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   LOG(
       NOTICE_LOG ,
@@ -2588,6 +2332,7 @@ ccReg::Response* ccReg_EPP_i::ContactDelete(
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     std::auto_ptr<EPPNotifier> ntf;
     int id;
@@ -2620,8 +2365,8 @@ ccReg::Response* ccReg_EPP_i::ContactDelete(
     }
     try {
         if (!code && (
-                    testObjectHasState(action.getDB(),id,FLAG_serverDeleteProhibited) ||
-                    testObjectHasState(action.getDB(),id,FLAG_serverUpdateProhibited)
+                    testObjectHasState(action,id,FLAG_serverDeleteProhibited) ||
+                    testObjectHasState(action,id,FLAG_serverUpdateProhibited)
                     ))
         {
             LOG( WARNING_LOG, "delete of object %s is prohibited" , handle );
@@ -2691,6 +2436,7 @@ ccReg::Response * ccReg_EPP_i::ContactUpdate(
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     std::auto_ptr<EPPNotifier> ntf;
     int id;
@@ -2730,7 +2476,7 @@ ccReg::Response * ccReg_EPP_i::ContactUpdate(
                 ccReg::registrar_autor, 0, REASON_MSG_REGISTRAR_AUTOR);
     }
     try {
-        if (!code && testObjectHasState(action.getDB(),id,FLAG_serverUpdateProhibited))
+        if (!code && testObjectHasState(action,id,FLAG_serverUpdateProhibited))
         {
             LOG( WARNING_LOG, "update of object %s is prohibited" , handle );
             code = COMMAND_STATUS_PROHIBITS_OPERATION;
@@ -2742,7 +2488,7 @@ ccReg::Response * ccReg_EPP_i::ContactUpdate(
         if ( !TestCountryCode(c.CC) ) {
             LOG(WARNING_LOG, "Reason: unknown country code: %s", (const char *)c.CC);
             code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
-                    ccReg::contact_cc, 1, 
+                    ccReg::contact_cc, 1,
                     REASON_MSG_COUNTRY_NOTEXIST);
         } else if (action.getDB()->ObjectUpdate(id, action.getRegistrar(), c.AuthInfoPw) ) // update OBJECT table
         {
@@ -2843,7 +2589,7 @@ ccReg::Response * ccReg_EPP_i::ContactUpdate(
                       conf.get<bool>("registry.disable_epp_notifier"),
                       mm, action.getDB(), action.getRegistrar(), id, regMan.get()));
         ntf->addExtraEmails(oldNotifyEmail);
-        ntf->Send(); // send messages with objectID
+        action.setNotifier(ntf.get()); // schedule message send
     }
 
     // EPP exception
@@ -2882,6 +2628,7 @@ ccReg::Response * ccReg_EPP_i::ContactCreate(
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     std::auto_ptr<EPPNotifier> ntf;
 
@@ -3162,7 +2909,7 @@ ccReg::Response* ccReg_EPP_i::ObjectTransfer(
         }
 
         try {
-            if (!code && testObjectHasState(action.getDB(),id,FLAG_serverTransferProhibited)) {
+            if (!code && testObjectHasState(action,id,FLAG_serverTransferProhibited)) {
                 LOG( WARNING_LOG, "transfer of object %s is prohibited" , name );
                 code = COMMAND_STATUS_PROHIBITS_OPERATION;
             }
@@ -3306,6 +3053,7 @@ ccReg::Response* ccReg_EPP_i::ContactTransfer(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return ObjectTransfer( EPP_ContactTransfer , "CONTACT" , "handle" , handle, authInfo, clientID, clTRID , XML);
 }
@@ -3317,6 +3065,7 @@ ccReg::Response* ccReg_EPP_i::NSSetTransfer(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return ObjectTransfer( EPP_NSsetTransfer , "NSSET" , "handle" , handle, authInfo, clientID, clTRID , XML);
 }
@@ -3328,6 +3077,7 @@ ccReg::Response* ccReg_EPP_i::DomainTransfer(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return ObjectTransfer( EPP_DomainTransfer , "DOMAIN" , "fqdn" , fqdn, authInfo, clientID, clTRID , XML);
 }
@@ -3343,6 +3093,7 @@ ccReg_EPP_i::KeySetTransfer(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
     return ObjectTransfer(EPP_KeySetTransfer, "KEYSET", "handle", handle,
             authInfo, clientID, clTRID, XML);
@@ -3372,6 +3123,7 @@ ccReg::Response* ccReg_EPP_i::NSSetInfo(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   LOG(
       NOTICE_LOG,
@@ -3384,7 +3136,7 @@ ccReg::Response* ccReg_EPP_i::NSSetInfo(
   EPPAction a(this, clientID, EPP_NSsetInfo, clTRID, XML, &paction);
   // initialize managers for nsset manipulation
   std::auto_ptr<Register::Zone::Manager>
-      zman(Register::Zone::Manager::create(a.getDB()) );
+      zman(Register::Zone::Manager::create() );
   std::auto_ptr<Register::NSSet::Manager>
       nman(Register::NSSet::Manager::create(a.getDB(), zman.get(),
           conf.get<bool>("registry.restricted_handles") ) );
@@ -3477,6 +3229,7 @@ ccReg::Response* ccReg_EPP_i::NSSetDelete(
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     std::auto_ptr<EPPNotifier> ntf;
     int id;
@@ -3508,8 +3261,8 @@ ccReg::Response* ccReg_EPP_i::NSSetDelete(
     }
     try {
         if (!code && (
-                    testObjectHasState(action.getDB(),id,FLAG_serverDeleteProhibited) ||
-                    testObjectHasState(action.getDB(),id,FLAG_serverUpdateProhibited)
+                    testObjectHasState(action,id,FLAG_serverDeleteProhibited) ||
+                    testObjectHasState(action,id,FLAG_serverUpdateProhibited)
                     ))
         {
             LOG( WARNING_LOG, "delete of object %s is prohibited" , handle );
@@ -3521,7 +3274,7 @@ ccReg::Response* ccReg_EPP_i::NSSetDelete(
     if (!code) {
         // create notifier
         bool notify = !disableNotification(action.getDB(), action.getRegistrar(), clTRID);
-        if (notify) 
+        if (notify)
             ntf.reset(new EPPNotifier(conf.get<bool>("registry.disable_epp_notifier"),mm , action.getDB(), action.getRegistrar() , id ));
 
         // test to  table domain if relations to nsset
@@ -3580,6 +3333,7 @@ ccReg::Response * ccReg_EPP_i::NSSetCreate(
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     std::auto_ptr<EPPNotifier> ntf;
     char NAME[256]; // to upper case of name of DNS hosts
@@ -3599,7 +3353,7 @@ ccReg::Response * ccReg_EPP_i::NSSetCreate(
     EPPAction action(this, clientID, EPP_NSsetCreate, clTRID, XML, &paction);
 
     std::auto_ptr<Register::Zone::Manager> zman(
-            Register::Zone::Manager::create(action.getDB()));
+            Register::Zone::Manager::create());
     std::auto_ptr<Register::NSSet::Manager> nman(
             Register::NSSet::Manager::create(action.getDB(),zman.get(),conf.get<bool>("registry.restricted_handles")));
 
@@ -3694,7 +3448,6 @@ ccReg::Response * ccReg_EPP_i::NSSetCreate(
                                 ccReg::nsset_tech, i, REASON_MSG_DUPLICITY_CONTACT);
                     }
                 }
-
             }
         }
     }
@@ -3924,7 +3677,7 @@ ccReg::Response * ccReg_EPP_i::NSSetCreate(
  ***********************************************************************/
 
 ccReg::Response *
-ccReg_EPP_i::NSSetUpdate(const char* handle, const char* authInfo_chg, 
+ccReg_EPP_i::NSSetUpdate(const char* handle, const char* authInfo_chg,
         const ccReg::DNSHost& dns_add, const ccReg::DNSHost& dns_rem,
         const ccReg::TechContact& tech_add, const ccReg::TechContact& tech_rem,
         CORBA::Short level, CORBA::Long clientID, const char* clTRID, const char* XML)
@@ -3932,6 +3685,7 @@ ccReg_EPP_i::NSSetUpdate(const char* handle, const char* authInfo_chg,
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     std::auto_ptr<EPPNotifier> ntf;
     char NAME[256], REM_NAME[256];
@@ -3963,7 +3717,7 @@ ccReg_EPP_i::NSSetUpdate(const char* handle, const char* authInfo_chg,
     LOG( NOTICE_LOG, "NSSetUpdate: tech check level %d" , (int) level );
 
     std::auto_ptr<Register::Zone::Manager> zman(
-            Register::Zone::Manager::create(action.getDB()));
+            Register::Zone::Manager::create());
     std::auto_ptr<Register::NSSet::Manager> nman(
             Register::NSSet::Manager::create(action.getDB(),zman.get(),conf.get<bool>("registry.restricted_handles")));
 
@@ -3981,7 +3735,7 @@ ccReg_EPP_i::NSSetUpdate(const char* handle, const char* authInfo_chg,
                 REASON_MSG_REGISTRAR_AUTOR);
     }
     try {
-        if (!code && testObjectHasState(action.getDB(),nssetID,FLAG_serverUpdateProhibited))
+        if (!code && testObjectHasState(action,nssetID,FLAG_serverUpdateProhibited))
         {
             LOG( WARNING_LOG, "update of object %s is prohibited" , handle );
             code = COMMAND_STATUS_PROHIBITS_OPERATION;
@@ -4187,7 +3941,7 @@ ccReg_EPP_i::NSSetUpdate(const char* handle, const char* authInfo_chg,
 
                 // notifier
                 ntf.reset(new EPPNotifier(
-                              conf.get<bool>("registry.disable_epp_notifier"), 
+                              conf.get<bool>("registry.disable_epp_notifier"),
                               mm, action.getDB(), action.getRegistrar(), nssetID, regMan.get()));
 
                 //  add to current tech-c added tech-c
@@ -4343,7 +4097,7 @@ ccReg_EPP_i::NSSetUpdate(const char* handle, const char* authInfo_chg,
 
 
                 if (code == COMMAND_OK)
-                    ntf->Send(); // send messages if is OK
+                    action.setNotifier(ntf.get()); // schedule message send
 
 
             }
@@ -4387,6 +4141,7 @@ ccReg::Response* ccReg_EPP_i::DomainInfo(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   LOG(
       NOTICE_LOG, "DomainInfo: clientID -> %d clTRID [%s] fqdn  [%s] ",
@@ -4398,7 +4153,7 @@ ccReg::Response* ccReg_EPP_i::DomainInfo(
   EPPAction a(this, clientID, EPP_DomainInfo, clTRID, XML, &paction);
   // initialize managers for domain manipulation
   std::auto_ptr<Register::Zone::Manager>
-      zman(Register::Zone::Manager::create(a.getDB()) );
+      zman(Register::Zone::Manager::create() );
   std::auto_ptr<Register::Domain::Manager>
       dman(Register::Domain::Manager::create(a.getDB(), zman.get()) );
   // first check handle for proper format
@@ -4462,7 +4217,7 @@ ccReg::Response* ccReg_EPP_i::DomainInfo(
   // registrant and contacts are disabled for other registrars
   // in case of enum domain
   bool disabled = a.getRegistrar() != (int)dom->getRegistrarId()
-      && zman->findZoneId(fqdn)->isEnumZone();
+      && zman->findApplicableZone(fqdn)->isEnumZone();
   // registrant
   d->Registrant = CORBA::string_dup(disabled ? "" : dom->getRegistrantHandle().c_str() );
   // admin
@@ -4507,6 +4262,7 @@ ccReg::Response* ccReg_EPP_i::DomainDelete(
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     std::auto_ptr<EPPNotifier> ntf;
     int id, zone;
@@ -4534,8 +4290,8 @@ ccReg::Response* ccReg_EPP_i::DomainDelete(
     }
     try {
         if (!code && (
-                    testObjectHasState(action.getDB(),id,FLAG_serverDeleteProhibited) ||
-                    testObjectHasState(action.getDB(),id,FLAG_serverUpdateProhibited)
+                    testObjectHasState(action,id,FLAG_serverDeleteProhibited) ||
+                    testObjectHasState(action,id,FLAG_serverUpdateProhibited)
                     ))
         {
             LOG( WARNING_LOG, "delete of object %s is prohibited" , fqdn );
@@ -4602,6 +4358,7 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     std::auto_ptr<EPPNotifier> ntf;
     std::string valexdate;
@@ -4648,7 +4405,7 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
 
     if (!code) {
         try {
-            if (!code && testObjectHasState(action.getDB(),id,FLAG_serverUpdateProhibited)) {
+            if (!code && testObjectHasState(action,id,FLAG_serverUpdateProhibited)) {
                 LOG( WARNING_LOG, "update of object %s is prohibited" , fqdn );
                 code = COMMAND_STATUS_PROHIBITS_OPERATION;
             }
@@ -4840,7 +4597,7 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
                         ccReg::domain_registrant, 1, REASON_MSG_BAD_FORMAT_CONTACT_HANDLE);
             } else if (contactid == 0) {
                 LOG(WARNING_LOG, "domain registrar not exist [%s]", registrant_chg);
-                code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
                         ccReg::domain_registrant, 1, REASON_MSG_REGISTRANT_NOTEXIST);
             }
 
@@ -4866,7 +4623,7 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
         }
         if (strlen(registrant_chg) != 0) {
             try {
-                if (!code && testObjectHasState(action.getDB(),id,FLAG_serverRegistrantChangeProhibited))
+                if (!code && testObjectHasState(action,id,FLAG_serverRegistrantChangeProhibited))
                 {
                     LOG( WARNING_LOG, "registrant change %s is prohibited" , fqdn );
                     code = COMMAND_STATUS_PROHIBITS_OPERATION;
@@ -4935,26 +4692,20 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
                 if (code == 0) {
 
                     // change validity exdate  extension
-                    if (GetZoneEnum(action.getDB(), zone)) {
-                        if (valexdate.length() > 0 || publish != ccReg::DISCL_EMPTY) {
-                            action.getDB()->UPDATE("enumval");
-                            if (valexdate.length() > 0) {
-                                LOG(NOTICE_LOG, "change valExpDate %s", valexdate.c_str());
-                                action.getDB()->SET("ExDate", valexdate.c_str());
-                            }
-                            if (publish == ccReg::DISCL_DISPLAY) {
-                                LOG(NOTICE_LOG, "change publish flag to YES");
-                                action.getDB()->SET("publish", true);
-                            }
-                            if (publish == ccReg::DISCL_HIDE) {
-                                LOG(NOTICE_LOG, "change publish flag to NO");
-                                action.getDB()->SET("publish", false);
-                            }
-                            action.getDB()->WHERE("domainID", id);
-
-                            if ( !action.getDB()->EXEC() )
-                                code = COMMAND_FAILED;
+                    if (GetZoneEnum(action.getDB(), zone) && valexdate.length() > 0) {
+                        LOG(NOTICE_LOG, "change valExpDate %s", valexdate.c_str());
+                        action.getDB()->UPDATE("enumval");
+                        action.getDB()->SET("ExDate", valexdate.c_str());
+                        if (publish == ccReg::DISCL_DISPLAY) {
+                            action.getDB()->SET("publish", true);
                         }
+                        if (publish == ccReg::DISCL_HIDE) {
+                            action.getDB()->SET("publish", false);
+                        }
+                        action.getDB()->WHERE("domainID", id);
+
+                        if ( !action.getDB()->EXEC() )
+                            code = COMMAND_FAILED;
                     }
 
                     // REM temp-c (must be befor ADD admin-c because of uniqueness)
@@ -5005,7 +4756,7 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
 
             // notifier send messages
             if (code == COMMAND_OK)
-                ntf->Send();
+                action.setNotifier(ntf.get()); // schedule message send
 
         }
 
@@ -5065,6 +4816,7 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     std::auto_ptr<EPPNotifier> ntf;
     std::string valexdate;
@@ -5117,7 +4869,7 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
     extractEnumDomainExtension(valexdate, publish, ext);
 
     try {
-        std::auto_ptr<Register::Zone::Manager> zm( Register::Zone::Manager::create(action.getDB()) );
+        std::auto_ptr<Register::Zone::Manager> zm( Register::Zone::Manager::create() );
         std::auto_ptr<Register::Domain::Manager> dman( Register::Domain::Manager::create(action.getDB(),zm.get()) );
 
         LOG( NOTICE_LOG , "Domain::checkAvail  fqdn [%s]" , (const char * ) fqdn );
@@ -5390,19 +5142,26 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
                                 }
 
                             }
+                            std::auto_ptr<Register::Invoicing::Manager> invMan(
+                                    Register::Invoicing::Manager::create());
+                            if (invMan->domainBilling(action.getDB(), zone, action.getRegistrar(),
+                                        id, Database::Date(std::string(exDate)), period_count, false)) {
 
-                            //  billing credit from and save for invoicing
-                            // first operation billing domain-create
-                            if (action.getDB()->BillingCreateDomain(action.getRegistrar(), zone, id) == false)
-                                code = COMMAND_BILLING_FAILURE;
-                            else
-                                // next operation billing  domain-renew save Exdate
-                                if (action.getDB()->BillingRenewDomain(action.getRegistrar(), zone, id, period_count,
-                                            exDate) == false)
+                                if(!invMan->domainBilling(action.getDB(), zone, action.getRegistrar(),
+                                        id, Database::Date(std::string(exDate)), period_count, true)) {
                                     code = COMMAND_BILLING_FAILURE;
-                                else if (action.getDB()->SaveDomainHistory(id) ) // if is ok save to history
-                                    if (action.getDB()->SaveObjectCreate(id) )
+                                }
+
+                                if (action.getDB()->SaveDomainHistory(id)) {
+                                    if (action.getDB()->SaveObjectCreate(id)) {
                                         code = COMMAND_OK;
+                                    }
+                                } else {
+                                    code = COMMAND_FAILED;
+                                }
+                            } else {
+                                code = COMMAND_BILLING_FAILURE;
+                            }
 
                         } else
                             code = COMMAND_FAILED;
@@ -5461,12 +5220,13 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
 ccReg::Response *
 ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
         const ccReg::Period_str& period, ccReg::timestamp_out exDate,
-        CORBA::Long clientID, const char *clTRID, const char* XML, 
+        CORBA::Long clientID, const char *clTRID, const char* XML,
         const ccReg::ExtensionList & ext)
 {
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     std::auto_ptr<EPPNotifier> ntf;
     std::string valexdate;
@@ -5583,13 +5343,13 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
             if ( !action.getDB()->TestObjectClientID(id, action.getRegistrar()) ) {
                 LOG( WARNING_LOG, "bad autorization not client of domain [%s]", fqdn );
                 code = action.setErrorReason(COMMAND_AUTOR_ERROR,
-                        ccReg::registrar_autor, 0, 
+                        ccReg::registrar_autor, 0,
                         REASON_MSG_REGISTRAR_AUTOR);
             }
             try {
                 if (!code && (
-                            testObjectHasState(action.getDB(),id,FLAG_serverRenewProhibited) ||
-                            testObjectHasState(action.getDB(),id,FLAG_deleteCandidate)
+                            testObjectHasState(action,id,FLAG_serverRenewProhibited) ||
+                            testObjectHasState(action,id,FLAG_deleteCandidate)
                             )
                    )
                 {
@@ -5604,18 +5364,15 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
 
                 // change validity date for enum domain
                 if (GetZoneEnum(action.getDB(), zone) ) {
-                    if (valexdate.length() > 0 || publish != ccReg::DISCL_EMPTY) {
+                    if (valexdate.length() > 0) {
+                        LOG(NOTICE_LOG, "change valExpDate %s", valexdate.c_str());
+
                         action.getDB()->UPDATE("enumval");
-                        if (valexdate.length() > 0) {
-                            LOG(NOTICE_LOG, "change valExpDate %s", valexdate.c_str());
-                            action.getDB()->SET("ExDate", valexdate.c_str());
-                        }
+                        action.getDB()->SET("ExDate", valexdate.c_str());
                         if (publish == ccReg::DISCL_DISPLAY) {
-                            LOG(NOTICE_LOG, "change publish flag to YES");
                             action.getDB()->SET("publish", true);
                         }
                         if (publish == ccReg::DISCL_HIDE) {
-                            LOG(NOTICE_LOG, "change publish flag to NO");
                             action.getDB()->SET("publish", false);
                         }
                         action.getDB()->WHERE("domainID", id);
@@ -5634,12 +5391,15 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
                         CORBA::string_free(exDate);
                         exDate = CORBA::string_dup(action.getDB()->GetDomainExDate(id) );
 
-                        // billing credit operation domain-renew
-                        if (action.getDB()->BillingRenewDomain(action.getRegistrar(), zone, id,
-                                    period_count, exDate) == false)
+
+
+                        std::auto_ptr<Register::Invoicing::Manager> invMan(Register::Invoicing::Manager::create());
+                        if (invMan->domainBilling(action.getDB(), zone, action.getRegistrar(),
+                                    id, Database::Date(std::string(exDate)), period_count, true) == false ) {
                             code = COMMAND_BILLING_FAILURE;
-                        else if (action.getDB()->SaveDomainHistory(id) )
+                        } else if (action.getDB()->SaveDomainHistory(id) ) {
                             code = COMMAND_OK;
+                        }
 
                     } else
                         code = COMMAND_FAILED;
@@ -5680,6 +5440,7 @@ ccReg_EPP_i::KeySetInfo(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
     LOG(NOTICE_LOG, "KeySetInfo: clientID -> %d clTRID [%s] handle [%s] ",
             (int)clientID, clTRID, handle);
@@ -5707,8 +5468,8 @@ ccReg_EPP_i::KeySetInfo(
     keyFilter->addHandle().setValue(std::string(handle));
     keyFilter->addDeleteTime().setNULL();
     unionFilter.addFilter(keyFilter);
-    Database::Manager dbman(new Database::ConnectionFactory(database));
-    klist->reload(unionFilter, &dbman);
+
+    klist->reload(unionFilter);
 
 
     //klist->setHandleFilter(handle);
@@ -5810,6 +5571,7 @@ ccReg_EPP_i::KeySetDelete(
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+    ConnectionReleaser releaser;
 
     int                 id;
     std::auto_ptr<EPPNotifier> ntf;
@@ -5840,8 +5602,8 @@ ccReg_EPP_i::KeySetDelete(
     }
     try {
         if (!code && (
-                    testObjectHasState(action.getDB(), id, FLAG_serverDeleteProhibited) ||
-                    testObjectHasState(action.getDB(), id, FLAG_serverUpdateProhibited)
+                    testObjectHasState(action, id, FLAG_serverDeleteProhibited) ||
+                    testObjectHasState(action, id, FLAG_serverUpdateProhibited)
                     )) {
             LOG(WARNING_LOG, "delete of object %s is prohibited", handle);
             code = COMMAND_STATUS_PROHIBITS_OPERATION;
@@ -5936,7 +5698,7 @@ ccReg_EPP_i::KeySetCreate(
     Logging::Context::clear();
     Logging::Context ctx("rifd");
     Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
-
+    ConnectionReleaser releaser;
     std::auto_ptr<EPPNotifier>  ntf;
     int                         id, techid, dsrecID;
     unsigned int                i, j;
@@ -5967,7 +5729,7 @@ ccReg_EPP_i::KeySetCreate(
                 REASON_MSG_TECH_NOTEXIST);
     } else if (tech.length() > 10) {
         LOG(WARNING_LOG, "KeySetCreate: too many tech contacts (maximum is 10)");
-        code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR, 
+        code = action.setErrorReason(COMMAND_PARAMETR_RANGE_ERROR,
                 ccReg::keyset_tech, 0, REASON_MSG_TECHADMIN_LIMIT);
     } else if (dnsk.length() < 1) {
             LOG(WARNING_LOG, "KeySetCreate: not any DNSKey record");
@@ -6061,8 +5823,8 @@ ccReg_EPP_i::KeySetCreate(
                 LOG(WARNING_LOG,
                         "Digest is %d (must be 1)",
                         dsrec[ii].digestType);
-                code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
-                        ccReg::keyset_dsrecord, ii, 
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::keyset_dsrecord, ii,
                         REASON_MSG_DSRECORD_BAD_DIGEST_TYPE);
                 break;
             }
@@ -6077,7 +5839,7 @@ ccReg_EPP_i::KeySetCreate(
                         "Digest length is %d char (must be 40)",
                         strlen(dsrec[ii].digest));
                 code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
-                        ccReg::keyset_dsrecord, ii, 
+                        ccReg::keyset_dsrecord, ii,
                         REASON_MSG_DSRECORD_BAD_DIGEST_LENGTH);
                 break;
             }
@@ -6110,7 +5872,7 @@ ccReg_EPP_i::KeySetCreate(
                 LOG(WARNING_LOG,
                         "dnskey flag is %d (must be 0, 256 or 257)",
                         dnsk[ii].flags);
-                code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
                         ccReg::keyset_dnskey, ii, REASON_MSG_DNSKEY_BAD_FLAGS);
                 break;
             }
@@ -6124,7 +5886,7 @@ ccReg_EPP_i::KeySetCreate(
                 LOG(WARNING_LOG,
                         "dnskey protocol is %d (must be 3)",
                         dnsk[ii].protocol);
-                code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
                         ccReg::keyset_dnskey, ii, REASON_MSG_DNSKEY_BAD_PROTOCOL);
                 break;
             }
@@ -6141,7 +5903,7 @@ ccReg_EPP_i::KeySetCreate(
                 LOG(WARNING_LOG,
                         "dnskey algorithm is %d (must be 1,2,3,4,5,6,7,252,253,254 or 255)",
                         dnsk[ii].alg);
-                code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
                         ccReg::keyset_dnskey, ii, REASON_MSG_DNSKEY_BAD_ALG);
                 break;
             }
@@ -6154,12 +5916,12 @@ ccReg_EPP_i::KeySetCreate(
             if ((ret1 = isValidBase64((const char *)dnsk[ii].key, &ret2)) != BASE64_OK) {
                 if (ret1 == BASE64_BAD_LENGTH) {
                     LOG(WARNING_LOG, "dnskey key length is wrong (must be dividable by 4)");
-                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
                             ccReg::keyset_dnskey, ii, REASON_MSG_DNSKEY_BAD_KEY_LEN);
                 } else if (ret1 == BASE64_BAD_CHAR) {
                     LOG(WARNING_LOG, "dnskey key contain invalid character '%c' at position %d",
                             ((const char *)dnsk[ii].key)[ret2], ret2);
-                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
                             ccReg::keyset_dnskey, ii, REASON_MSG_DNSKEY_BAD_KEY_CHAR);
                 } else {
                     LOG(WARNING_LOG, "isValidBase64() return unknown value (%d)",
@@ -6179,7 +5941,7 @@ ccReg_EPP_i::KeySetCreate(
                                 "Found DSNKey duplicity: %d x %d (%d %d %d %s)",
                                 ii, jj, dnsk[ii].flags, dnsk[ii].protocol,
                                 dnsk[ii].alg, (const char *)dnsk[ii].key);
-                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR, 
+                        code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
                                 ccReg::keyset_dnskey, jj, REASON_MSG_DUPLICITY_DNSKEY);
                         break;
                     }
@@ -6343,6 +6105,7 @@ ccReg_EPP_i::KeySetUpdate(
 {
     Logging::Context::clear();
     Logging::Context ctx("rifd");
+    ConnectionReleaser releaser;
 
     std::auto_ptr<EPPNotifier> ntf;
     int keysetId, techId;
@@ -6397,7 +6160,7 @@ ccReg_EPP_i::KeySetUpdate(
                ccReg::keyset_dsrecord, 0, REASON_MSG_DSRECORD_LIMIT);
     }
     try {
-        if (!code && testObjectHasState(action.getDB(), keysetId, FLAG_serverUpdateProhibited)) {
+        if (!code && testObjectHasState(action, keysetId, FLAG_serverUpdateProhibited)) {
             LOG(WARNING_LOG, "update of object %s is prohibited", handle);
             code = COMMAND_STATUS_PROHIBITS_OPERATION;
         }
@@ -6841,7 +6604,7 @@ ccReg_EPP_i::KeySetUpdate(
     if (code == 0) {
         if (action.getDB()->ObjectUpdate(keysetId, action.getRegistrar(), authInfo_chg)) {
             ntf.reset(new EPPNotifier(
-                          conf.get<bool>("registry.disable_epp_notifier"), 
+                          conf.get<bool>("registry.disable_epp_notifier"),
                           mm, action.getDB(), action.getRegistrar(), keysetId, regMan.get()));
 
             for (int i = 0; i < (int)tech_add.length(); i++)
@@ -7012,7 +6775,7 @@ ccReg_EPP_i::KeySetUpdate(
                     code = COMMAND_OK;
             }
             if (code == COMMAND_OK)
-                ntf->Send();
+                action.setNotifier(ntf.get()); // schedule message send
         }
     }
 
@@ -7029,8 +6792,14 @@ ccReg_EPP_i::KeySetUpdate(
     return action.getRet()._retn();
 }
 
-#define isbase64char(c)     ((c) >= 'a' && (c) <= 'z' || (c) >= 'A' && (c) <= 'Z' \
-        || (c) >= '0' && (c) <= '9' || (c) == '+' || (c) == '/')
+bool isbase64char (unsigned char c)
+{
+    return (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9')
+        || c == '+'
+        || c == '/';
+}
 
 int
 countTailPads(const char *key)
@@ -7137,9 +6906,9 @@ isValidBase64(const char *str, int *ret)
 }
 
 // primitive list of objects
-ccReg::Response * 
-ccReg_EPP_i::FullList(short act, const char *table, const char *fname, 
-        ccReg::Lists_out list, CORBA::Long clientID, const char* clTRID, 
+ccReg::Response *
+ccReg_EPP_i::FullList(short act, const char *table, const char *fname,
+        ccReg::Lists_out list, CORBA::Long clientID, const char* clTRID,
         const char* XML)
 {
     int rows =0, i;
@@ -7205,6 +6974,7 @@ ccReg::Response* ccReg_EPP_i::ContactList(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return FullList( EPP_ListContact , "CONTACT" , "HANDLE" , contacts , clientID, clTRID, XML);
 }
@@ -7216,6 +6986,7 @@ ccReg::Response* ccReg_EPP_i::NSSetList(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return FullList( EPP_ListNSset , "NSSET" , "HANDLE" , nssets , clientID, clTRID, XML);
 }
@@ -7227,6 +6998,7 @@ ccReg::Response* ccReg_EPP_i::DomainList(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return FullList( EPP_ListDomain , "DOMAIN" , "fqdn" , domains , clientID, clTRID, XML);
 }
@@ -7241,6 +7013,7 @@ ccReg_EPP_i::KeySetList(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
     return FullList(
             EPP_ListKeySet, "KEYSET", "HANDLE", keysets, clientID, clTRID, XML);
@@ -7254,6 +7027,7 @@ ccReg::Response* ccReg_EPP_i::nssetTest(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   DB DBsql;
   ccReg::Response_var ret = new ccReg::Response;
@@ -7329,9 +7103,9 @@ ccReg_EPP_i::ObjectSendAuthInfo(
 
     EPPAction action(this, clientID, act, clTRID, XML, &paction);
 
-    Database::Manager db(new Database::ConnectionFactory(database));
-    std::auto_ptr<Database::Connection> conn;
-    try { conn.reset(db.getConnection()); } catch (...) {}
+    // Database::Manager db(new Database::ConnectionFactory(database));
+    // std::auto_ptr<Database::Connection> conn;
+    // try { conn.reset(db.getConnection()); } catch (...) {}
 
     LOG( NOTICE_LOG , "ObjectSendAuthInfo type %d  object [%s]  clientID -> %d clTRID [%s] " , act , name , (int ) clientID , clTRID );
 
@@ -7394,7 +7168,6 @@ ccReg_EPP_i::ObjectSendAuthInfo(
                 );
         std::auto_ptr<Register::PublicRequest::Manager> request_manager(
                 Register::PublicRequest::Manager::create(
-                    &db,
                     regMan->getDomainManager(),
                     regMan->getContactManager(),
                     regMan->getNSSetManager(),
@@ -7409,10 +7182,11 @@ ccReg_EPP_i::ObjectSendAuthInfo(
                     id,action.getDB()->GetActionID()
                );
             std::auto_ptr<Register::PublicRequest::PublicRequest> new_request(request_manager->createRequest(
-                        Register::PublicRequest::PRT_AUTHINFO_AUTO_RIF,
-                        conn.get()));
+                        Register::PublicRequest::PRT_AUTHINFO_AUTO_RIF));
 
-            new_request->setEppActionId(action.getDB()->GetActionID());
+	    new_request->setEppActionId(action.getDB()->GetActionID());
+            new_request->setRegistrarId(GetRegistrarID(clientID));
+
             new_request->setRegistrarId(GetRegistrarID(clientID));
             new_request->addObject(Register::PublicRequest::OID(id));
             if (!new_request->check()) {
@@ -7420,7 +7194,7 @@ ccReg_EPP_i::ObjectSendAuthInfo(
                 code = COMMAND_STATUS_PROHIBITS_OPERATION;
             } else {
                 code=COMMAND_OK;
-                new_request->save(conn.get());
+                new_request->save();
             }
         } catch (...) {
             LOG( WARNING_LOG, "cannot create and process request");
@@ -7446,6 +7220,7 @@ ccReg::Response* ccReg_EPP_i::domainSendAuthInfo(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return ObjectSendAuthInfo( EPP_DomainSendAuthInfo , "DOMAIN" , "fqdn" , fqdn , clientID , clTRID, XML);
 }
@@ -7455,6 +7230,7 @@ ccReg::Response* ccReg_EPP_i::contactSendAuthInfo(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return ObjectSendAuthInfo( EPP_ContactSendAuthInfo , "CONTACT" , "handle" , handle , clientID , clTRID, XML);
 }
@@ -7464,6 +7240,7 @@ ccReg::Response* ccReg_EPP_i::nssetSendAuthInfo(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   return ObjectSendAuthInfo( EPP_NSSetSendAuthInfo , "NSSET" , "handle" , handle , clientID , clTRID, XML);
 }
@@ -7478,6 +7255,7 @@ ccReg_EPP_i::keysetSendAuthInfo(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
     return ObjectSendAuthInfo(
             EPP_KeySetSendAuthInfo, "KEYSET",
@@ -7491,6 +7269,7 @@ ccReg::Response* ccReg_EPP_i::info(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   LOG(
       NOTICE_LOG,
@@ -7500,7 +7279,7 @@ ccReg::Response* ccReg_EPP_i::info(
   EPPAction a(this, clientID, EPP_Info, clTRID, XML);
   try {
     std::auto_ptr<Register::Zone::Manager> zoneMan(
-        Register::Zone::Manager::create(a.getDB())
+        Register::Zone::Manager::create()
     );
     std::auto_ptr<Register::Domain::Manager> domMan(
         Register::Domain::Manager::create(a.getDB(), zoneMan.get())
@@ -7562,6 +7341,7 @@ ccReg::Response* ccReg_EPP_i::getInfoResults(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
+  ConnectionReleaser releaser;
 
   LOG(
       NOTICE_LOG,
@@ -7571,7 +7351,7 @@ ccReg::Response* ccReg_EPP_i::getInfoResults(
   EPPAction a(this, clientID, EPP_GetInfoResults, clTRID, XML);
   try {
     std::auto_ptr<Register::Zone::Manager> zoneMan(
-        Register::Zone::Manager::create(a.getDB())
+        Register::Zone::Manager::create()
     );
     std::auto_ptr<Register::Domain::Manager> domMan(
         Register::Domain::Manager::create(a.getDB(), zoneMan.get())

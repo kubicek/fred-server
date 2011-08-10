@@ -11,7 +11,7 @@
 #include <boost/utility.hpp>
 #include <boost/format.hpp>
 
-#include "util.h"
+#include "util/util.h"
 #include "sql_helper_objects.h"
 #include "../statement.h"
 #include "../value.h"
@@ -43,13 +43,6 @@ public:
 
 	const std::string str() const {
 		return sql_buffer.str();
-	}
-
-
-	const char* c_str() {
-		char *tmp = new char[sql_buffer.str().size() + 1];
-		strcpy(tmp, sql_buffer.str().c_str());
-		return tmp;
 	}
 
 

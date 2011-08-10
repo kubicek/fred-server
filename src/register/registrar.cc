@@ -23,17 +23,21 @@
 #include <algorithm>
 #include <functional>
 
+
 #include "registrar.h"
 #include "common_impl.h"
 #include "sql.h"
 #include "old_utils/dbsql.h"
 #include "old_utils/log.h"
 
-#include "db_settings.h"
 #include "model/model_filters.h"
 #include "log/logger.h"
+#include "log/context.h"
 
-#define SET(a,b) { a = b; changed = true; }
+#include "model_registrar_acl.h"
+#include "model_registrar.h"
+
+#include "zone.h"
 
 namespace Register {
 namespace Registrar {
@@ -41,91 +45,194 @@ namespace Registrar {
 class RegistrarImpl;
 
 
-class ACLImpl : virtual public ACL {
-  unsigned id;
-  std::string certificateMD5;
-  std::string password;
-  bool changed;
-  friend class RegistrarImpl;
+class ACLImpl : virtual public ACL,
+				private ModelRegistrarAcl {
 
 public:
-  ACLImpl() :
-    id(0), changed(true) {
+  ACLImpl()
+	  : ModelRegistrarAcl()
+  {
   }
-  ACLImpl(unsigned _id,
-          const std::string _certificateMD5,
-          const std::string _password) :
-    id(_id), certificateMD5(_certificateMD5), password(_password),
-        changed(false) {
+  ACLImpl(TID _id,
+          const std::string& _certificateMD5,
+          const std::string& _password)
+	  : ModelRegistrarAcl()
+  {
+	  ModelRegistrarAcl::setId(_id);
+	  ModelRegistrarAcl::setCert(_certificateMD5);
+	  ModelRegistrarAcl::setPassword(_password);
   }
-  virtual const std::string& getCertificateMD5() const {
-    return certificateMD5;
+  virtual const TID& getId() const
+  {
+      return ModelRegistrarAcl::getId();
   }
-  virtual void setCertificateMD5(const std::string& newCertificateMD5) {
-    SET(certificateMD5,newCertificateMD5);
+  virtual void setId(const TID &_id)
+  {
+	  ModelRegistrarAcl::setId(_id);
   }
-  virtual const std::string& getPassword() const {
-    return password;
+  const TID& getRegistarId() const
+  {
+      return ModelRegistrarAcl::getRegistarId();
   }
-  virtual void setPassword(const std::string& newPassword) {
-    SET(password,newPassword);
+  void setRegistrarId(const TID &_registrar_id)
+  {
+    	ModelRegistrarAcl::setRegistrarId(_registrar_id);
   }
-  bool operator==(unsigned _id) {
-    return id == _id;
+  virtual const std::string& getCertificateMD5() const
+  {
+    return ModelRegistrarAcl::getCert();
   }
-  bool hasChanged() const {
-    return changed;
+  virtual void setCertificateMD5(const std::string& _certificateMD5)
+  {
+	  ModelRegistrarAcl::setCert(_certificateMD5);
   }
-  std::string makeSQL(unsigned registrarId) {
-    std::ostringstream sql;
-    sql << "INSERT INTO registraracl (registrarid,cert,password) VALUES "
-        << "(" << registrarId << ",'" << certificateMD5 << "','" << password
-        << "');";
-    return sql.str();
+  virtual const std::string& getPassword() const
+  {
+    return ModelRegistrarAcl::getPassword();
   }
-  void resetId() {
-    changed = true;
+  virtual void setPassword(const std::string& _password)
+  {
+	  ModelRegistrarAcl::setPassword(_password);
   }
-};
+  bool operator==(const TID _id) const
+  {
+    return getId() == _id;
+  }
+  virtual void save() throw (SQL_ERROR)
+  {
+      TRACE("[CALL] ACLImpl::save()");
+	try
+	{
+		Database::Connection conn = Database::Manager::acquire();
+		TID id = getId();
+		LOGGER(PACKAGE).debug(boost::format("ACLImpl::save id: %1% RegistrarId: %2%")
+		% id % getRegistarId());
+		if (id)
+			ModelRegistrarAcl::update();
+		else
+			ModelRegistrarAcl::insert();
+	}//try
+	catch (...)
+	{
+	 LOGGER(PACKAGE).error("save: an error has occured");
+	 throw SQL_ERROR();
+	}//catch (...)
+  }//save
+};//class ACLImpl
+
+unsigned long addRegistrarZone(
+          const std::string& registrarHandle,
+          const std::string zone,
+          const Database::Date &fromDate,
+          const Database::Date &toDate) throw (SQL_ERROR)
+  {///expecting external transaction, no transaction inside
+      try
+      {
+
+          LOGGER(PACKAGE).debug(boost::format("addRegistrarZone registrarHandle: %1% zone: %2% fromDate: %3% toDate: %4%")
+          % registrarHandle % zone % fromDate.to_string() % toDate.to_string() );
+
+        Database::Connection conn = Database::Manager::acquire();
+
+        std::string fromStr;
+        std::string toStr;
+
+        if (!fromDate.is_special())
+        {
+            fromStr = "'" + fromDate.to_string() + "'";
+        }
+        else
+        {
+            fromStr = "CURRENT_DATE";
+        }
+
+        if (!toDate.is_special())
+        {
+            toStr = "'" + toDate.to_string() + "'";
+        }
+        else
+        {
+            toStr = "NULL";
+        }
+        std::stringstream sql;
+        sql << "INSERT INTO registrarinvoice (registrarid,zone,fromdate,todate) "
+               "SELECT (SELECT id FROM registrar WHERE handle='" << conn.escape(registrarHandle) << "' LIMIT 1) "
+               ",(SELECT id FROM zone WHERE fqdn='" << conn.escape(zone) << "' LIMIT 1) "
+               ", " << fromStr << "," << toStr;
+
+        LOGGER(PACKAGE).debug(boost::format("addRegistrarZone Q1: %1%")
+        % sql.str() );
 
 
-class RegistrarImpl : public Register::CommonObjectImpl,
-                      virtual public Registrar {
-  
-  typedef std::vector<ACLImpl *> ACLList;
+        conn.exec(sql.str());
+
+        std::stringstream sql2;
+
+        sql2 << "SELECT ri.id FROM registrarinvoice ri "
+            "WHERE ri.registrarid = (SELECT id FROM registrar WHERE handle='"
+                << conn.escape(registrarHandle) << "' LIMIT 1) "
+            "and ri.zone = (SELECT id FROM zone WHERE fqdn='"
+                << conn.escape(zone) << "' LIMIT 1) "
+            "and ri.fromdate = date (" << fromStr << ") ";
+
+        if(toStr.compare("NULL") == 0)
+            sql2 << "and ri.todate isnull ";
+        else
+            sql2 <<  "and ri.todate = date(" << toStr << ") ";
+
+        sql2 <<  "LIMIT 1 ";
+
+        LOGGER(PACKAGE).debug(boost::format("addRegistrarZone Q2: %1%")
+        % sql2.str() );
+
+
+        Database::Result res = conn.exec(sql2.str());
+
+        if((res.size() == 1) && (res[0].size() == 1))
+        {
+            Database::ID ret = res[0][0];
+            return ret;
+        }
+        else
+        {
+            LOGGER(PACKAGE).error("addRegistrarZone: an error has occured");
+            throw SQL_ERROR();
+        }
+      }//try
+      catch (...)
+      {
+          LOGGER(PACKAGE).error("addRegistrarZone: an error has occured");
+          throw SQL_ERROR();
+      }//catch (...)
+  }//addRegistrarZone
+
+
+class RegistrarImpl : public Register::CommonObjectImplNew,
+                      virtual public Registrar,
+                      private ModelRegistrar
+{
+  typedef boost::shared_ptr<ACLImpl> ACLImplPtr;
+  typedef std::vector<ACLImplPtr> ACLList;
   typedef ACLList::iterator ACLListIter;
-  DB *db; ///< db connection
-  std::string ico; ///< DB: registrar.ico
-  std::string dic; ///< DB: registrar.dic
-  std::string var_symb; ///< DB: registrar.varsymb
-  bool vat; ///< DB: registrar.vat
-  std::string handle; ///< DB: registrar.handle
-  std::string name; ///< DB: registrar.name
-  std::string url; ///< DB: registrar.name
-  std::string password; ///< DB: registraracl.passwd
-  std::string organization; ///< DB: registrar.organization
-  std::string street1; ///< DB: registrar.street1
-  std::string street2; ///< DB: registrar.street2
-  std::string street3; ///< DB: registrar.street3
-  std::string city; ///< DB: registrar.city
-  std::string province; ///< DB: registrar.stateorprovince
-  std::string postalCode; ///< DB: registrar.postalcode
-  std::string country; ///< DB: registrar.country
-  std::string telephone; ///< DB: registrar.telephone
-  std::string fax; ///< DB: registrar.fax
-  std::string email; ///< DB: registrar.email
-  bool system; ///< DB: registrar.system
+
   unsigned long credit; ///< DB: registrar.credit
-  bool changed; ///< object was changed, need sync to database
+
   ACLList acl; ///< access control
-  std::map<Database::ID, unsigned long> zone_credit_map;
+  typedef std::map<Database::ID, unsigned long> ZoneCreditMap;
+  ZoneCreditMap zone_credit_map;
+
+  typedef  boost::shared_ptr<ZoneAccess> ZoneAccessPtr;
+  typedef std::vector<ZoneAccessPtr> ZoneAccessList;
+  typedef ZoneAccessList::iterator ZoneAccessListIter;
+  ZoneAccessList actzones;
 
 public:
-  RegistrarImpl(DB *_db) :
-    CommonObjectImpl(0), db(_db), changed(true) {
-  }
-  RegistrarImpl(DB *_db,
-                TID _id,
+  RegistrarImpl()
+  : CommonObjectImplNew()
+  , ModelRegistrar()
+
+  {}
+  RegistrarImpl(TID _id,
                 const std::string& _ico,
                 const std::string& _dic,
                 const std::string& _var_symb,
@@ -146,181 +253,210 @@ public:
                 const std::string& _email,
                 bool _system,
                 unsigned long _credit) :
-        CommonObjectImpl(_id),
-        db(_db), ico(_ico), dic(_dic), var_symb(_var_symb), vat(_vat),
-        handle(_handle), name(_name), url(_url), organization(_organization),
-        street1(_street1), street2(_street2), street3(_street3), city(_city),
-        province(_province), postalCode(_postalCode), country(_country),
-        telephone(_telephone), fax(_fax), email(_email), system(_system), 
-        credit(_credit) {
+        CommonObjectImplNew(),
+        ModelRegistrar(),
+        credit(_credit)
+  {
+	ModelRegistrar::setId(_id);
+	ModelRegistrar::setIco(_ico);
+	ModelRegistrar::setDic(_dic);
+	ModelRegistrar::setVarsymb(_var_symb);
+	ModelRegistrar::setVat(_vat);
+	ModelRegistrar::setHandle(_handle);
+	ModelRegistrar::setName(_name);
+	ModelRegistrar::setOrganization(_organization);
+	ModelRegistrar::setStreet1(_street1);
+	ModelRegistrar::setStreet2(_street2);
+	ModelRegistrar::setStreet3(_street3);
+	ModelRegistrar::setCity(_city);
+	ModelRegistrar::setStateorprovince(_province);
+	ModelRegistrar::setPostalcode(_postalCode);
+	ModelRegistrar::setCountry(_country);
+	ModelRegistrar::setTelephone(_telephone);
+	ModelRegistrar::setFax(_fax);
+	ModelRegistrar::setEmail(_email);
+	ModelRegistrar::setUrl(_url);
+	ModelRegistrar::setSystem(_system);
   }
   void clear() {
-    for (unsigned i=0; i<acl.size(); i++)
-      delete acl[i];
     acl.clear();
+    actzones.clear();
   }
-  ~RegistrarImpl() {
-    clear();
+  ~RegistrarImpl() {}
+
+  virtual const TID& getId() const
+  {
+     return ModelRegistrar::getId();
+  }
+  virtual void setId(const TID &_id)
+  {
+	ModelRegistrar::setId(_id);
+  }
+  virtual const std::string& getIco() const
+  {
+    return ModelRegistrar::getIco();
+  }
+  virtual void setIco(const std::string& _ico)
+  {
+	ModelRegistrar::setIco(_ico);
+  }
+  virtual const std::string& getDic() const
+  {
+    return ModelRegistrar::getDic();
+  }
+  virtual void setDic(const std::string& _dic)
+  {
+	ModelRegistrar::setDic(_dic);
+  }
+  virtual const std::string& getVarSymb() const
+  {
+    return ModelRegistrar::getVarsymb();
+  }
+  virtual void setVarSymb(const std::string& _var_symb)
+  {
+	ModelRegistrar::setVarsymb(_var_symb);
+  }
+  virtual bool getVat() const
+  {
+    return ModelRegistrar::getVat();
+  }
+  virtual void setVat(bool _vat)
+  {
+	ModelRegistrar::setVat(_vat);
+  }
+  virtual const std::string& getHandle() const
+  {
+    return ModelRegistrar::getHandle();
+  }
+  virtual void setHandle(const std::string& _handle)
+  {
+	ModelRegistrar::setHandle(_handle);
+  }
+  virtual const std::string& getName() const
+  {
+    return ModelRegistrar::getName();
+  }
+  virtual void setName(const std::string& _name)
+  {
+	ModelRegistrar::setName(_name);
+  }
+  virtual const std::string& getURL() const
+  {
+    return ModelRegistrar::getUrl();
+  }
+  virtual void setURL(const std::string& _url)
+  {
+	ModelRegistrar::setUrl(_url);
+  }
+  virtual const std::string& getOrganization() const
+  {
+    return ModelRegistrar::getOrganization();
+  }
+  virtual void setOrganization(const std::string& _organization)
+  {
+	ModelRegistrar::setOrganization(_organization);
+  }
+  virtual const std::string& getStreet1() const
+  {
+    return ModelRegistrar::getStreet1();
+  }
+  virtual void setStreet1(const std::string& _street1)
+  {
+	ModelRegistrar::setStreet1(_street1);
+  }
+  virtual const std::string& getStreet2() const
+  {
+    return ModelRegistrar::getStreet2();
+  }
+  virtual void setStreet2(const std::string& _street2)
+  {
+	ModelRegistrar::setStreet2(_street2);
+  }
+  virtual const std::string& getStreet3() const
+  {
+    return ModelRegistrar::getStreet3();
+  }
+  virtual void setStreet3(const std::string& _street3)
+  {
+	ModelRegistrar::setStreet3(_street3);
+  }
+  virtual const std::string& getCity() const
+  {
+	return ModelRegistrar::getCity();
+  }
+  virtual void setCity(const std::string& _city)
+  {
+	ModelRegistrar::setCity(_city);
+  }
+  virtual const std::string& getProvince() const
+  {
+    return ModelRegistrar::getStateorprovince();
+  }
+  virtual void setProvince(const std::string& _province)
+  {
+	ModelRegistrar::setStateorprovince(_province);
+  }
+  virtual const std::string& getPostalCode() const
+  {
+    return ModelRegistrar::getPostalcode();
+  }
+  virtual void setPostalCode(const std::string& _postalCode)
+  {
+	ModelRegistrar::setPostalcode(_postalCode);
+  }
+  virtual const std::string& getCountry() const
+  {
+    return ModelRegistrar::getCountry();
+  }
+  virtual void setCountry(const std::string& _country)
+  {
+	ModelRegistrar::setCountry(_country);
+  }
+  virtual const std::string& getTelephone() const
+  {
+    return ModelRegistrar::getTelephone();
+  }
+  virtual void setTelephone(const std::string& _telephone)
+  {
+	ModelRegistrar::setTelephone(_telephone);
+  }
+  virtual const std::string& getFax() const
+  {
+    return ModelRegistrar::getFax();
+  }
+  virtual void setFax(const std::string& _fax)
+  {
+	ModelRegistrar::setFax(_fax);
+  }
+  virtual const std::string& getEmail() const
+  {
+    return ModelRegistrar::getEmail();
+  }
+  virtual void setEmail(const std::string& _email)
+  {
+	ModelRegistrar::setEmail(_email);
+  }
+  virtual bool getSystem() const
+  {
+    return ModelRegistrar::getSystem();
+  }
+  virtual void setSystem(bool _system)
+  {
+	ModelRegistrar::setSystem(_system);
   }
 
-  virtual const std::string& getIco() const {
-    return ico;
-  }
-    
-  virtual void setIco(const std::string& _ico) {
-    SET(ico, _ico);
-  }
-  
-  virtual const std::string& getDic() const {
-    return dic;
-  }
-  
-  virtual void setDic(const std::string& _dic) {
-    SET(dic, _dic);
-  }
-  
-  virtual const std::string& getVarSymb() const {
-    return var_symb;
-  }
-  
-  virtual void setVarSymb(const std::string& _var_symb) {
-    SET(var_symb, _var_symb);
-  }
-  
-  virtual bool getVat() const {
-    return vat;
-  }
-  
-  virtual void setVat(bool _vat) {
-    SET(vat, _vat);
-  }
-    
-  virtual const std::string& getHandle() const {
-    return handle;
-  }
-  
-  virtual void setHandle(const std::string& newHandle) {
-    SET(handle,newHandle);
-  }
-  
-  virtual const std::string& getName() const {
-    return name;
-  }
-  
-  virtual void setName(const std::string& newName) {
-    SET(name,newName);
-  }
-  
-  virtual const std::string& getURL() const {
-    return url;
-  }
-  
-  virtual void setURL(const std::string& newURL) {
-    SET(url,newURL);
-  }
-  
-  virtual const std::string& getOrganization() const {
-    return organization;
-  }
-  
-  virtual void setOrganization(const std::string& _organization) {
-    SET(organization,_organization);
-  }
-  
-  virtual const std::string& getStreet1() const {
-    return street1;
-  }
-  
-  virtual void setStreet1(const std::string& _street1) {
-    SET(street1,_street1);
-  }
-  
-  virtual const std::string& getStreet2() const {
-    return street2;
-  }
-  
-  virtual void setStreet2(const std::string& _street2) {
-    SET(street2,_street2);
-  }
-  
-  virtual const std::string& getStreet3() const {
-    return street3;
-  }
-  
-  virtual void setStreet3(const std::string& _street3) {
-    SET(street3,_street3);
-  }
-  
-  virtual const std::string& getCity() const {
-    return city;
-  }
-  
-  virtual void setCity(const std::string& _city) {
-    SET(city,_city);
-  }
-  
-  virtual const std::string& getProvince() const {
-    return province;
-  }
-  
-  virtual void setProvince(const std::string& _province) {
-    SET(province,_province);
-  }
-  
-  virtual const std::string& getPostalCode() const {
-    return postalCode;
-  }
-  
-  virtual void setPostalCode(const std::string& _postalCode) {
-    SET(postalCode,_postalCode);
-  }
-  
-  virtual const std::string& getCountry() const {
-    return country;
-  }
-  
-  virtual void setCountry(const std::string& _country) {
-    SET(country,_country);
-  }
-  
-  virtual const std::string& getTelephone() const {
-    return telephone;
-  }
-  
-  virtual void setTelephone(const std::string& _telephone) {
-    SET(telephone,_telephone);
-  }
-  
-  virtual const std::string& getFax() const {
-    return fax;
-  }
-  
-  virtual void setFax(const std::string& _fax) {
-    SET(fax,_fax);
-  }
-  
-  virtual const std::string& getEmail() const {
-    return email;
-  }
-  
-  virtual void setEmail(const std::string& _email) {
-    SET(email,_email);
-  }
-  
-  virtual bool getSystem() const {
-    return system;
-  }
-  
-  virtual void setSystem(bool _system) {
-    SET(system, _system);
-  }
-  
   virtual unsigned long getCredit() const {
     return credit;
   }
   
-  virtual unsigned long getCredit(Database::ID _zone_id) {
-    return zone_credit_map[_zone_id];
+  virtual unsigned long getCredit(Database::ID _zone_id) const
+  {
+      unsigned long ret = 0;
+      ZoneCreditMap::const_iterator it;
+      it = zone_credit_map.find(_zone_id);
+      if(it != zone_credit_map.end())
+          ret = it->second;
+    return ret;
   }
   
   virtual void setCredit(Database::ID _zone_id, unsigned long _credit) {
@@ -332,236 +468,385 @@ public:
     return acl.size();
   }
   
-  virtual ACL* getACL(unsigned idx) const {
-    return idx < acl.size() ? acl[idx] : NULL;
+  virtual unsigned getZoneAccessSize() const {
+      return actzones.size();
+    }
+
+  virtual ACL* getACL(unsigned idx) const
+  {
+    return idx < acl.size() ? acl[idx].get() : NULL;
   }
-  
-  virtual ACL* newACL() {
-    ACLImpl* newACL = new ACLImpl();
+  virtual ZoneAccess* getZoneAccess(unsigned idx) const
+  {
+    return idx < actzones.size() ? actzones[idx].get() : NULL;
+  }
+
+  virtual ACL* newACL()
+  {
+    boost::shared_ptr<ACLImpl> newACL ( new ACLImpl());
     acl.push_back(newACL);
-    return newACL;
+    return newACL.get();
   }
-  
-  virtual void deleteACL(unsigned idx) {
+
+  virtual ZoneAccess* newZoneAccess()
+  {
+    boost::shared_ptr<ZoneAccess> newZoneAccess ( new ZoneAccess());
+    actzones.push_back(newZoneAccess);
+    return newZoneAccess.get();
+  }
+
+  virtual void deleteACL(unsigned idx)
+  {
     if (idx < acl.size()) {
-      delete acl[idx];
       acl.erase(acl.begin()+idx);
     }
   }
-  
-  virtual void clearACLList() {
-    clear();
-  }
-  
-  virtual void save() throw (SQL_ERROR) {
-    if (changed) {
-      // save registrar data
-      /*
-       * SQL_SAVE(sql,"registrar",id);
-       * SQL_SAVE_ADD(sql,"name",name);
-       * SQL_SAVE_ADD(sql,"handle",handle);
-       * SQL_SAVE_ADD(sql,"url",url);
-       * SQL_SAVE_DOIT(sql,db);
-       */
-      
-      /*
-       * TODO: Folowing SQLs should be propably done in transaction
-       */ 
-      std::ostringstream sql;
-      if (id_) {
-        sql << "UPDATE registrar SET " 
-            << "ico = '" << getIco() << "', "
-            << "dic = '" << getDic() << "', " 
-            << "varsymb = '" << getVarSymb() << "', "
-            << "vat = " << (getVat() ? "true" : "false") << ", "
-            << "name = '" << getName() << "', "
-            << "handle = '" << getHandle() << "', " 
-            << "url = '" << getURL() << "', " 
-            << "organization = '" << getOrganization() << "', "
-            << "street1 = '" << getStreet1() << "', " 
-            << "street2 = '" << getStreet2() << "', " 
-            << "street3 = '" << getStreet3() << "', "
-            << "city = '" << getCity() << "', " 
-            << "stateorprovince = '" << getProvince() << "', " 
-            << "postalcode = '" << getPostalCode() << "', " 
-            << "country = '" << getCountry() << "', " 
-            << "telephone = '" << getTelephone() << "', " 
-            << "fax = '" << getFax() << "', "
-            << "email = '" << getEmail() << "', "
-            << "system = " << (getSystem() ? "true" : "false") << " "
-            << "WHERE id = " << id_;
-      } else {
-        id_ = db->GetSequenceID("registrar");
-        sql << "INSERT INTO registrar "
-            << "(id, ico, dic, varsymb, vat, name, handle, url, organization, street1, street2, "
-            << "street3, city, stateorprovince, postalcode, country, "
-            << "telephone, fax, email, system) " 
-            << "VALUES " << "(" 
-            // << "DEFAULT" << ", "
-            << id_ << ", "
-            << "'" << getIco() << "', "
-            << "'" << getDic() << "', "
-            << "'" << getVarSymb() << "', "
-            << "" << (getVat() ? "true" : "false") << ", "
-            << "'" << getName() << "', " 
-            << "'" << getHandle() << "', " 
-            << "'" << getURL() << "', " 
-            << "'" << getOrganization() << "', "
-            << "'" << getStreet1() << "', " 
-            << "'" << getStreet2() << "', "
-            << "'" << getStreet3() << "', " 
-            << "'" << getCity() << "', " 
-            << "'" << getProvince() << "', " 
-            << "'" << getPostalCode() << "', " 
-            << "'" << getCountry() << "', " 
-            << "'" << getTelephone() << "', " 
-            << "'" << getFax() << "', " 
-            << "'" << getEmail() << "', "
-            << "" << (getSystem() ? "true" : "false") << ""
-            << ")";
-      }
-      if (!db->ExecSQL(sql.str().c_str()))
-        throw SQL_ERROR();
+
+  virtual void deleteZoneAccess(unsigned idx)
+  {
+    if (idx < actzones.size()) {
+        actzones.erase(actzones.begin()+idx);
     }
-    ACLList::const_iterator i = find_if(acl.begin(),
-                                        acl.end(),
-                                        std::mem_fun(&ACLImpl::hasChanged) );
-    {
-      std::ostringstream sql;
-      sql << "DELETE FROM registraracl WHERE registrarid=" << id_;
-      if (!db->ExecSQL(sql.str().c_str()))
-        throw SQL_ERROR();
-      for (unsigned j = 0; j < acl.size(); j++) {
-        sql.str("");
-        sql << acl[j]->makeSQL(id_);
-        if (!db->ExecSQL(sql.str().c_str()))
+  }
+
+  virtual void clearACLList()
+  {
+    acl.clear();
+  }
+
+  virtual void clearZoneAccessList()
+  {
+      actzones.clear();
+  }
+
+  virtual void updateRegistrarZone(
+          const TID& id,
+          const Database::Date &fromDate,
+          const Database::Date &toDate) throw (SQL_ERROR)
+  {///expecting external transaction, no transaction inside
+      try
+      {
+          LOGGER(PACKAGE).debug(boost::format("RegistrarImpl::updateRegistrarZone id: %1% fromDate: %2% toDate: %3%")
+          % id % fromDate.to_string() % toDate.to_string() );
+
+        Database::Connection conn = Database::Manager::acquire();
+
+        std::string fromStr;
+        std::string toStr;
+
+        if (!fromDate.is_special())
+        {
+            fromStr = "'" + fromDate.to_string() + "'";
+        }
+        else
+        {
+            fromStr = "CURRENT_DATE";
+        }
+
+        if (!toDate.is_special())
+        {
+            toStr = "'" + toDate.to_string() + "'";
+        }
+        else
+        {
+            toStr = "NULL";
+        }
+        std::stringstream sql;
+
+        sql << "UPDATE registrarinvoice SET fromdate = date (" << fromStr
+            << "),todate =  date (" << toStr
+            << ") WHERE id = " << id << ";";
+
+        LOGGER(PACKAGE).debug(boost::format("RegistrarImpl::updateRegistrarZone Q: %1%")
+        % sql.str() );
+
+
+        conn.exec(sql.str());
+
+      }//try
+      catch (...)
+      {
+          LOGGER(PACKAGE).error("updateRegistrarZone: an error has occured");
           throw SQL_ERROR();
-      }
-    }
-  }
-  
-  void putACL(unsigned id,
+      }//catch (...)
+  }//updateRegistrarZone
+
+  /// Look if registrar have access to zone by zone id
+  virtual bool isInZone(unsigned id) const
+  {
+      bool ret = false;
+      try
+      {
+        Database::Connection conn = Database::Manager::acquire();
+        std::stringstream sql;
+
+        sql << "select count(*) from registrarinvoice ri "
+               "where fromdate <= CURRENT_DATE and (todate >= CURRENT_DATE or todate is null) "
+               "and ri.registrarid = " << getId() << " and ri.zone = " << id << " ;";
+
+        Database::Result res = conn.exec(sql.str());
+
+        if((res.size() != 1) && (res[0].size() != 1))
+        {
+            LOGGER(PACKAGE).error("isInZone by id: an error has occured");
+            throw SQL_ERROR();
+        }
+
+        unsigned count = res[0][0];
+        if (count > 1 )
+        {
+            LOGGER(PACKAGE).warning("isInZone by id: bad data in table registrarinvoice");
+            ret = true;
+        }
+
+        if (count == 1 ) ret = true;
+
+      }//try
+      catch (...)
+      {
+          LOGGER(PACKAGE).error("isInZone by id: an error has occured");
+          throw SQL_ERROR();
+      }//catch (...)
+
+      return ret;
+  }//isInZone by id
+
+  /// Look if registrar have access to zone by zone fqdn
+  virtual bool isInZone(std::string zone_fqdn) const
+  {
+      bool ret = false;
+      try
+      {
+        Database::Connection conn = Database::Manager::acquire();
+        std::stringstream sql;
+
+        sql << "select count(*) from registrarinvoice ri join zone z on ri.zone = z.id "
+               "where fromdate <= CURRENT_DATE and (todate >= CURRENT_DATE or todate is null) "
+               "and ri.registrarid = " << getId() << " and z.fqdn = " << conn.escape(zone_fqdn) << " ;";
+
+        Database::Result res = conn.exec(sql.str());
+
+        if((res.size() != 1) && (res[0].size() != 1))
+        {
+            LOGGER(PACKAGE).error("isInZone by fqdn: an error has occured");
+            throw SQL_ERROR();
+        }
+
+        unsigned count = res[0][0];
+        if (count > 1 )
+        {
+            LOGGER(PACKAGE).error("isInZone by fqdn: bad data in table registrarinvoice");
+            ret = true;
+        }
+
+        if (count == 1 ) ret = true;
+
+      }//try
+      catch (...)
+      {
+          LOGGER(PACKAGE).error("isInZone by fqdn: an error has occured");
+          throw SQL_ERROR();
+      }//catch (...)
+
+      return ret;
+  }//isInZone by fqdn
+
+
+  virtual void save() throw (SQL_ERROR)
+  {
+    TRACE("[CALL] RegistrarImpl::save()");
+      // save registrar data
+	try
+	{
+		Database::Connection conn = Database::Manager::acquire();
+		Database::Transaction tx(conn);
+		TID id = getId();
+	    LOGGER(PACKAGE).debug(boost::format
+	            ("RegistrarImpl::save : id: %1%")
+	                % id);
+
+		if (id)
+			ModelRegistrar::update();
+		else
+		{
+			ModelRegistrar::insert();
+			ModelRegistrar::reload();
+			id = getId();
+	        LOGGER(PACKAGE).debug(boost::format
+	                ("RegistrarImpl::save after reload: id: %1%")
+	                    % id);
+		}
+
+
+    	std::ostringstream sql;
+		sql << "DELETE FROM registraracl WHERE registrarid=" << id;
+		conn.exec(sql.str());
+		for (unsigned j = 0; j < acl.size(); j++)
+		{
+			acl[j]->setRegistrarId(id);
+			acl[j]->save();
+		}//for acl
+
+		for (unsigned i = 0; i < actzones.size(); i++)
+		{
+		    if(actzones[i]->id)//use addRegistrarZone or updateRegistrarZone
+                this->updateRegistrarZone (actzones[i]->id
+                            ,actzones[i]->fromdate
+                            ,actzones[i]->todate);
+		    else
+		    {
+		        addRegistrarZone (getHandle()
+                            ,actzones[i]->name
+                            ,actzones[i]->fromdate
+                            ,actzones[i]->todate);
+		    }//else id
+		}//for actzones
+
+		tx.commit();
+	}//try
+	catch (...)
+	{
+	 LOGGER(PACKAGE).error("save: an error has occured");
+	 throw SQL_ERROR();
+	}//catch (...)
+  }//save()
+
+  void putACL(TID _id,
               const std::string& certificateMD5,
-              const std::string& password) {
-    acl.push_back(new ACLImpl(id,certificateMD5,password));
+              const std::string& password)
+  {
+    acl.push_back(ACLImplPtr(new ACLImpl(_id,certificateMD5,password)));
   }
-  bool hasId(unsigned _id) const {
-    return id_ == _id;
-  }
-  void resetId() {
-    id_ = 0;
-    changed = true;
-    for (unsigned i = 0; i < acl.size(); i++)
-      acl[i]->resetId();
-  }
-};
 
-COMPARE_CLASS_IMPL(RegistrarImpl, Name)
-COMPARE_CLASS_IMPL(RegistrarImpl, Handle)
-COMPARE_CLASS_IMPL(RegistrarImpl, URL)
-COMPARE_CLASS_IMPL(RegistrarImpl, Email)
-COMPARE_CLASS_IMPL(RegistrarImpl, Credit)
+  void putZoneAccess(TID _id
+          , std::string _name
+          , unsigned long _credit
+          , Database::Date _fromdate
+          , Database::Date _todate)
+  {
+      actzones.push_back(ZoneAccessPtr(new ZoneAccess(_id,_name,_credit,_fromdate,_todate)));
+  }
 
-class RegistrarListImpl : public Register::CommonListImpl,
-                          virtual public RegistrarList {
+  bool hasId(TID _id) const
+  {
+    return getId() == _id;
+  }
+  void resetId()
+  {
+    setId(0);
+    for (TID i = 0; i < acl.size(); i++)
+      acl[i]->setId(0);
+    for (TID i = 0; i < actzones.size(); i++)
+        actzones[i]->id=0;
+  }
+};//class RegistrarImpl
+
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Name)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Handle)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, URL)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Email)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Credit)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Ico)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Dic)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, VarSymb)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Vat)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Organization)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Street1)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Street2)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Street3)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, City)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Province)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, PostalCode)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Country)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Telephone)
+COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Fax)
+
+//COMPARE_CLASS_IMPL_NEW(RegistrarImpl, Credit)
+
+class CompareCreditByZone
+{
+    bool asc_;
+    unsigned zone_id_;
+    RZAPtr rzaptr_;
+public:
+  CompareCreditByZone(bool _asc, unsigned _zone_id
+          , RZAPtr _rzaptr)
+      : asc_(_asc), zone_id_(_zone_id), rzaptr_(_rzaptr) { }
+  bool operator()(CommonObjectNew *_left, CommonObjectNew *_right) const
+  {
+    RegistrarImpl *l_casted = dynamic_cast<RegistrarImpl *>(_left);
+    RegistrarImpl *r_casted = dynamic_cast<RegistrarImpl *>(_right);
+    if (l_casted == 0 || r_casted == 0)
+    {
+      /* this should never happen */
+      throw std::bad_cast();
+    }
+
+
+    long long lvalue = l_casted->getCredit(zone_id_);
+
+    long long rvalue = r_casted->getCredit(zone_id_);
+
+     if (rzaptr_)
+     {
+         Register::Registrar::Manager::RegistrarZoneAccess* rzaptr =0;
+         rzaptr = static_cast<Register::Registrar::Manager::RegistrarZoneAccess*>(rzaptr_);
+
+         if(rzaptr->isInZone(l_casted->getId(),zone_id_) == false) lvalue = -1;
+         if(rzaptr->isInZone(r_casted->getId(),zone_id_) == false) rvalue = -1;
+     }
+
+    return (asc_ ? (lvalue < rvalue) : (lvalue > rvalue));
+  }
+};//class CompareCreditByZone
+
+
+
+class RegistrarListImpl : public Register::CommonListImplNew,
+                          public RegistrarList {
   
   std::string name;
   std::string handle;
   std::string xml;
   TID idFilter;
   std::string zoneFilter;
+  long long ptr_idx_;//from CommonListImpl
 public:
-  RegistrarListImpl(DB *_db) :
-    CommonListImpl(_db), idFilter(0) {
+  RegistrarListImpl() :
+    CommonListImplNew(), idFilter(0) {
   }
   ~RegistrarListImpl() {
     clear();
   }
-  virtual void setIdFilter(TID _idFilter) {
-    idFilter = _idFilter;
-  }
-  virtual void setHandleFilter(const std::string& _handle) {
-    handle = _handle;
-  }
-  virtual void setXMLFilter(const std::string& _xml) {
-    xml = _xml;
-  }
-  virtual void setNameFilter(const std::string& _name) {
-    name = _name;
-  }
-  virtual void setZoneFilter(const std::string& _zone) {
-    zoneFilter = _zone;
-  }
-  virtual void reload() throw (SQL_ERROR) {
-    clear();
-    std::ostringstream sql;
-    sql << "SELECT r.id,r.handle,r.name,r.url,r.organization,"
-        << "r.street1,r.street2,r.street3,r.city,r.stateorprovince,"
-        << "r.postalcode,r.country,r.telephone,r.fax,r.email,r.system,"
-        << "COALESCE(SUM(i.credit),0) " << "FROM registrar r "
-        << "LEFT JOIN invoice i ON (r.id=i.registrarid AND "
-        << "NOT(i.credit ISNULL)) ";
-    if (!zoneFilter.empty())
-      sql << "LEFT JOIN (SELECT z.fqdn, ri.registrarid "
-          << "FROM zone z, registrarinvoice ri "
-          << "WHERE z.id=ri.zone AND ri.fromdate<=CURRENT_DATE) t "
-          << "ON (t.registrarid=r.id AND t.fqdn='" << zoneFilter << "') ";
-    sql << "WHERE 1=1 ";
-    if (!zoneFilter.empty())
-      sql << "AND NOT(t.fqdn ISNULL) ";
-    SQL_ID_FILTER(sql, "r.id", idFilter);
-    SQL_HANDLE_FILTER(sql, "r.name", name);
-    SQL_HANDLE_WILDCHECK_FILTER(sql, "r.handle", handle, false, false);
-    sql << "GROUP BY r.id,r.handle,r.name,r.url,r.organization,"
-        << "r.street1,r.street2,r.street3,r.city,r.stateorprovince,"
-        << "r.postalcode,r.country,r.telephone,r.fax,r.email,r.system ";
-    sql << "ORDER BY r.id ";
-    if (!db->ExecSelect(sql.str().c_str()))
-      throw SQL_ERROR();
-    for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++) {
-      data_.push_back(new RegistrarImpl(
-          db,
-          STR_TO_ID(db->GetFieldValue(i,0)),
-          "",
-          "",
-          "",
-          true,
-          db->GetFieldValue(i,1),
-          db->GetFieldValue(i,2),
-          db->GetFieldValue(i,3),
-          db->GetFieldValue(i,4),
-          db->GetFieldValue(i,5),
-          db->GetFieldValue(i,6),
-          db->GetFieldValue(i,7),
-          db->GetFieldValue(i,8),
-          db->GetFieldValue(i,9),
-          db->GetFieldValue(i,10),
-          db->GetFieldValue(i,11),
-          db->GetFieldValue(i,12),
-          db->GetFieldValue(i,13),
-          db->GetFieldValue(i,14),
-          (*db->GetFieldValue(i,15) == 't'),
-          atol(db->GetFieldValue(i,16))  
-      ));
-    }
-    db->FreeSelect();
-    sql.str("");
-    sql << "SELECT registrarid,cert,password " << "FROM registraracl ORDER BY registrarid";
-    if (!db->ExecSelect(sql.str().c_str()))
-      throw SQL_ERROR();
 
-    resetIDSequence();
-    for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++) {
-      // find associated registrar
-      unsigned registrarId = STR_TO_ID(db->GetFieldValue(i, 0));
-      RegistrarImpl *r = dynamic_cast<RegistrarImpl* >(findIDSequence(registrarId));
-      if (r) {
-        r->putACL(0, db->GetFieldValue(i, 1), db->GetFieldValue(i, 2));
-      }
-    }
-    db->FreeSelect();
+  void resetIDSequence()
+  {
+    ptr_idx_ = -1;
   }
-  virtual void reload(Database::Filters::Union &uf, Database::Manager *dbm) {
+  RegistrarImpl* findIDSequence(TID _id)
+  {
+    // must be sorted by ID to make sence
+    if (ptr_idx_ < 0)
+      ptr_idx_ = 0;
+    long long m_data_size = m_data.size();
+    RegistrarImpl* ret_ptr=0;
+
+    for ( ; ptr_idx_ < m_data_size
+			&& ((dynamic_cast<RegistrarImpl* >(m_data[ptr_idx_]))->getId()<_id)
+			; ptr_idx_++) ;
+    if (ptr_idx_ == m_data_size
+    		|| (ret_ptr = dynamic_cast<RegistrarImpl* >(m_data[ptr_idx_]))->getId() != _id)
+    {
+      LOGGER(PACKAGE).debug(boost::format("find id sequence: not found in result set. (id=%1%, ptr_idx=%2%)")
+                                          % _id % ptr_idx_);
+      resetIDSequence();
+      return NULL;
+    }//if
+    return ret_ptr;
+  }//findIDSequence
+
+
+  virtual void reload(Database::Filters::Union &uf) {
     TRACE("[CALL] RegistrarListImpl::reload()");
     clear();
     uf.clearQueries();
@@ -590,10 +875,10 @@ public:
     /* manually add query part to order result by id
      * need for findIDSequence() */
     uf.serialize(info_query);
-    std::string info_query_str = str(boost::format("%1% ORDER BY id LIMIT %2%") % info_query.str() % load_limit_);
+    std::string info_query_str = str(boost::format("%1% ORDER BY id LIMIT %2%") % info_query.str() % m_limit);
     try {
-      std::auto_ptr<Database::Connection> conn(dbm->getConnection());
-      Database::Result r_info = conn->exec(info_query_str);
+      Database::Connection conn = Database::Manager::acquire();
+      Database::Result r_info = conn.exec(info_query_str);
       for (Database::Result::Iterator it = r_info.begin(); it != r_info.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
@@ -619,8 +904,7 @@ public:
         bool          system       = *(++col);
         unsigned long credit       = 0;
 
-        data_.push_back(new RegistrarImpl(
-                db,
+        m_data.push_back(new RegistrarImpl(
                 rid,
                 ico,
                 dic,
@@ -644,7 +928,7 @@ public:
                 credit));
       }
 
-      if (data_.empty())
+      if (m_data.empty())
         return;
       
       Database::SelectQuery credit_query;
@@ -654,16 +938,17 @@ public:
       credit_query.order_by() << "registrarid";
 
       resetIDSequence();
-      Database::Result r_credit = conn->exec(credit_query);
+      Database::Result r_credit = conn.exec(credit_query);
       for (Database::Result::Iterator it = r_credit.begin(); it != r_credit.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
         Database::ID  zone_id      = *col;
         Database::ID  registrar_id = *(++col);
-        unsigned long credit       = *(++col);
+        long credit                = *(++col);
         
         RegistrarImpl *registrar_ptr = dynamic_cast<RegistrarImpl* >(findIDSequence(registrar_id));
-        if (registrar_ptr) {
+        if (registrar_ptr)
+        {
           registrar_ptr->setCredit(zone_id, credit);
         }
       }
@@ -674,7 +959,7 @@ public:
       acl_query.from() << "registraracl";
       acl_query.order_by() << "registrarid";
       
-      Database::Result r_acl = conn->exec(acl_query);
+      Database::Result r_acl = conn.exec(acl_query);
       for (Database::Result::Iterator it = r_acl.begin(); it != r_acl.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
@@ -687,23 +972,61 @@ public:
         if (registrar_ptr) {
           registrar_ptr->putACL(acl_id, cert_md5, password);
         }
-      }
+      }//for acl_query
+
+      resetIDSequence();
+      Database::SelectQuery azone_query;
+      azone_query.select() <<   "ri.id as id, ri.registrarid as registrarid ,z.fqdn as name, "
+                                "case when ri.fromdate = mtd.max_fromdate then cr.credit else null end as credit  "
+                                ", ri.fromdate as fromdate , ri.todate as todate ";
+      azone_query.from() <<   "registrarinvoice ri "
+                              "join zone z on ri.zone = z.id "
+                              "left join (select i.zone, i.registrarid "
+                                  ", COALESCE(SUM(credit), 0) as credit "
+                                  "from invoice i "
+                                  "group by i.registrarid, i.zone "
+                                  ") as cr on cr.zone = ri.zone "
+                                  "and ri.registrarid = cr.registrarid "
+                              "join (select ri.registrarid as rid, ri.zone as zid "
+                                  ",max(fromdate) as max_fromdate "
+                                  "from registrarinvoice ri "
+                                  "join zone z on ri.zone = z.id "
+                                  "group by ri.registrarid, ri.zone ) as mtd "
+                                  "on mtd.rid = ri.registrarid "
+                                  "and mtd.zid = ri.zone ";
+      azone_query.order_by() << "ri.registrarid,ri.zone,ri.fromdate desc,ri.todate desc ";
+
+      Database::Result r_azone = conn.exec(azone_query);
+      for (Database::Result::Iterator it = r_azone.begin(); it != r_azone.end(); ++it)
+      {
+        Database::Row::Iterator col = (*it).begin();
+
+        Database::ID azone_id = *col;
+        Database::ID registrar_id = *(++col);
+        std::string zone_name = *(++col);
+        unsigned long credit = *(++col);
+        Database::Date fromdate = *(++col);
+        Database::Date todate = *(++col);
+
+        RegistrarImpl *registrar_ptr = dynamic_cast<RegistrarImpl* >(findIDSequence(registrar_id));
+        if (registrar_ptr)
+        {
+          registrar_ptr->putZoneAccess(azone_id, zone_name, credit, fromdate, todate);
+        }
+
+      }//for r_azone
+
       /* checks if row number result load limit is active and set flag */ 
-      CommonListImpl::reload();
-    }
+      CommonListImplNew::reload();
+    }//try
     catch (Database::Exception& ex) {
       LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
     }
   }
-//  virtual const Registrar* get(unsigned idx) const {
-//    if (idx> size())
-//      return NULL;
-//    return data_[idx];
-//  }
   
   virtual Registrar* get(unsigned _idx) const {
     try {
-      Registrar *registrar = dynamic_cast<Registrar* >(data_.at(_idx));
+      Registrar *registrar = dynamic_cast<Registrar* >(m_data.at(_idx));
       if (registrar) 
         return registrar;
       else
@@ -713,57 +1036,114 @@ public:
       throw std::exception();
     } 
   }
-  
-//  Registrar* findId(Database::ID _id) const throw (Register::NOT_FOUND) {
-//    RegistrarListType::const_iterator it = std::find_if(data_.begin(),
-//                                                        data_.end(),
-//                                                        CheckId(_id));
-//    if (it != data_.end()) {
-//      LOGGER(PACKAGE).debug(boost::format("object list hit! object id=%1% found")
-//          % _id);
-//      return *it;
-//    }
-//    LOGGER(PACKAGE).debug(boost::format("object list miss! object id=%1% not found")
-//        % _id);
-//    throw Register::NOT_FOUND();
-//  }
-  virtual Registrar* create() {
-    return new RegistrarImpl(db);
+
+  /* XXX Better if we have list of shared pointers than this */
+  virtual Registrar* getAndRelease(unsigned int _idx) {
+    try {
+      Registrar *registrar = dynamic_cast<Registrar* >(m_data.at(_idx));
+      if (registrar) {
+        m_data.erase(m_data.begin() + _idx);
+        return registrar;
+      }
+      else {
+        throw std::exception();
+      }
+    }
+    catch (...) {
+      throw std::exception();
+    }
   }
-  void clearFilter() {
-    name = "";
-    handle = "";
-    zoneFilter = "";
+
+  virtual Register::Registrar::Registrar* findId(Database::ID id) const
+  {
+	  std::vector<Register::CommonObjectNew*>::const_iterator it = std::find_if(m_data.begin(),
+	  m_data.end(),
+	  CheckIdNew<Register::Registrar::Registrar>(id));
+
+	  if (it != m_data.end())
+	  {
+		  LOGGER(PACKAGE).debug(boost::format("object list hit! object id=%1% found")
+		  % id);
+		  return dynamic_cast<Register::Registrar::Registrar*>(*it);
+	  }
+	  LOGGER(PACKAGE).debug(boost::format("object list miss! object id=%1% not found")
+	  % id);
+	  throw Register::NOT_FOUND();
   }
-  
-  virtual void sort(MemberType _member, bool _asc) {
+
+  virtual void sort(MemberType _member, bool _asc, unsigned _zone_id
+          , RZAPtr rzaptr) {
     switch (_member) {
       case MT_NAME:
-        stable_sort(data_.begin(), data_.end(), CompareName(_asc));
+        stable_sort(m_data.begin(), m_data.end(), CompareName(_asc));
         break;
       case MT_HANDLE:
-        stable_sort(data_.begin(), data_.end(), CompareHandle(_asc));
+        stable_sort(m_data.begin(), m_data.end(), CompareHandle(_asc));
         break;
       case MT_URL:
-        stable_sort(data_.begin(), data_.end(), CompareURL(_asc));
+        stable_sort(m_data.begin(), m_data.end(), CompareURL(_asc));
         break;
       case MT_MAIL:
-        stable_sort(data_.begin(), data_.end(), CompareEmail(_asc));
+        stable_sort(m_data.begin(), m_data.end(), CompareEmail(_asc));
         break;
       case MT_CREDIT:
-        stable_sort(data_.begin(), data_.end(), CompareCredit(_asc));
+        stable_sort(m_data.begin(), m_data.end(), CompareCredit(_asc));
+        break;
+      case MT_ICO:
+        stable_sort(m_data.begin(), m_data.end(), CompareIco(_asc));
+        break;
+      case MT_DIC:
+        stable_sort(m_data.begin(), m_data.end(), CompareDic(_asc));
+        break;
+      case MT_VARSYMB:
+        stable_sort(m_data.begin(), m_data.end(), CompareVarSymb(_asc));
+        break;
+      case MT_VAT:
+        stable_sort(m_data.begin(), m_data.end(), CompareVat(_asc));
+        break;
+      case MT_ORGANIZATION:
+        stable_sort(m_data.begin(), m_data.end(), CompareOrganization(_asc));
+        break;
+      case MT_STREET1:
+        stable_sort(m_data.begin(), m_data.end(), CompareStreet1(_asc));
+        break;
+      case MT_STREET2:
+        stable_sort(m_data.begin(), m_data.end(), CompareStreet2(_asc));
+        break;
+      case MT_STREET3:
+        stable_sort(m_data.begin(), m_data.end(), CompareStreet3(_asc));
+        break;
+      case MT_CITY:
+        stable_sort(m_data.begin(), m_data.end(), CompareCity(_asc));
+        break;
+      case MT_PROVINCE:
+        stable_sort(m_data.begin(), m_data.end(), CompareProvince(_asc));
+        break;
+      case MT_POSTALCODE:
+        stable_sort(m_data.begin(), m_data.end(), ComparePostalCode(_asc));
+        break;
+      case MT_COUNTRY:
+        stable_sort(m_data.begin(), m_data.end(), CompareCountry(_asc));
+        break;
+      case MT_TELEPHONE:
+        stable_sort(m_data.begin(), m_data.end(), CompareTelephone(_asc));
+        break;
+      case MT_FAX:
+        stable_sort(m_data.begin(), m_data.end(), CompareFax(_asc));
+        break;
+      case MT_ZONE:
+        stable_sort(m_data.begin(), m_data.end()
+                , CompareCreditByZone(_asc , _zone_id, rzaptr));
         break;
     }
   }
-  
-  virtual void makeQuery(bool, bool, std::stringstream&) const {
-    /* dummy implementation */
+
+  virtual const char* getTempTableName() const
+  {
+    return "";
   }
   
-  virtual const char* getTempTableName() const {
-    return ""; /* dummy implementation */ 
-  }
-};
+};//class RegistrarListImpl
 
 class EPPActionImpl : public CommonObjectImpl,
                       virtual public EPPAction {
@@ -781,7 +1161,8 @@ class EPPActionImpl : public CommonObjectImpl,
   std::string message_out;
   
 public:
-  EPPActionImpl(TID _id,
+  EPPActionImpl(
+				TID _id,
                 TID _sessionId,
                 unsigned _type,
                 const std::string& _typeName,
@@ -955,65 +1336,139 @@ public:
   (db->IsNotNull(i,j)) ? atoi(db->GetFieldValue(i,j)) : 0
 #define DB_NULL_STR(i,j) \
   (db->IsNotNull(i,j)) ? db->GetFieldValue(i,j) : ""
-  virtual void reload() {
-    clear();
-    std::ostringstream sql;
-    sql << "SELECT a.id,a.clientid,a.action,ea.status,a.startdate,"
-        << "a.servertrid,a.clienttrid, a.response,r.id,r.handle,MIN(al.value) ";
-    if (partialLoad)
-      sql << ",'','' ";
-    else
-      sql << ",ax.xml,ax.xml_out ";
-    sql << "FROM action a "
-        << "JOIN enum_action ea ON (a.action=ea.id) "
-        << "JOIN enum_error er ON (a.response=er.id) "
-        << "JOIN login l ON (l.id=a.clientid) "
-        << "JOIN registrar r ON (r.id=l.registrarid) "
-        << "LEFT JOIN action_elements al ON (a.id=al.actionid) ";
-    if (!partialLoad)
-      sql << "LEFT JOIN action_xml ax ON (a.id=ax.actionid) ";
-    sql << "WHERE 1=1 ";
-    SQL_ID_FILTER(sql, "a.id", id);
-    SQL_ID_FILTER(sql, "r.id", registrarId);
-    SQL_HANDLE_WILDCHECK_FILTER(sql, "r.handle", registrarHandle, 1, 0);
-    SQL_TIME_FILTER(sql, "a.startdate", period)
-    ;
-    SQL_HANDLE_WILDCHECK_FILTER(sql, "ea.status", type, 1, 0);
-    SQL_ID_FILTER(sql, "a.response", returnCodeId);
-    SQL_HANDLE_WILDCHECK_FILTER(sql, "a.clienttrid", clTRID, 1, 0);
-    SQL_HANDLE_WILDCHECK_FILTER(sql, "a.servertrid", svTRID, 1, 0);
-    /// TODO - handle has to have special data column
-    SQL_HANDLE_WILDCHECK_FILTER(sql, "al.value", handle, 1, 0);
-    if (result != EARF_ALL)
-      sql << "AND (a.response "
-          << (result == EARF_OK ? "<" : " IS NULL OR a.response >=")
-          << " 2000) ";
-    sql << "GROUP BY a.id,a.clientid,a.action,ea.status,a.startdate,"
-        << "a.servertrid,a.clienttrid,a.response,r.handle ";
-    if (!partialLoad)
-      sql << ",ax.xml,ax.xml_out ";
-    sql << "LIMIT 1000";
-    if (!db->ExecSelect(sql.str().c_str()))
-      throw SQL_ERROR();
-    for (unsigned i=0; i < (unsigned)db->GetSelectRows(); i++) {
-      data_.push_back(new EPPActionImpl(
-          STR_TO_ID(db->GetFieldValue(i,0)),
-          DB_NULL_INT(i,1),
-          atoi(db->GetFieldValue(i,2)),
-          db->GetFieldValue(i,3),
-          ptime(time_from_string(db->GetFieldValue(i,4))),
-          db->GetFieldValue(i,5),
-          db->GetFieldValue(i,6),
-          DB_NULL_INT(i,7),
-          STR_TO_ID(db->GetFieldValue(i,8)),
-          DB_NULL_STR(i,9),
-          DB_NULL_STR(i,10),
-          DB_NULL_STR(i,11),
-          DB_NULL_STR(i,12)
-      ));
-    }
-    db->FreeSelect();
-  }
+  virtual void reload()
+  {
+	try
+	{
+		Database::Connection conn = Database::Manager::acquire();
+
+		clear();
+		std::ostringstream sql;
+		sql << "SELECT a.id,a.clientid,a.action,ea.status,a.startdate,"
+			<< "a.servertrid,a.clienttrid, a.response,r.id,r.handle,MIN(al.value) ";
+		if (partialLoad)
+		  sql << ",'','' ";
+		else
+		  sql << ",ax.xml,ax.xml_out ";
+		sql << "FROM action a "
+			<< "JOIN enum_action ea ON (a.action=ea.id) "
+			<< "JOIN enum_error er ON (a.response=er.id) "
+			<< "JOIN login l ON (l.id=a.clientid) "
+			<< "JOIN registrar r ON (r.id=l.registrarid) "
+			<< "LEFT JOIN action_elements al ON (a.id=al.actionid) ";
+		if (!partialLoad)
+		  sql << "LEFT JOIN action_xml ax ON (a.id=ax.actionid) ";
+		sql << "WHERE 1=1 ";
+		if (id) sql << "AND " << "a.id" << "=" << id << " ";
+		if (registrarId) sql << "AND " << "r.id" << "=" << registrarId << " ";
+
+		if (!registrarHandle.empty())
+		{
+		    if ((registrarHandle.find('*') != std::string::npos ||
+		              registrarHandle.find('?') != std::string::npos))
+		      sql << "AND "
+		       << "r.handle" << " ILIKE TRANSLATE('" << conn.escape(registrarHandle) << "','*?','%_') ";
+		    else sql << "AND " << (0?"UPPER(":"") << "r.handle" << (0?")":"")
+		           << "=" << (0?"UPPER(":"")
+		           << "'" << conn.escape(registrarHandle) << "'" <<  (0?")":"") << " ";
+		}
+
+		if (!period.begin().is_special())
+		     sql << "AND " << "a.startdate" << ">='"
+		       <<  to_iso_extended_string(period.begin())
+		       << "' ";
+		  if (!period.end().is_special())
+		     sql << "AND " << "a.startdate" << "<='"
+		       <<  to_iso_extended_string(period.end())
+		       << "' ";
+
+		  if (!type.empty())
+		  {
+		      if ((type.find('*') != std::string::npos ||
+		                type.find('?') != std::string::npos))
+		        sql << "AND "
+		         << "ea.status" << " ILIKE TRANSLATE('" << conn.escape(type) << "','*?','%_') ";
+		      else sql << "AND " << (0?"UPPER(":"") << "ea.status" << (0?")":"")
+		             << "=" << (0?"UPPER(":"")
+		             << "'" << conn.escape(type) << "'" <<  (0?")":"") << " ";
+		  }
+
+		  if (returnCodeId) sql << "AND " << "a.response" << "=" << returnCodeId << " ";
+
+		  if (!clTRID.empty())
+		  {
+		      if ((clTRID.find('*') != std::string::npos ||
+		                clTRID.find('?') != std::string::npos))
+		        sql << "AND "
+		         << "a.clienttrid" << " ILIKE TRANSLATE('" << conn.escape(clTRID) << "','*?','%_') ";
+		      else sql << "AND " << (0?"UPPER(":"") << "a.clienttrid" << (0?")":"")
+		             << "=" << (0?"UPPER(":"")
+		             << "'" << conn.escape(clTRID) << "'" <<  (0?")":"") << " ";
+		  }
+
+		  if (!svTRID.empty())
+		  {
+		      if ((svTRID.find('*') != std::string::npos ||
+		                svTRID.find('?') != std::string::npos))
+		        sql << "AND "
+		         << "a.servertrid" << " ILIKE TRANSLATE('" << conn.escape(svTRID) << "','*?','%_') ";
+		      else sql << "AND " << (0?"UPPER(":"") << "a.servertrid" << (0?")":"")
+		             << "=" << (0?"UPPER(":"")
+		             << "'" << conn.escape(svTRID) << "'" <<  (0?")":"") << " ";
+		  }
+
+		  /// TODO - handle has to have special data column
+
+		  if (!handle.empty())
+		  {
+		      if ((handle.find('*') != std::string::npos ||
+		                handle.find('?') != std::string::npos))
+		        sql << "AND "
+		         << "al.value" << " ILIKE TRANSLATE('" << conn.escape(handle) << "','*?','%_') ";
+		      else sql << "AND " << (0?"UPPER(":"") << "al.value" << (0?")":"")
+		             << "=" << (0?"UPPER(":"")
+		             << "'" << conn.escape(handle) << "'" <<  (0?")":"") << " ";
+		  }
+
+		if (result != EARF_ALL)
+		  sql << "AND (a.response "
+			  << (result == EARF_OK ? "<" : " IS NULL OR a.response >=")
+			  << " 2000) ";
+		sql << "GROUP BY a.id,a.clientid,a.action,ea.status,a.startdate,"
+			<< "a.servertrid,a.clienttrid,a.response,r.handle ";
+		if (!partialLoad)
+		  sql << ",ax.xml,ax.xml_out ";
+		sql << "LIMIT 1000";
+
+		Database::Result res = conn.exec(sql.str());
+
+		for (unsigned i=0; i < static_cast<unsigned>(res.size()); i++)
+		{
+		  data_.push_back(new EPPActionImpl(
+			res[i][0]
+			,res[i][1]
+			,res[i][2]
+			,res[i][3]
+			,res[i][4]
+			,res[i][5]
+			,res[i][6]
+			,res[i][7]
+			,res[i][8]
+			,res[i][9]
+			,res[i][10]
+			,res[i][11]
+			,res[i][12]
+
+		  ));
+		}
+
+	}//try
+	catch (...)
+	{
+	 LOGGER(PACKAGE).error("reload: an error has occured");
+	 throw SQL_ERROR();
+	}//catch (...)
+  }//reload
 
   virtual EPPAction* get(unsigned _idx) const {
     try {
@@ -1044,7 +1499,7 @@ public:
     result = EARF_ALL;
     partialLoad = false;
   }
-  virtual void reload(Database::Filters::Union &uf, Database::Manager *dbm) {
+  virtual void reload(Database::Filters::Union &uf) {
     TRACE("[CALL] EPPActionListImpl::reload()");
     clear();
     uf.clearQueries();
@@ -1071,6 +1526,7 @@ public:
       return;
     }
 
+    id_query.order_by() << "id DESC";
     id_query.limit(load_limit_);
     uf.serialize(id_query);
 
@@ -1107,15 +1563,15 @@ public:
     }
 
     try {
-      std::auto_ptr<Database::Connection> conn(dbm->getConnection());
+      Database::Connection conn = Database::Manager::acquire();
 
       Database::Query create_tmp_table("SELECT create_tmp_table('" + std::string("tmp_eppaction_filter_result") + "')");
-      conn->exec(create_tmp_table);
-      conn->exec(tmp_table_query);
+      conn.exec(create_tmp_table);
+      conn.exec(tmp_table_query);
 
       // TEMP: should be cached somewhere
       Database::Query registrars_query("SELECT id, handle FROM registrar");
-      Database::Result r_registrars = conn->exec(registrars_query);
+      Database::Result r_registrars = conn.exec(registrars_query);
       Database::Result::Iterator it = r_registrars.begin();
       for (; it != r_registrars.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
@@ -1125,7 +1581,7 @@ public:
         registrars_table[id] = handle;
       }
 
-      Database::Result r_info = conn->exec(object_info_query);
+      Database::Result r_info = conn.exec(object_info_query);
       for (Database::Result::Iterator it = r_info.begin(); it != r_info.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
@@ -1207,128 +1663,312 @@ public:
 
 };
 
-class ManagerImpl : virtual public Manager {
-  DB *db; ///< connection do db
-  RegistrarListImpl rl;
+class ManagerImpl : virtual public Manager
+{ DB * db_;
+  //RegistrarListImpl rl;
   EPPActionListImpl eal;
   std::vector<EPPActionType> actionTypes;
 public:
-  ManagerImpl(DB *_db) :
-    db(_db), rl(_db), eal(db) {
-    
-    if (!db->ExecSelect("SELECT * FROM enum_action")) {
-      throw SQL_ERROR();
-    }
-    
-    actionTypes.clear();
-    for (unsigned i = 0; i < (unsigned)db->GetSelectRows(); i++) {
-      EPPActionType action;
-      action.id = STR_TO_ID(db->GetFieldValue(i, 0));
-      action.name = db->GetFieldValue(i, 1);
-      actionTypes.push_back(action);
-    }
-    db->FreeSelect();    
+  ManagerImpl(DB* db)
+  :db_(db)//,rl()
+  , eal(db)
+  {
+      try
+      {
+    	Database::Connection conn = Database::Manager::acquire();
+
+		Database::Result res = conn.exec("SELECT * FROM enum_action");
+
+		unsigned rows = res.size();
+
+		if((rows > 0)&&(res[0].size() > 0))
+		{
+		    actionTypes.clear();
+		    for (unsigned i = 0; i < (unsigned)rows; ++i)
+		    {
+		      EPPActionType action;
+		      action.id = res[i][0];
+		      action.name = std::string(res[i][1]);
+		      actionTypes.push_back(action);
+		    }
+		}
+		else
+			throw SQL_ERROR();
+      }//try
+      catch (...)
+      {
+          LOGGER(PACKAGE).error("ManagerImpl: an error has occured");
+          throw SQL_ERROR();
+      }//catch (...)
   }
-  virtual RegistrarList *getList() {
+
+/*
+  virtual RegistrarList *getList()
+  {
     return &rl;
   }
-  virtual EPPActionList *getEPPActionList() {
+*/
+  virtual EPPActionList *getEPPActionList()
+  {
     return &eal;
   }
-  virtual EPPActionList *createEPPActionList() {
-    return new EPPActionListImpl(db);
+  virtual EPPActionList *createEPPActionList()
+  {
+    return new EPPActionListImpl(db_);
   }
   
-  virtual unsigned getEPPActionTypeCount() {
+  virtual unsigned getEPPActionTypeCount()
+  {
     return actionTypes.size();
   }
+
   virtual const EPPActionType& getEPPActionTypeByIdx(unsigned idx) const
-      throw (NOT_FOUND) {
+      throw (NOT_FOUND)
+  {
     if (idx >= actionTypes.size())
       throw NOT_FOUND();
     return actionTypes[idx];
   }
-  virtual bool checkHandle(const std::string handle) const throw (SQL_ERROR) {
-    if (!boost::regex_match(handle, boost::regex("[rR][eE][gG]-.*")))
-      return false;
-    std::stringstream sql;
-    sql << "SELECT COUNT(*) FROM registrar " << "WHERE UPPER(handle)=UPPER('"
-        << handle << "')";
-    if (!db->ExecSelect(sql.str().c_str()))
-      throw SQL_ERROR();
-    bool result = atoi(db->GetFieldValue(0, 0));
-    db->FreeSelect();
-    return result;
+
+  virtual bool checkHandle(const std::string handle) const
+	  throw (SQL_ERROR)
+  {
+      try
+      {
+    	Database::Connection conn = Database::Manager::acquire();
+
+		if (!boost::regex_match(handle, boost::regex("[rR][eE][gG]-.*")))
+		  return false;
+		std::stringstream sql;
+		sql << "SELECT COUNT(*) FROM registrar " << "WHERE UPPER(handle)=UPPER('"
+			<< handle << "')";
+
+		Database::Result res = conn.exec(sql.str());
+		if((res.size() > 0)&&(res[0].size() > 0))
+		{
+			unsigned count = res[0][0];
+			bool ret = count;
+			return ret;
+		}
+		else
+			throw SQL_ERROR();
+      }//try
+      catch (...)
+      {
+          LOGGER(PACKAGE).error("checkHandle: an error has occured");
+          throw SQL_ERROR();
+      }//catch (...)
   }
-  virtual void addRegistrar(const std::string& registrarHandle)
-      throw (SQL_ERROR) {
-    RegistrarListImpl rlist(db);
-    rlist.setHandleFilter("REG-FRED_A");
-    rlist.reload();
-    if (rlist.size() < 1)
-      return;
-    RegistrarImpl *r = dynamic_cast<RegistrarImpl *>(rlist.get(0));
-    if (!r)
-      return;
-    r->resetId();
-    r->setHandle(registrarHandle);
-    r->save();
-  }
+
   virtual void addRegistrarAcl(
           const std::string &registrarHandle,
           const std::string &cert,
           const std::string &pass)
       throw (SQL_ERROR)
   {
-      std::stringstream sql;
-      sql << "INSERT INTO registraracl (registrarid, cert, password) "
-          << "SELECT r.id, '" << cert << "','" << pass << "' FROM registrar r "
-          << "WHERE r.handle='" << registrarHandle << "'";
-      if (!db->ExecSQL(sql.str().c_str())) {
+      try
+      {
+    	  Database::Connection conn = Database::Manager::acquire();
+
+    	  std::stringstream sql;
+		  sql << "INSERT INTO registraracl (registrarid, cert, password) "
+			  << "SELECT r.id, '" << conn.escape(cert) << "','"
+			  << conn.escape(pass) << "' FROM registrar r "
+			  << "WHERE r.handle='" << conn.escape(registrarHandle) << "'";
+
+		  Database::Transaction tx(conn);
+		  conn.exec(sql.str());
+		  tx.commit();
+      }//try
+      catch (...)
+      {
+          LOGGER(PACKAGE).error("addRegistrarAcl: an error has occured");
           throw SQL_ERROR();
-      }
-  }
-  virtual Registrar *createRegistrar()
+      }//catch (...)
+  }//addRegistrarAcl
+
+  virtual Registrar::AutoPtr createRegistrar()
   {
-      return dynamic_cast<RegistrarImpl *>(new RegistrarImpl(db));
+      return Registrar::AutoPtr(static_cast<Registrar *>(new RegistrarImpl));
   }
 
-  virtual void addRegistrarZone(
-          const std::string& registrarHandle,
-          const std::string zone,
+  virtual void updateRegistrarZone(
+          const TID& id,
           const Database::Date &fromDate,
-          const Database::Date &toDate) throw (SQL_ERROR) {
-    std::string fromStr;
-    std::string toStr;
+          const Database::Date &toDate) throw (SQL_ERROR)
+  {
+      try
+      {
+      	Database::Connection conn = Database::Manager::acquire();
 
-    if (fromDate != Database::Date()) {
-        fromStr = "'" + fromDate.to_string() + "'";
-    } else {
-        fromStr = "CURRENT_DATE";
+		std::string fromStr;
+		std::string toStr;
+
+		if (fromDate != Database::Date())
+		{
+			fromStr = "'" + fromDate.to_string() + "'";
+		}
+		else
+		{
+			fromStr = "CURRENT_DATE";
+		}
+		if (toDate != Database::Date())
+		{
+			toStr = "'" + toDate.to_string() + "'";
+		}
+		else
+		{
+			toStr = "NULL";
+		}
+		std::stringstream sql;
+
+		sql << "UPDATE registrarinvoice SET fromdate = date (" << fromStr
+			<< "),todate =  date (" << toStr
+			<< ") WHERE id = " << id << ";";
+
+		Database::Transaction tx(conn);
+		conn.exec(sql.str());
+		tx.commit();
+      }//try
+      catch (...)
+      {
+          LOGGER(PACKAGE).error("updateRegistrarZone: an error has occured");
+          throw SQL_ERROR();
+      }//catch (...)
+  }//updateRegistrarZone
+
+  ///list factory
+    virtual RegistrarList::AutoPtr createList()
+    {
+        return RegistrarList::AutoPtr(new RegistrarListImpl());
     }
-    if (toDate != Database::Date()) {
-        toStr = "'" + toDate.to_string() + "'";
-    } else {
-        toStr = "NULL";
+
+    ///registrar instance factory
+    virtual Registrar::AutoPtr getRegistrarByHandle(const std::string& handle)
+    {
+        RegistrarList::AutoPtr registrarlist ( createList());
+
+        Database::Filters::UnionPtr unionFilter = Database::Filters::CreateClearedUnionPtr();
+        std::auto_ptr<Database::Filters::Registrar> r ( new Database::Filters::RegistrarImpl(true));
+        r->addHandle().setValue(handle);
+        unionFilter->addFilter( r.release() );
+        registrarlist->reload(*unionFilter.get());
+
+        if (registrarlist->size() != 1)
+        {
+            return Registrar::AutoPtr(0);
+        }
+        return Registrar::AutoPtr(registrarlist->getAndRelease(0));
+    }//getRegistrarByHandle
+
+    virtual unsigned long long getRegistrarByPayment(const std::string &varsymb,
+                                                     const std::string &memo)
+    {
+        Database::Query query;
+        query.buffer() << "SELECT id FROM registrar WHERE varsymb = "
+                       << Database::Value(varsymb)
+                       << " OR (length(trim(regex)) > 0 AND "
+                       << Database::Value(memo) << " ~* trim(regex))";
+
+        Database::Connection conn = Database::Manager::acquire();
+        Database::Result result = conn.exec(query);
+        if (result.size() == 1) {
+            return static_cast<unsigned long long>(result[0][0]);
+        }
+        return 0;
     }
-    std::stringstream sql;
-    sql << "INSERT INTO registrarinvoice (registrarid,zone,fromdate,lastdate) "
-        << "SELECT r.id,z.id," << fromStr << "," << toStr << " FROM ("
-        << "SELECT id FROM registrar WHERE handle='" << registrarHandle
-        << "') r " << "JOIN (SELECT id FROM zone WHERE fqdn='" << zone
-        << "') z ON (1=1) " << "LEFT JOIN registrarinvoice ri ON "
-        << "(ri.registrarid=r.id AND ri.zone=z.id) " << "WHERE ri.id ISNULL";
-    if (!db->ExecSQL(sql.str().c_str()))
-      throw SQL_ERROR();
-  }
 }; // class ManagerImpl
 
-Manager *Manager::create(DB *db) {
-  TRACE("[CALL] Register::Registrar::Manager::create()");
-  return new ManagerImpl(db);
+unsigned long long Manager::RegistrarZoneAccess::max_id(ColIndex idx, Database::Result& result)
+{
+    TRACE("[CALL] Manager::RegistrarZoneAccess::max_id");
+    unsigned long long ret =0;
+    for (unsigned i = 0; i < result.size() ; ++i)
+        if((result[i].size() > static_cast<unsigned long long>(idx))
+                && (static_cast<unsigned>(result[i][idx]) > ret))
+            ret = result[i][idx];
+    LOGGER(PACKAGE).debug(boost::format
+            ("[CALL] Manager::RegistrarZoneAccess::max_id: %1%  result.size(): %2%")
+                % ret % result.size());
+    return ret;
+}//max_id
+
+/// Look if registrar have currently access to zone by id
+ bool Manager::RegistrarZoneAccess::isInZone(unsigned long long registrar_id,unsigned long long zone_id)
+ {
+     bool ret = false;
+     if((registrar_id <= max_registrar_id)
+             && (zone_id <= max_zone_id))
+                ret = flag.at(registrar_id).at(zone_id);
+     LOGGER(PACKAGE).debug(boost::format
+             ("[CALL] Manager::RegistrarZoneAccess::isInZone() registrar_id: %1% zone_id: %2% ret: %3%")
+                 % registrar_id % zone_id % ret);
+    return ret;
+ }//isInZone
+
+void Manager::RegistrarZoneAccess::reload()
+{
+    try
+    {
+        Database::Connection conn = Database::Manager::acquire();
+        std::stringstream sql;
+        sql <<  "select registrarid, zoneid, isinzone"
+                " from (select r.id as registrarid, z.id as zoneid"
+                " , (select count(*) from registrarinvoice ri"
+                " where fromdate <= CURRENT_DATE"
+                " and (todate >= CURRENT_DATE or todate is null)"
+                " and ri.registrarid = r.id and ri.zone = z.id) as isinzone"
+                " from registrar as r , zone as z) as rii where isinzone > 0";
+        Database::Result res = conn.exec(sql.str());
+        max_registrar_id = max_id(RegistrarCol, res);
+        max_zone_id = max_id(ZoneCol, res);
+        LOGGER(PACKAGE).debug(boost::format("Manager::RegistrarZoneAccess::reload "
+                "res.size: %1% rza.max_registrar_id: %2% max_zone_id: %3% ")
+                % res.size()
+                % max_registrar_id
+                % max_zone_id
+                );
+        flag = RegistrarZoneAccess::RegistrarZoneAccessArray (max_registrar_id + 1
+                ,RegistrarZoneAccess::RegistrarZoneAccessRow(max_zone_id + 1,false));
+        for (unsigned i = 0; i < res.size() ; ++i)
+        {
+            LOGGER(PACKAGE).debug(boost::format
+                    ("[CALL] Manager::RegistrarZoneAccess::reload() for i: %1% ") % i );
+             if(res[i].size() > IsInZone)
+             {
+                 LOGGER(PACKAGE).debug
+                 (boost::format
+                     ("[CALL] Manager::RegistrarZoneAccess::reload()"
+                         " if size reg_id: %1% zone_id: %2% flag: %3% "
+                     )
+                     % static_cast<unsigned long long>(res[i][RegistrarCol])
+                     % static_cast<unsigned long long>(res[i][ZoneCol])
+                     % (static_cast<unsigned long long>(res[i][IsInZone]) > 0)
+                 );
+                 std::size_t regid = static_cast<std::size_t>(res[i][RegistrarCol]);
+                 std::size_t zonid = static_cast<std::size_t>(res[i][ZoneCol]);
+                 flag.at(regid).at(zonid) = (static_cast<unsigned long long>(res[i][IsInZone]) > 0);
+             }//if size
+        }//for i
+    }//try
+    catch(const std::exception& ex)
+    {
+        LOGGER(PACKAGE).error(boost::format("Manager::RegistrarZoneAccess::reload exception: %1%") % ex.what());
+    }
+    catch(...)
+    {
+        LOGGER(PACKAGE).error("Manager::RegistrarZoneAccess::reload error");
+    }
+}//Manager::RegistrarZoneAccess::reload
+
+Manager::AutoPtr Manager::create(DB * db)
+{
+  TRACE("[CALL] Register::Registrar::Manager::create(db)");
+  return Manager::AutoPtr(new ManagerImpl(db));
 }
 
 }
 ; // namespace Registrar
 }
 ; // namespace Register
+

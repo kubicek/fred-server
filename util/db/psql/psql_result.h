@@ -30,6 +30,7 @@
 #include <string>
 #include <iterator>
 #include <boost/shared_ptr.hpp>
+#include <boost/lexical_cast.hpp>
 
 #include "../row.h"
 #include "../value.h"
@@ -89,6 +90,17 @@ public:
 
   size_type size() const {
     return PQntuples(psql_result_.get());
+  }
+
+  /**
+   * Number of rows affected by non-select query
+   */
+
+  size_type rows_affected() const
+  {
+    std::string number_in_string(PQcmdTuples(psql_result_.get()));
+    size_type ret = boost::lexical_cast<size_type>(number_in_string);
+    return ret;
   }
 
   /**
@@ -191,7 +203,7 @@ protected:
    * @param  _c column number
    * @return    value from result at position [_r, _c]
    */
-  std::string value_(size_type _r, size_type _c) const throw(OutOfRange) {
+  std::string value_(size_type _r, size_type _c) const /* throw(OutOfRange) */ {
     if (_r >= rows_()) {
       throw OutOfRange(0, rows_(), _r);
     }
@@ -207,7 +219,7 @@ protected:
    * @param  _c column number
    * @return    true if value from result at position [_r, _c] is null, false otherwise
    */
-  bool value_is_null_(size_type _r, size_type _c) const throw(OutOfRange) {
+  bool value_is_null_(size_type _r, size_type _c) const /* throw(OutOfRange) */{
     if (_r >= rows_()) {
       throw OutOfRange(0, rows_(), _r);
     }
@@ -223,7 +235,7 @@ protected:
    * @param  _c column name
    * @return    value from result at position [_r, _c] 
    */
-  std::string value_(size_type _r, const std::string _c) const throw(NoSuchField) {
+  std::string value_(size_type _r, const std::string _c) const /* throw(NoSuchField) */{
     int field = PQfnumber(psql_result_.get(), _c.c_str());
     if (field == -1) {
       throw NoSuchField(_c);
@@ -237,7 +249,7 @@ protected:
    * @param  _c column name
    * @return    true if value from result at position [_r, _c] is null, false otherwise
    */
-  bool value_is_null_(size_type _r, const std::string _c) const throw(NoSuchField) {
+  bool value_is_null_(size_type _r, const std::string _c) const /* throw(NoSuchField) */{
     int field = PQfnumber(psql_result_.get(), _c.c_str());
     if (field == -1) {
       throw NoSuchField(_c);

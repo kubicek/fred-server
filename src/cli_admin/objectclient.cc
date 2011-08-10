@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -28,71 +28,35 @@
 
 namespace Admin {
 
-ObjectClient::ObjectClient()
+const struct options *
+ObjectClient::getOpts()
 {
-    m_options = new boost::program_options::options_description(
-            "Object related options");
-    m_options->add_options()
-        addOptUInt(OBJECT_NEW_STATE_REQUEST_NAME)
-        addOpt(OBJECT_REGULAR_PROCEDURE_NAME)
-        addOpt(OBJECT_DELETE_CANDIDATES_NAME)
-        addOpt(OBJECT_UPDATE_STATES_NAME)
-        addOpt(OBJECT_SHOW_OPTS_NAME);
-
-    m_optionsInvis = new boost::program_options::options_description(
-            "Object related sub options");
-    m_optionsInvis->add_options()
-        addOpt(OBJECT_DEBUG_NAME)
-        addOptULongLong(OBJECT_ID_NAME)
-        addOptStr(OBJECT_NAME_NAME)
-        addOptStrDef(OBJECT_DELETE_TYPES_NAME, "")
-        addOptStrDef(OBJECT_NOTIFY_EXCEPT_TYPES_NAME, "")
-        addOptStrDef(OBJECT_POLL_EXCEPT_TYPES_NAME, "")
-        addOptUIntDef(OBJECT_DELETE_LIMIT_NAME, 0);
-}
-ObjectClient::ObjectClient(
-        std::string connstring,
-        std::string nsAddr) : BaseClient(connstring, nsAddr)
-{
-    m_db.OpenDatabase(connstring.c_str());
-    m_options = NULL;
-    m_optionsInvis = NULL;
-}
-
-ObjectClient::~ObjectClient()
-{
-    delete m_options;
-    delete m_optionsInvis;
+    return m_opts;
 }
 
 void
-ObjectClient::init(
-        std::string connstring,
-        std::string nsAddr,
-        Config::Conf &conf)
+ObjectClient::runMethod()
 {
-    BaseClient::init(connstring, nsAddr);
-    m_db.OpenDatabase(connstring.c_str());
-    m_conf = conf;
-}
-
-boost::program_options::options_description *
-ObjectClient::getVisibleOptions() const
-{
-    return m_options;
-}
-
-boost::program_options::options_description *
-ObjectClient::getInvisibleOptions() const
-{
-    return m_optionsInvis;
+    if (m_conf.hasOpt(OBJECT_NEW_STATE_REQUEST_NAME)) {
+        new_state_request();
+    } else if (m_conf.hasOpt(OBJECT_LIST_NAME)) {
+        list();
+    } else if (m_conf.hasOpt(OBJECT_UPDATE_STATES_NAME)) {
+        update_states();
+    } else if (m_conf.hasOpt(OBJECT_DELETE_CANDIDATES_NAME)) {
+        delete_candidates();
+    } else if (m_conf.hasOpt(OBJECT_REGULAR_PROCEDURE_NAME)) {
+        regular_procedure();
+    } else if (m_conf.hasOpt(OBJECT_SHOW_OPTS_NAME)) {
+        show_opts();
+    }
 }
 
 void
-ObjectClient::show_opts() const
+ObjectClient::show_opts() 
 {
-    std::cout << *m_options << std::endl;
-    std::cout << *m_optionsInvis << std::endl;
+    callHelp(m_conf, no_help);
+    print_options("Object", getOpts(), getOptsCount());
 }
 
 int
@@ -121,9 +85,10 @@ ObjectClient::createObjectStateRequest(
       return 0;
 }
 
-int
+void
 ObjectClient::new_state_request()
 {
+    callHelp(m_conf, no_help);
     Register::TID id = m_conf.get<unsigned long long>(OBJECT_ID_NAME);
     unsigned int state = m_conf.get<unsigned int>(OBJECT_NEW_STATE_REQUEST_NAME);
     int res = createObjectStateRequest(
@@ -142,17 +107,20 @@ ObjectClient::new_state_request()
             std::cerr << "Unknown error" << std::endl;
             break;
     }
-    return 0;
+    return;
 }
 
 void
 ObjectClient::list()
 {
+    callHelp(m_conf, no_help);
+    std::cout << "not implemented" << std::endl;
 }
 
-int
+void
 ObjectClient::update_states()
 {
+    callHelp(m_conf, no_help);
     std::auto_ptr<Register::Manager> regMan(
             Register::Manager::create(
                 &m_db,
@@ -162,9 +130,9 @@ ObjectClient::update_states()
     if (m_conf.hasOpt(OBJECT_ID_NAME)) {
         id = m_conf.get<unsigned long long>(OBJECT_ID_NAME);
     }
-
     regMan->updateObjectStates(id);
-    return 0;
+    return;
+
 }
 
 /// delete objects with status deleteCandidate
@@ -208,7 +176,10 @@ ObjectClient::deleteObjects(
     if (!typeList.empty())
         sql << "WHERE o.type IN (" << typeList << ") ";
     sql << " ORDER BY CASE WHEN o.type = 3 THEN 1 ELSE 2 END ASC, s.id";
-    unsigned int limit = m_conf.get<unsigned int>(OBJECT_DELETE_LIMIT_NAME);
+    unsigned int limit = 0;
+    if (m_conf.hasOpt(OBJECT_DELETE_LIMIT_NAME)) {
+        limit = m_conf.get<unsigned int>(OBJECT_DELETE_LIMIT_NAME);
+    }
     if (limit > 0)
         sql << "LIMIT " << limit;
     if (!m_db.ExecSelect(sql.str().c_str())) {
@@ -334,16 +305,22 @@ ObjectClient::deleteObjects(
     }
 }
 
-int
+void
 ObjectClient::delete_candidates()
 {
+    callHelp(m_conf, no_help);
+    std::string deleteTypes("");
+    if (m_conf.hasOpt(OBJECT_DELETE_TYPES_NAME)) {
+        deleteTypes = m_conf.get<std::string>(OBJECT_DELETE_TYPES_NAME);
+    }
     CorbaClient cc(0, NULL, m_nsAddr, m_conf.get<std::string>(NS_CONTEXT_NAME));
-    return deleteObjects(m_conf.get<std::string>(OBJECT_DELETE_TYPES_NAME), cc);
+    deleteObjects(deleteTypes, cc);
 }
 
-int
+void
 ObjectClient::regular_procedure()
 {
+    callHelp(m_conf, no_help);
     int i;
     std::auto_ptr<CorbaClient> cc;
     try {
@@ -369,7 +346,7 @@ ObjectClient::regular_procedure()
         MailerManager mailMan(cc->getNS());
 
         std::auto_ptr<Register::Zone::Manager> zoneMan(
-                Register::Zone::Manager::create(&m_db));
+                Register::Zone::Manager::create());
         std::auto_ptr<Register::Domain::Manager> domMan(
                 Register::Domain::Manager::create(&m_db, zoneMan.get()));
 
@@ -414,16 +391,27 @@ ObjectClient::regular_procedure()
 
         registerMan->updateObjectStates();
         registerMan->updateObjectStates();
-        pollMan->createStateMessages(
-                m_conf.get<std::string>(OBJECT_POLL_EXCEPT_TYPES_NAME),
-                0, NULL);
-        if ((i = deleteObjects(m_conf.get<std::string>(OBJECT_DELETE_TYPES_NAME), *(cc.get()))) != 0) {
-            LOG(ERROR_LOG, "Admin::ObjectClient::regular_procedure(): Error has occured in deleteObject: %d", i);
-      	    return i;
+        std::string pollExcept("");
+        if (m_conf.hasOpt(OBJECT_POLL_EXCEPT_TYPES_NAME)) {
+            pollExcept = m_conf.get<std::string>(OBJECT_POLL_EXCEPT_TYPES_NAME);
         }
-        notifyMan->notifyStateChanges(
-                m_conf.get<std::string>(OBJECT_NOTIFY_EXCEPT_TYPES_NAME),
-                0, NULL, true);
+        pollMan->createStateMessages(pollExcept, 0, NULL);
+
+        std::string deleteTypes("");
+        if (m_conf.hasOpt(OBJECT_DELETE_TYPES_NAME)) {
+            deleteTypes = m_conf.get<std::string>(OBJECT_DELETE_TYPES_NAME);
+        }
+        if ((i = deleteObjects(deleteTypes, *(cc.get()))) != 0) {
+            LOG(ERROR_LOG, "Admin::ObjectClient::regular_procedure(): Error has occured in deleteObject: %d", i);
+            return;
+        }
+
+        std::string notifyExcept("");
+        if (m_conf.hasOpt(OBJECT_NOTIFY_EXCEPT_TYPES_NAME)) {
+            notifyExcept = m_conf.get<std::string>(OBJECT_NOTIFY_EXCEPT_TYPES_NAME);
+        }
+        notifyMan->notifyStateChanges(notifyExcept, 0, NULL, true);
+
         pollMan->createLowCreditMessages();
         notifyMan->generateLetters();
     } catch (ccReg::Admin::SQL_ERROR) {
@@ -438,7 +426,34 @@ ObjectClient::regular_procedure()
         LOG(ERROR_LOG, "Admin::ObjectClient::regular_procedure(): unknown exception catched");
     }
 
-    return 0;
+    return;
+} // ObjectClient::regular_procedure
+
+#define ADDOPT(name, type, callable, visible) \
+    {CLIENT_OBJECT, name, name##_DESC, type, callable, visible}
+
+const struct options
+ObjectClient::m_opts[] = {
+    ADDOPT(OBJECT_NEW_STATE_REQUEST_NAME, TYPE_UINT, true, true),
+    ADDOPT(OBJECT_REGULAR_PROCEDURE_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(OBJECT_DELETE_CANDIDATES_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(OBJECT_UPDATE_STATES_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(OBJECT_SHOW_OPTS_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(OBJECT_DEBUG_NAME, TYPE_NOTYPE, false, false),
+    ADDOPT(OBJECT_ID_NAME, TYPE_ULONGLONG, false, false),
+    ADDOPT(OBJECT_NAME_NAME, TYPE_STRING, false, false),
+    ADDOPT(OBJECT_DELETE_TYPES_NAME, TYPE_STRING, false, false),
+    ADDOPT(OBJECT_NOTIFY_EXCEPT_TYPES_NAME, TYPE_STRING, false, false),
+    ADDOPT(OBJECT_POLL_EXCEPT_TYPES_NAME, TYPE_STRING, false, false),
+    ADDOPT(OBJECT_DELETE_LIMIT_NAME, TYPE_UINT, false, false),
+};
+
+#undef ADDOPT
+
+int 
+ObjectClient::getOptsCount()
+{
+    return sizeof(m_opts) / sizeof(options);
 }
 
 } // namespace Admin;

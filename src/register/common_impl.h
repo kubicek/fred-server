@@ -17,6 +17,7 @@ public:
   CommonObjectImpl();
   CommonObjectImpl(TID _id);
   TID getId() const;
+  void setId(TID id);
 
 protected:
   TID id_;
@@ -59,7 +60,6 @@ struct CheckId {
 class CommonListImpl : virtual public CommonList {
 protected:
   DB *db;
-  Database::Connection *conn_;
 
   list_type data_;
   unsigned load_limit_;
@@ -74,7 +74,7 @@ protected:
 
 public:
   CommonListImpl(DB *_db);
-  CommonListImpl(Database::Connection *_conn);
+  CommonListImpl();
   ~CommonListImpl();
   virtual void clear();
   

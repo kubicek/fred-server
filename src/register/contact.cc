@@ -24,7 +24,6 @@
 #include <boost/regex.hpp>
 #include <vector>
 #include "old_utils/log.h"
-#include "db_settings.h"
 #include "model/model_filters.h"
 #include "log/logger.h"
 
@@ -324,6 +323,14 @@ public:
         << (useTempTable ? getTempTableName() : "object_registry ") << " tmp, "
         << "contact c, object_registry obr, object o "
         << "WHERE tmp.id=c.id AND c.id=o.id AND o.id=obr.id ";
+
+
+
+
+
+
+
+
     if (!useTempTable) {
       sql << "AND tmp.name=UPPER('" << db->Escape2(handle) << "') "
           << "AND tmp.erdate ISNULL AND tmp.type=1 "; 
@@ -378,7 +385,7 @@ public:
     db->FreeSelect();
     ObjectListImpl::reload(useTempTable ? NULL : handle.c_str(),1);
   }
-  void reload(Database::Filters::Union &uf, Database::Manager* dbm) {
+  void reload(Database::Filters::Union &uf) {
     TRACE("[CALL] ContactListImpl::reload()");
     clear();
     Database::SelectQuery id_query;
@@ -433,15 +440,15 @@ public:
     object_info_query.order_by() << "tmp.id";
 
     try {
-      std::auto_ptr<Database::Connection> conn(dbm->getConnection());
+      Database::Connection conn = Database::Manager::acquire();
 
       Database::Query create_tmp_table("SELECT create_tmp_table('" + std::string(getTempTableName()) + "')");
-      conn->exec(create_tmp_table);
-      conn->exec(tmp_table_query);
+      conn.exec(create_tmp_table);
+      conn.exec(tmp_table_query);
 
       // TEMP: should be cached somewhere
       Database::Query registrars_query("SELECT id, handle FROM registrar");
-      Database::Result r_registrars = conn->exec(registrars_query);
+      Database::Result r_registrars = conn.exec(registrars_query);
       Database::Result::Iterator it = r_registrars.begin();
       for (; it != r_registrars.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
@@ -451,7 +458,7 @@ public:
         registrars_table[id] = handle;
       }
 
-      Database::Result r_info = conn->exec(object_info_query);
+      Database::Result r_info = conn.exec(object_info_query);
       for (Database::Result::Iterator it = r_info.begin(); it != r_info.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
@@ -547,7 +554,7 @@ public:
       }
 
       /// load object state
-      ObjectListImpl::reload(conn.get(), history);
+      ObjectListImpl::reload(history);
       /* checks if row number result load limit is active and set flag */ 
       CommonListImpl::reload();
     }

@@ -7,12 +7,14 @@
 #include "contact.h"
 #include "nsset.h"
 #include "keyset.h"
-#include "auth_info.h"
 #include "public_request.h"
-#include "invoice.h"
+#include "invoice_manager.h"
+#include "bank_manager.h"
 #include "mail.h"
 #include "file.h"
 #include "filter.h"
+#include "request.h"
+#include "session.h"
 
 /// forward declared parameter type
 class DB;
@@ -79,6 +81,8 @@ public:
   virtual KeySet::Manager *getKeySetManager() const = 0;
   /// return filter manager
   virtual Filter::Manager* getFilterManager() const = 0;
+  /// return request manager 
+  virtual Logger::Manager* getRequestManager() const = 0;
   /// loads country codes description from database
   virtual void loadCountryDesc() = 0;
   /// return size of country description list
@@ -97,11 +101,11 @@ public:
   /// globaly update all states of all objects
   virtual void updateObjectStates(unsigned long long _id = 0) const throw (SQL_ERROR) = 0;
   /// temporary for new database manager init
-  virtual void dbManagerInit(Database::Manager *_db_manager) = 0;
+  virtual void dbManagerInit() = 0;
   /// factory method
   static Manager *create(DB *db, bool _restrictedHandles);
   /// factory method
-  static Manager *create(Database::Manager *_db_manager, bool _restricted_handles);
+  static Manager *create(bool _restricted_handles);
 };
 }
 ;

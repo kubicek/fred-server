@@ -28,7 +28,7 @@ Registry::Table::ColumnHeaders* ccReg_Mails_i::getColumnHeaders() {
   return ch;
 }
 
-Registry::TableRow* ccReg_Mails_i::getRow(CORBA::Short _row)
+Registry::TableRow* ccReg_Mails_i::getRow(CORBA::UShort _row)
     throw (ccReg::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
 
@@ -65,7 +65,7 @@ void ccReg_Mails_i::sortByColumn(CORBA::Short _column, CORBA::Boolean _dir) {
   }
 }
 
-ccReg::TID ccReg_Mails_i::getRowId(CORBA::Short _row)
+ccReg::TID ccReg_Mails_i::getRowId(CORBA::UShort _row)
     throw (ccReg::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
 
@@ -93,6 +93,7 @@ CORBA::Short ccReg_Mails_i::numColumns() {
 
 void ccReg_Mails_i::reload() {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE("[CALL] ccReg_Mails_i::reload()");
   mail_list_->reload(uf);
@@ -108,6 +109,7 @@ void ccReg_Mails_i::clear() {
 
 CORBA::ULongLong ccReg_Mails_i::resultSize() {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE("ccReg_Mails_i::resultSize()");
   return mail_list_->getRealCount(uf);
@@ -115,6 +117,7 @@ CORBA::ULongLong ccReg_Mails_i::resultSize() {
 
 void ccReg_Mails_i::loadFilter(ccReg::TID _id) {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE(boost::format("[CALL] ccReg_Mails_i::loadFilter(%1%)") % _id);
   ccReg_PageTable_i::loadFilter(_id);
@@ -131,11 +134,12 @@ void ccReg_Mails_i::loadFilter(ccReg::TID _id) {
 
 void ccReg_Mails_i::saveFilter(const char* _name) {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE(boost::format("[CALL] ccReg_Mails_i::saveFilter('%1%')") % _name);
 
   std::auto_ptr<Register::Filter::Manager>
-      tmp_filter_manager(Register::Filter::Manager::create(dbm));
+      tmp_filter_manager(Register::Filter::Manager::create());
   tmp_filter_manager->save(Register::Filter::FT_MAIL, _name, uf);
 }
 

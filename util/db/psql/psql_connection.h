@@ -1,17 +1,17 @@
-/*  
+/*
  * Copyright (C) 2007  CZ.NIC, z.s.p.o.
- * 
+ *
  * This file is part of FRED.
- * 
+ *
  * FRED is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 2 of the License.
- * 
+ *
  * FRED is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with FRED.  If not, see <http://www.gnu.org/licenses/>.
  */
@@ -26,12 +26,22 @@
 #define PSQL_CONNECTION_H_
 
 #include <libpq-fe.h>
+#include <algorithm>
 #include "psql_result.h"
 #include "../statement.h"
 #include "../db_exceptions.h"
 
 namespace Database {
 
+#ifdef HAVE_LOGGER
+static void logger_notice_processor(void *arg, const char *message)
+{
+    // replace new line symbols
+    std::string msg(message);
+    std::replace(msg.begin(), msg.end(), '\n', ' ');
+    LOGGER(PACKAGE).debug(msg);
+}
+#endif
 
 class PSQLTransaction;
 
@@ -57,7 +67,7 @@ public:
   }
 
 
-  PSQLConnection(const std::string& _conn_info) throw (ConnectionFailed) 
+  PSQLConnection(const std::string& _conn_info) /* throw (ConnectionFailed) */
                : conn_info_(_conn_info), psql_conn_(0), psql_conn_finish_(true) {
     open(_conn_info);
   }
@@ -77,7 +87,7 @@ public:
    * Implementation of coresponding methods called by Connection_ template
    */
 
-  virtual void open(const std::string& _conn_info) throw (ConnectionFailed) {
+  virtual void open(const std::string& _conn_info) /* throw (ConnectionFailed) */{
     conn_info_ = _conn_info;
     close();
     psql_conn_ = PQconnectdb(_conn_info.c_str());
@@ -85,6 +95,10 @@ public:
       PQfinish(psql_conn_);
       throw ConnectionFailed(_conn_info);
     }
+#ifdef HAVE_LOGGER
+    // set notice processor
+    PQsetNoticeProcessor(psql_conn_, logger_notice_processor, NULL);
+#endif
   }
 
 
@@ -96,12 +110,12 @@ public:
   }
 
 
-  virtual inline result_type exec(Statement& _query) throw (ResultFailed) {
+  virtual inline result_type exec(Statement& _query) /*throw (ResultFailed) */{
     return exec(_query.toSql(boost::bind(&PSQLConnection::escape, this, _1)));
   }
-  
 
-  virtual inline result_type exec(const std::string& _query) throw (ResultFailed) {
+
+  virtual inline result_type exec(const std::string& _query) /*throw (ResultFailed)*/ {
     PGresult *tmp = PQexec(psql_conn_, _query.c_str());
 
     ExecStatusType status = PQresultStatus(tmp);
@@ -128,19 +142,29 @@ public:
     PQescapeStringConn(psql_conn_, esc, _in.c_str(), _in.size(), &err);
     ret = esc;
     delete [] esc;
-    
+
     if (err) {
       /* error */
+#ifdef HAVE_LOGGER
       LOGGER(PACKAGE).error(boost::format("error in escape function: %1%") % PQerrorMessage(psql_conn_));
+#endif
     }
 
-    return ret; 
+    return ret;
   }
 
 
   bool inTransaction() const {
     PGTransactionStatusType ts = PQtransactionStatus(psql_conn_);
     return ts == PQTRANS_INTRANS || ts == PQTRANS_INERROR;
+  }
+
+
+
+  /* HACK! HACK! HACK! */
+  typedef PGconn* __conn_type__;
+  __conn_type__ __getConn__() const {
+      return psql_conn_;
   }
 };
 
@@ -171,7 +195,7 @@ public:
   inline std::string rollback() {
     return "ROLLBACK TRANSACTION";
   }
-  
+
 
 	inline std::string commit() {
     return "COMMIT TRANSACTION";

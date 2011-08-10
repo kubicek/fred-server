@@ -66,9 +66,6 @@ public:
 
   virtual ~Result_() {
     result_.clear();
-#ifdef HAVE_LOGGER
-    TRACE("<CALL> Database::~Result_()");
-#endif
   }
 
   /**
@@ -76,6 +73,14 @@ public:
    */
   size_type size() const {
     return result_.size();
+  }
+
+  /**
+   * @number of rows affected by non-select query
+   */
+  size_type rows_affected() const
+  {
+    return result_.rows_affected();
   }
 
 

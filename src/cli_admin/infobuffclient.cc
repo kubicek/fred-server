@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -23,74 +23,37 @@
 
 namespace Admin {
 
-InfoBuffClient::InfoBuffClient()
+const struct options *
+InfoBuffClient::getOpts()
 {
-    m_options = new boost::program_options::options_description(
-            "Info buffer related options");
-    m_options->add_options()
-        addOptUInt(INFOBUFF_MAKE_INFO_NAME)
-        addOptUInt(INFOBUFF_GET_CHUNK_NAME)
-        addOpt(INFOBUFF_SHOW_OPTS_NAME);
-
-    m_optionsInvis = new boost::program_options::options_description(
-            "Info buffer related sub options");
-    m_optionsInvis->add_options()
-        add_REGISTRAR_ID()
-        add_REGISTRAR_HANDLE()
-        addOptBool(REG_RESTRICTED_HANDLES_NAME)
-        addOptUInt(INFOBUFF_REGISTRAR_NAME)
-        addOptStr(INFOBUFF_REQUEST_NAME);
-}
-InfoBuffClient::InfoBuffClient(
-        std::string connstring,
-        std::string nsAddr) : BaseClient(connstring, nsAddr)
-{
-    m_db.OpenDatabase(connstring.c_str());
-    m_options = NULL;
-    m_optionsInvis = NULL;
-}
-
-InfoBuffClient::~InfoBuffClient()
-{
-    delete m_options;
-    delete m_optionsInvis;
+    return m_opts;
 }
 
 void
-InfoBuffClient::init(
-        std::string connstring,
-        std::string nsAddr,
-        Config::Conf &conf)
+InfoBuffClient::runMethod()
 {
-    BaseClient::init(connstring, nsAddr);
-    m_db.OpenDatabase(connstring.c_str());
-    m_conf = conf;
-}
-
-boost::program_options::options_description *
-InfoBuffClient::getVisibleOptions() const
-{
-    return m_options;
-}
-
-boost::program_options::options_description *
-InfoBuffClient::getInvisibleOptions() const
-{
-    return m_optionsInvis;
+    if (m_conf.hasOpt(INFOBUFF_SHOW_OPTS_NAME)) {
+        show_opts();
+    } else if (m_conf.hasOpt(INFOBUFF_MAKE_INFO_NAME)) {
+        make_info();
+    } else if (m_conf.hasOpt(INFOBUFF_GET_CHUNK_NAME)) {
+        get_chunk();
+    }
 }
 
 void
-InfoBuffClient::show_opts() const
+InfoBuffClient::show_opts() 
 {
-    std::cout << *m_options << std::endl;
-    std::cout << *m_optionsInvis << std::endl;
+    callHelp(m_conf, no_help);
+    print_options("InfoBuff", getOpts(), getOptsCount());
 }
 
-int
+void
 InfoBuffClient::make_info()
 {
+    callHelp(m_conf, no_help);
     std::auto_ptr<Register::Zone::Manager> zoneMan(
-            Register::Zone::Manager::create(&m_db));
+            Register::Zone::Manager::create());
     std::auto_ptr<Register::Domain::Manager> domMan(
             Register::Domain::Manager::create(&m_db, zoneMan.get()));
     std::auto_ptr<Register::Contact::Manager> conMan(
@@ -127,7 +90,7 @@ InfoBuffClient::make_info()
             << INFOBUFF_MAKE_INFO_NAME
             << " must be number between 1 and 10 (inclusive border values)" 
             << std::endl;
-        return 1;
+        return;
     }
 
     Register::InfoBuffer::Type type_type =
@@ -153,13 +116,14 @@ InfoBuffClient::make_info()
         std::cerr << "You have to specify either ``--" << REGISTRAR_ID_NAME
             << "'' or ``--" << REGISTRAR_HANDLE_NAME << "''" << std::endl;
     }
-    return 0;
 }
-int
+
+void
 InfoBuffClient::get_chunk()
 {
+    callHelp(m_conf, no_help);
     std::auto_ptr<Register::Zone::Manager> zoneMan(
-            Register::Zone::Manager::create(&m_db));
+            Register::Zone::Manager::create());
     std::auto_ptr<Register::Domain::Manager> domMan(
             Register::Domain::Manager::create(&m_db, zoneMan.get()));
     std::auto_ptr<Register::Contact::Manager> conMan(
@@ -208,9 +172,29 @@ InfoBuffClient::get_chunk()
         std::cerr << "You have to specify either ``--" << REGISTRAR_ID_NAME
             << "'' or ``--" << REGISTRAR_HANDLE_NAME << "''" << std::endl;
     }
-    return 0;
 } // InfoBuffClient::get_chunk()
 
-} // namespace Admin;
+#define ADDOPT(name, type, callable, visible) \
+    {CLIENT_INFOBUFF, name, name##_DESC, type, callable, visible}
 
+const struct options
+InfoBuffClient::m_opts[] = {
+    add_REGISTRAR_ID,
+    add_REGISTRAR_HANDLE,
+    ADDOPT(INFOBUFF_MAKE_INFO_NAME, TYPE_UINT, true, true),
+    ADDOPT(INFOBUFF_GET_CHUNK_NAME, TYPE_UINT, true, true),
+    ADDOPT(INFOBUFF_SHOW_OPTS_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(INFOBUFF_REGISTRAR_NAME, TYPE_UINT, false, false),
+    ADDOPT(INFOBUFF_REQUEST_NAME, TYPE_STRING, false, false),
+};
+
+#undef ADDOPT
+
+int 
+InfoBuffClient::getOptsCount()
+{
+    return sizeof(m_opts) / sizeof(options);
+}
+
+} // namespace Admin;
 

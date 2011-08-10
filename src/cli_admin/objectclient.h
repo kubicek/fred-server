@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -69,33 +69,37 @@ private:
     CORBA::Long m_clientId;
     DB m_db;
     ccReg::EPP_var m_epp;
-
-    boost::program_options::options_description *m_options;
-    boost::program_options::options_description *m_optionsInvis;
     Config::Conf m_conf;
-public:
-    ObjectClient();
-    ObjectClient(std::string connstring,
-            std::string nsAddr);
-    ~ObjectClient();
-    void init(std::string connstring,
-            std::string nsAddr,
-            Config::Conf &conf);
-
-    boost::program_options::options_description *getVisibleOptions() const;
-    boost::program_options::options_description *getInvisibleOptions() const;
-    void show_opts() const;
-    
     int createObjectStateRequest(Register::TID object, unsigned state);
     int deleteObjects(const std::string &typeList, CorbaClient &cc);
 
-    int new_state_request();
-    void list();
-    int update_states();
-    int delete_candidates();
+    static const struct options m_opts[];
+public:
+    ObjectClient()
+    { }
+    ObjectClient(
+            const std::string &connstring,
+            const std::string &nsAddr,
+            const Config::Conf &conf):
+        BaseClient(connstring, nsAddr),
+        m_conf(conf)
+    {
+        m_db.OpenDatabase(connstring.c_str());
+    }
+    ~ObjectClient()
+    { }
 
-    int regular_procedure();
-};
+    static const struct options *getOpts();
+    static int getOptsCount();
+    void runMethod();
+
+    void show_opts();
+    void new_state_request();
+    void list();
+    void update_states();
+    void delete_candidates();
+    void regular_procedure();
+}; // class Object
 
 } // namespace Admin;
 

@@ -1,20 +1,41 @@
 #include "pagetable_registrars.h"
 
-ccReg_Registrars_i::ccReg_Registrars_i(Register::Registrar::RegistrarList *_rl)
+ccReg_Registrars_i::ccReg_Registrars_i(Register::Registrar::RegistrarList::AutoPtr _rl
+        , Register::Zone::Manager::ZoneListPtr _zl
+		)
   : rl(_rl)
+  , zl(_zl)
+  , rza()
 {
+    ConnectionReleaser releaser;
+    Database::Filters::UnionPtr unionFilter = Database::Filters::CreateClearedUnionPtr();
+    unionFilter->addFilter(new Database::Filters::ZoneSoaImpl(true));
+    zl->reload(*unionFilter.get());
+    rza.reload();
 }
 
 ccReg_Registrars_i::~ccReg_Registrars_i() {
   TRACE("[CALL] ccReg_Registrars_i::~ccReg_Registrars_i()");
 }
 
-void 
+void
 ccReg_Registrars_i::reload() {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE("[CALL] void ccReg_Registrars_i::reload()");
-  rl->reload(uf,dbm);
+  rl->reload(uf);
+
+  Database::Filters::UnionPtr unionFilter = Database::Filters::CreateClearedUnionPtr();
+  unionFilter->addFilter(new Database::Filters::ZoneSoaImpl(true));
+  zl->reload(*unionFilter.get());
+
+  rza.reload();
+
+  LOGGER(PACKAGE).debug(boost::format("ccReg_Registrars_i::reload() rl-size(): %1%") % rl->size());
+  LOGGER(PACKAGE).debug(boost::format("ccReg_Registrars_i::reload() zl-size(): %1%") % zl->size());
+
+  TRACE("[CALL] void ccReg_Registrars_i::reload() end");
 }
 
 ccReg::Filters::Compound_ptr 
@@ -27,40 +48,93 @@ ccReg_Registrars_i::add() {
   return it.addE(f); 
 }
 
-Registry::Table::ColumnHeaders* 
+Registry::Table::ColumnHeaders*
 ccReg_Registrars_i::getColumnHeaders()
-{
+{//all columns are in svn rev 9616
   Logging::Context ctx(base_context_);
 
+  unsigned zone_count = zl->getSize();
+  TRACE(boost::format("[CALL] ccReg_Registrars_i::getColumnHeaders(), zone_count: %1%") % zone_count);
   Registry::Table::ColumnHeaders *ch = new Registry::Table::ColumnHeaders();
-  ch->length(5);
-  COLHEAD(ch,0,"Name",CT_OTHER);
-  COLHEAD(ch,1,"Handle",CT_OID); 
-  COLHEAD(ch,2,"URL",CT_OTHER);
-  COLHEAD(ch,3,"Mail",CT_OTHER);
-  COLHEAD(ch,4,"Credit",CT_OTHER);
+  ch->length(static_cols + zone_count);
+
+  COLHEAD(ch,0,"Handle",CT_OID);
+  COLHEAD(ch,1,"Name",CT_OTHER);
+  COLHEAD(ch,2,"Email",CT_OTHER);
+  COLHEAD(ch,3,"Unspecified credit",CT_OTHER);
+
+  for (unsigned i = 0 ; i < zone_count ; i++)
+  {
+      Register::Zone::Zone* zp = dynamic_cast<Register::Zone::Zone*>(zl->get(i));
+      std::string zonefqdn;
+      if(zp)
+      {
+          zonefqdn = zp->getFqdn();
+      }
+      else
+      {
+          throw std::bad_cast();
+      }
+      COLHEAD(ch,static_cols+i,(zonefqdn + " credit").c_str(),CT_OTHER);
+  }//for zone_count
   return ch;
 }
 
 Registry::TableRow* 
-ccReg_Registrars_i::getRow(CORBA::Short row)
+ccReg_Registrars_i::getRow(CORBA::UShort row)
   throw (ccReg::Table::INVALID_ROW)
 {
-  Logging::Context ctx(base_context_);
+    Logging::Context ctx(base_context_);
+  try
+  {
+      TRACE(boost::format("[CALL] ccReg_Registrars_i::getRow(%1%)") % row);
 
-  const Register::Registrar::Registrar *r = rl->get(row);
-  if (!r) throw ccReg::Table::INVALID_ROW();
-  Registry::TableRow *tr = new Registry::TableRow;
-  tr->length(5);
+      const Register::Registrar::Registrar *r = rl->get(row);
+      if (!r) throw ccReg::Table::INVALID_ROW();
+      Registry::TableRow *tr = new Registry::TableRow;
 
-  MAKE_OID(oid_handle, r->getId(), C_STR(r->getHandle()), FT_REGISTRAR)
+      unsigned zone_count = zl->getSize();
 
-  (*tr)[0] <<= C_STR(r->getName()); 
-  (*tr)[1] <<= oid_handle;
-  (*tr)[2] <<= C_STR(r->getURL());
-  (*tr)[3] <<= C_STR(r->getEmail());
-  (*tr)[4] <<= C_STR(r->getCredit());
-  return tr;
+      tr->length(static_cols + zone_count);
+
+      MAKE_OID(oid_handle, r->getId(), C_STR(r->getHandle()), FT_REGISTRAR)
+
+      (*tr)[0] <<= oid_handle;
+      (*tr)[1] <<= C_STR(r->getName());
+      (*tr)[2] <<= C_STR(r->getEmail());
+      (*tr)[3] <<= C_STR(r->getCredit(0));
+      for (unsigned i = 0 ; i < zone_count ; i++)
+      {
+
+          Register::Zone::Zone* zp = dynamic_cast<Register::Zone::Zone*>(zl->get(i));
+          unsigned long long zoneid = std::numeric_limits<unsigned long long>::max();
+          if(zp)
+          {
+              zoneid = zp->getId();
+          }
+          else
+          {
+              throw std::bad_cast();
+          }
+
+          if(rza.isInZone(r->getId(), zoneid))
+          {
+              (*tr)[static_cols+i] <<= C_STR(r->getCredit(zoneid));
+          }
+          else
+          {
+              (*tr)[static_cols+i] <<= C_STR("");//if currently not in zone
+          }
+      }//for zone_count
+
+
+      return tr;
+  }//try
+  catch(...)
+  {
+      LOGGER(PACKAGE).error("ccReg_Registrars_i::getRow error");
+      throw ccReg::Table::INVALID_ROW();
+  }
 }
 
 void 
@@ -73,32 +147,55 @@ ccReg_Registrars_i::sortByColumn(CORBA::Short column, CORBA::Boolean dir) {
 
   switch (column) {
     case 0:
-      rl->sort(Register::Registrar::MT_NAME, dir);
-      break;
-    case 1:
       rl->sort(Register::Registrar::MT_HANDLE, dir);
       break;
-    case 2:
-      rl->sort(Register::Registrar::MT_URL, dir);
+    case 1:
+      rl->sort(Register::Registrar::MT_NAME, dir);
       break;
-    case 3:
+    case 2:
       rl->sort(Register::Registrar::MT_MAIL, dir);
       break;
-    case 4:
+    case 3:
       rl->sort(Register::Registrar::MT_CREDIT, dir);
       break;
   }
+  if((static_cast<unsigned>(column) > (static_cols-1)) && (static_cast<unsigned>(column) < zl->size()+static_cols))
+  {
+
+      Register::Zone::Zone* zp = dynamic_cast<Register::Zone::Zone*>(zl->get(column-static_cols));
+      unsigned long long zoneid = std::numeric_limits<unsigned long long>::max();
+      if(zp)
+      {
+          zoneid = zp->getId();
+      }
+      else
+      {
+          throw std::bad_cast();
+      }
+
+      rl->sort(Register::Registrar::MT_ZONE, dir, zoneid, &rza);
+  }//if zone column
+
 }
 
 ccReg::TID 
-ccReg_Registrars_i::getRowId(CORBA::Short row) 
+ccReg_Registrars_i::getRowId(CORBA::UShort row) 
   throw (ccReg::Table::INVALID_ROW)
 {
-  Logging::Context ctx(base_context_);
+    Logging::Context ctx(base_context_);
+    try
+    {
 
-  const Register::Registrar::Registrar *r = rl->get(row);
-  if (!r) throw ccReg::Table::INVALID_ROW();
-  return r->getId();  
+
+      const Register::Registrar::Registrar *r = rl->get(row);
+      if (!r) throw ccReg::Table::INVALID_ROW();
+      return r->getId();
+    }//try
+    catch(...)
+    {
+        LOGGER(PACKAGE).error("ccReg_Registrars_i::getRowId error");
+        throw ccReg::Table::INVALID_ROW();
+    }
 }
 
 char* 
@@ -120,7 +217,9 @@ ccReg_Registrars_i::numColumns()
 {
   Logging::Context ctx(base_context_);
 
-  return 5;
+    unsigned zone_count = zl->getSize();
+    TRACE(boost::format("[CALL] ccReg_Registrars_i::numColumns(), zone_count: %1%") % zone_count);
+  return static_cols + zone_count;
 }
 
 void
@@ -129,8 +228,6 @@ ccReg_Registrars_i::clear()
   Logging::Context ctx(base_context_);
 
   TRACE("[CALL] ccReg_Registrars_i::clear()");
-  rl->clearFilter();
-  
   ccReg_PageTable_i::clear();
   rl->clear();
 }
@@ -139,6 +236,7 @@ CORBA::ULongLong
 ccReg_Registrars_i::resultSize()
 {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE("ccReg_Registrars_i::resultSize()");
   return rl->getRealCount(uf);
@@ -147,6 +245,7 @@ ccReg_Registrars_i::resultSize()
 void
 ccReg_Registrars_i::loadFilter(ccReg::TID _id) {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE(boost::format("[CALL] ccReg_Registrars_i::loadFilter(%1%)") % _id);
   ccReg_PageTable_i::loadFilter(_id);
@@ -154,9 +253,14 @@ ccReg_Registrars_i::loadFilter(ccReg::TID _id) {
   Database::Filters::Union::iterator uit = uf.begin();
   for (; uit != uf.end(); ++uit) {
     Database::Filters::Registrar *tmp = dynamic_cast<Database::Filters::Registrar* >(*uit);
+
     if (tmp) {
       it.addE(tmp);
       TRACE(boost::format("[IN] ccReg_Registrars_i::loadFilter(%1%): loaded filter content = %2%") % _id % tmp->getContent());
+    }
+    else
+    {
+        throw std::bad_cast();
     }
   }
 }
@@ -164,11 +268,12 @@ ccReg_Registrars_i::loadFilter(ccReg::TID _id) {
 void
 ccReg_Registrars_i::saveFilter(const char* _name) {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE(boost::format("[CALL] ccReg_Registrars_i::saveFilter('%1%')") % _name);
 
   std::auto_ptr<Register::Filter::Manager>
-      tmp_filter_manager(Register::Filter::Manager::create(dbm));
+      tmp_filter_manager(Register::Filter::Manager::create());
   tmp_filter_manager->save(Register::Filter::FT_REGISTRAR, _name, uf);
 }
 
@@ -176,12 +281,8 @@ Register::Registrar::Registrar* ccReg_Registrars_i::findId(ccReg::TID _id) {
   Logging::Context ctx(base_context_);
 
   try {
-    Register::Registrar::Registrar *registrar = dynamic_cast<Register::Registrar::Registrar* >(rl->findId(_id));
-    if (registrar) {
-      return registrar;
+    return dynamic_cast<Register::Registrar::Registrar* >(rl->findId(_id));
     }
-    return 0;
-  }
   catch (Register::NOT_FOUND) {
     return 0;
   }

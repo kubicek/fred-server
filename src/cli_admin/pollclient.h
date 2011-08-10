@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -70,27 +70,33 @@ private:
     ccReg::EPP_var m_epp;
     Config::Conf m_conf;
 
-    boost::program_options::options_description *m_options;
-    boost::program_options::options_description *m_optionsInvis;
+    static const struct options m_opts[];
 public:
-    PollClient();
-    PollClient(std::string connstring,
-            std::string nsAddr);
-    ~PollClient();
-    void init(std::string connstring,
-            std::string nsAddr,
-            Config::Conf &conf);
+    PollClient()
+    { }
+    PollClient(
+            const std::string &connstring,
+            const std::string &nsAddr,
+            const Config::Conf &conf):
+        BaseClient(connstring, nsAddr),
+        m_conf(conf)
+    {
+        m_db.OpenDatabase(connstring.c_str());
+    }
+    ~PollClient()
+    { }
 
-    boost::program_options::options_description *getVisibleOptions() const;
-    boost::program_options::options_description *getInvisibleOptions() const;
-    void show_opts() const;
+    static const struct options *getOpts();
+    static int getOptsCount();
+    void runMethod();
 
-    int list_all();
-    int list_next();
-    int set_seen();
-    int create_state_changes();
-    int create_low_credit();
-};
+    void show_opts();
+    void list_all();
+    void list_next();
+    void set_seen();
+    void create_state_changes();
+    void create_low_credit();
+}; // class PollClient
 
 } // namespace Admin;
 

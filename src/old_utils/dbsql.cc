@@ -461,12 +461,12 @@ bool DB::UpdateInvoiceCredit(
           invoiceID=invID[1];
           LOG( DEBUG_LOG , "UpdateInvoiceCredit: price  credit0 %ld credit1 %ld price %ld second price %ld" , cr[0] , cr[1] , price1 , price2 );
 
-          if (cr[1] - credit > 0) {
+          if (cr[1] - price2 >= 0) { 
             // second invoice 
-            return InvoiceCountCredit(price - cr[0], invID[1]);
+            return InvoiceCountCredit(price2, invID[1]);
 
           } else
-            LOG( WARNING_LOG , "UpdateInvoiceCredit: on the next invoice  id %d not price  %ld credit %ld" , invoiceID , price , cr[1] );
+            LOG( WARNING_LOG , "UpdateInvoiceCredit: not enough credit on second invoice id %d: price left after charging previous invoice: %ld, credit on this invoice: %ld", invoiceID, price2, cr[1]);
 
         }
 
@@ -1101,7 +1101,7 @@ bool DB::TestRegistrarZone(
   int regID, int zone)
 {
   bool ret = false;
-  char sqlString[128];
+  char sqlString[256];
 
   // system registrar has rigths to all zone
   if (GetRegistrarSystem(regID) == true)
@@ -1109,11 +1109,11 @@ bool DB::TestRegistrarZone(
 
   sprintf(
       sqlString,
-      "SELECT  id  FROM  registrarinvoice  WHERE registrarid=%d and zone=%d and  current_timestamp > fromdate;",
+      "SELECT  id  FROM  registrarinvoice  WHERE registrarid=%d and zone=%d and fromdate <= CURRENT_DATE and (todate >= CURRENT_DATE or todate is null);",
       regID, zone);
 
   if (ExecSelect(sqlString) ) {
-    if (GetSelectRows() == 1) {
+    if (GetSelectRows() > 0) {
       ret=true;
     }
     FreeSelect();
@@ -1463,6 +1463,7 @@ int DB::GetBankAccountZone(
       zone = atoi(GetFieldValue( 0, 0) );
       LOG( LOG_DEBUG ,"get zone %d" , zone );
     }
+    FreeSelect();
   }
 
   return zone;
@@ -2060,7 +2061,7 @@ int DB::MakeNewInvoiceAdvance(
 
   prefix = GetInvoicePrefix(taxDateStr, INVOICE_ZAL, zone);
 
-  LOG( LOG_DEBUG ,"MakeNewInvoiceAdvance taxdate[%s]   zone %d regID %d , price %ld dph %d credit %ld\n" , taxDateStr , zone , regID , price , dph , credit );
+  LOG( LOG_DEBUG ,"MakeNewInvoiceAdvance taxdate[%s]   zone %d regID %d , price %ld dph %d credit %ld" , taxDateStr , zone , regID , price , dph , credit );
 
   if (prefix > 0) {
     invoiceID = GetSequenceID("invoice");
@@ -2120,7 +2121,15 @@ int DB::GetPrefixType(
     if (GetSelectRows() == 1) {
       id = atoi(GetFieldValue( 0, 0) );
       LOG( LOG_DEBUG ,"invoice_id type-> %d" , id );
+    } else if (GetSelectRows() > 1) {
+      LOG( ERROR_LOG , "Multiple rows selected from invoice_prefix. Using ID of the first record." );
+      id = atoi(GetFieldValue( 0, 0));
+    } else {
+      LOG( ERROR_LOG , "Correct invoice prefix not found.");
+      FreeSelect();
+      return -3;
     }
+
     FreeSelect();
   }
 
@@ -2152,8 +2161,10 @@ long DB::GetInvoicePrefix(
       id = atol(GetFieldValueName("id", 0) );
       prefix = atol(GetFieldValueName("prefix", 0) );
       LOG( LOG_DEBUG ,"invoice_prefix id %d -> %ld" , id , prefix );
-    } else
+    } else {
+      LOG( ERROR_LOG ,"Requested invoice_prefix not found " );
       return -3; // error
+    }
 
     FreeSelect();
 
@@ -2987,6 +2998,7 @@ bool DB::EXEC()
 bool DB::SELECT()
 {
   bool ret;
+
   // run SQL query
   ret = ExecSelect(sqlBuffer);
 

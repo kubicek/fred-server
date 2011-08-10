@@ -32,7 +32,7 @@ Registry::Table::ColumnHeaders* ccReg_NSSets_i::getColumnHeaders() {
 }
 
 Registry::TableRow* 
-ccReg_NSSets_i::getRow(CORBA::Short row)
+ccReg_NSSets_i::getRow(CORBA::UShort row)
   throw (ccReg::Table::INVALID_ROW)
 {
   Logging::Context ctx(base_context_);
@@ -77,7 +77,7 @@ ccReg_NSSets_i::sortByColumn(CORBA::Short column, CORBA::Boolean dir) {
 }
 
 ccReg::TID 
-ccReg_NSSets_i::getRowId(CORBA::Short row) 
+ccReg_NSSets_i::getRowId(CORBA::UShort row) 
   throw (ccReg::Table::INVALID_ROW)
 {
   Logging::Context ctx(base_context_);
@@ -113,10 +113,11 @@ void
 ccReg_NSSets_i::reload()
 {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE("[CALL] ccReg_NSSets_i::reload()");
 //  nl->makeRealCount();  
-  nl->reload(uf, dbm);
+  nl->reload(uf);
   nl->deleteDuplicatesId();
 }
 
@@ -136,6 +137,7 @@ CORBA::ULongLong
 ccReg_NSSets_i::resultSize()
 {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE("[CALL] ccReg_NSSets_i::resultSize()");
   return nl->getRealCount(uf);
@@ -144,6 +146,7 @@ ccReg_NSSets_i::resultSize()
 void
 ccReg_NSSets_i::loadFilter(ccReg::TID _id) {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE(boost::format("[CALL] ccReg_NSSets_i::loadFilter(%1%)") % _id);
   ccReg_PageTable_i::loadFilter(_id);
@@ -161,11 +164,12 @@ ccReg_NSSets_i::loadFilter(ccReg::TID _id) {
 void
 ccReg_NSSets_i::saveFilter(const char* _name) {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE(boost::format("[CALL] ccReg_NSSets_i::saveFilter('%1%')") % _name);
 
   std::auto_ptr<Register::Filter::Manager>
-      tmp_filter_manager(Register::Filter::Manager::create(dbm));
+      tmp_filter_manager(Register::Filter::Manager::create());
   tmp_filter_manager->save(Register::Filter::FT_NSSET, _name, uf);
 }
 

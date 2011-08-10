@@ -5,6 +5,9 @@
 #include <boost/date_time/posix_time/time_period.hpp>
 #include <boost/date_time/gregorian/gregorian.hpp>
 
+/*
+#include "common_object.h"
+*/
 #include "common_object.h"
 #include "object.h"
 #include "types.h"
@@ -13,6 +16,7 @@
 #include "mailer.h"
 #include "db_settings.h"
 #include "model/model_filters.h"
+#include "old_utils/dbsql.h" 
 
 class DB;
 
@@ -21,6 +25,7 @@ namespace Invoicing {
 
 /// Member identification (i.e. for sorting) 
 enum MemberType {
+  MT_CRTIME,
   MT_CRDATE,
   MT_NUMBER,
   MT_REGISTRAR,
@@ -34,9 +39,11 @@ enum MemberType {
 /// money type
 typedef long long Money;
 /// invoice type
+// duplicity from ccReg.h
 enum Type {
   IT_DEPOSIT, ///< depositing invoice
-  IT_ACCOUNT ///< accounting invoice
+  IT_ACCOUNT, ///< accounting invoice
+  IT_NONE
 };
 std::string Type2Str(Type _type);
 
@@ -124,6 +131,9 @@ public:
   virtual unsigned getUnitsCount() const = 0;
   /// price (without vat) per unit
   virtual Money getPricePerUnit() const = 0;
+
+  //// new interface - implement
+  virtual std::string getActionStr() const = 0;
 };
 /// iterator over list of total price partitioned by years
 class AnnualPartitioning : virtual public Payment {
@@ -172,6 +182,26 @@ public:
   virtual AnnualPartitioning *getAnnualPartitioning() = 0;
   virtual unsigned getPaymentCount() const = 0;
   virtual const Payment *getPaymentByIdx(unsigned idx) const = 0;
+
+    // //////////////////// new interface (partially from model_invoices)
+    
+  
+    virtual TID getZoneId() const = 0;
+    virtual boost::posix_time::ptime getCrDate() const = 0;
+    // const Database::DateTime getCrDate() const = 0;
+    // const Database::Date getTaxDate() const = 0;
+    virtual TID getPrefix() const = 0;
+    virtual TID getRegistrarId() const = 0;
+    virtual const int getVat() const = 0;
+    virtual const Database::Money getTotalVat() const = 0;
+    // const TID getPrefixTypeId() const = 0;
+    virtual TID getFileId() const = 0;
+    virtual std::string getFileHandle() const = 0;
+    virtual TID getFileXmlId() const = 0;
+    virtual std::string getFileXmlHandle() const = 0;
+    virtual std::string getZoneFqdn() const = 0;
+
+    virtual const Payment *getPayment(const unsigned int &index) const = 0;
 };
 
 class List : virtual public Register::CommonList {
@@ -190,9 +220,9 @@ public:
   
   virtual const char* getTempTableName() const = 0;
   /// reload invoices with selected filter
-  virtual void reload() throw (SQL_ERROR) = 0;
+  virtual void reload() = 0;
   /// new reload method
-  virtual void reload(Database::Filters::Union& _uf, Database::Manager *_db_manager) = 0;
+  virtual void reload(Database::Filters::Union& _uf) = 0;
   /// subsequential reload will not load any action 
   virtual void setPartialLoad(bool partialLoad) = 0;
   /// return invoice by index
@@ -234,8 +264,11 @@ public:
   virtual void setAdvanceNumberFilter(const std::string& number) = 0;
   
   /// from CommonList; propably will be removed in future
-  virtual void makeQuery(bool, bool, std::stringstream&) const = 0;
-};
+  virtual void makeQuery(bool, bool, std::stringstream&) const = 0;  
+
+  virtual unsigned int getSize() const = 0;
+
+  };
 
 /// facade of invoicing subsystem
 class Manager {
@@ -249,21 +282,40 @@ public:
   virtual List* createList() const = 0;
   /// return credit for registrar by zone
   virtual Money getCreditByZone(const std::string& registrarHandle, 
-                                TID zone) const
-          throw (SQL_ERROR) = 0;
+                                TID zone) = 0;
   /// factory method
+  /*
   static Manager *create(DB *db,
                          Document::Manager *docman,
                          Mailer::Manager *mailman);
+   */
   
-  static Manager *create(Database::Manager *_db_manager,
+  static Manager *create(
                          Document::Manager *_doc_manager,
                          Mailer::Manager *_mail_manager);
+
+  static Manager *create();
+
   virtual bool insertInvoicePrefix(unsigned long long zoneId,
           int type, int year, unsigned long long prefix) = 0;
   virtual bool insertInvoicePrefix(const std::string &zoneName,
           int type, int year, unsigned long long prefix) = 0;
-  
+
+  // added methods
+  virtual  int createDepositInvoice(Database::Date date, int zoneId, int registrarId, long price) = 0; 
+  // nnnn
+  virtual bool domainBilling(
+            DB *db, 
+            const Database::ID &zone,
+            const Database::ID &registrar,
+            const Database::ID &objectId,
+            const Database::Date &exDate,
+            const int &units_count,
+            bool renew) = 0;
+
+  virtual bool factoring_all(const char *database, const char *zone_fqdn, const char *taxdateStr, const char *todateStr) = 0;
+  virtual int factoring(const char *database, const char *registrarHandle, const char *zone_fqdn, const char *taxdateStr, const char *todateStr) = 0;
+
 }; // Manager
 }
 ; // Invoicing

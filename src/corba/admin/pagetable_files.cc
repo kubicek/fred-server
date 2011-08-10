@@ -29,7 +29,7 @@ Registry::Table::ColumnHeaders* ccReg_Files_i::getColumnHeaders() {
   return ch;
 }
 
-Registry::TableRow* ccReg_Files_i::getRow(CORBA::Short _row)
+Registry::TableRow* ccReg_Files_i::getRow(CORBA::UShort _row)
     throw (ccReg::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
 
@@ -40,9 +40,9 @@ Registry::TableRow* ccReg_Files_i::getRow(CORBA::Short _row)
   Registry::TableRow *tr = new Registry::TableRow;
   tr->length(4);
   (*tr)[0] <<= C_STR(file->getName());
-  (*tr)[1] <<= C_STR(file->getCreateTime());
-  (*tr)[2] <<= C_STR(file->getTypeDesc());
-  (*tr)[3] <<= C_STR(file->getSize());
+  (*tr)[1] <<= C_STR(file->getCrDate());
+  (*tr)[2] <<= C_STR(file->getFileTypeDesc());//C_STR(const_cast<Register::File::File *>(file)->getFileType()->getName());
+  (*tr)[3] <<= C_STR(file->getFilesize());
   return tr;
 }
 
@@ -69,7 +69,7 @@ void ccReg_Files_i::sortByColumn(CORBA::Short _column, CORBA::Boolean _dir) {
   }
 }
 
-ccReg::TID ccReg_Files_i::getRowId(CORBA::Short _row)
+ccReg::TID ccReg_Files_i::getRowId(CORBA::UShort _row)
     throw (ccReg::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
 
@@ -86,7 +86,7 @@ char* ccReg_Files_i::outputCSV() {
 CORBA::Short ccReg_Files_i::numRows() {
   Logging::Context ctx(base_context_);
 
-  return file_list_->getCount();
+  return file_list_->getSize();
 }
 
 CORBA::Short ccReg_Files_i::numColumns() {
@@ -97,6 +97,7 @@ CORBA::Short ccReg_Files_i::numColumns() {
 
 void ccReg_Files_i::reload() {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE("[CALL] ccReg_Files_i::reload()");
   file_list_->reload(uf);
@@ -112,6 +113,7 @@ void ccReg_Files_i::clear() {
 
 CORBA::ULongLong ccReg_Files_i::resultSize() {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE("ccReg_Files_i::resultSize()");
   return file_list_->getRealCount(uf);
@@ -119,6 +121,7 @@ CORBA::ULongLong ccReg_Files_i::resultSize() {
 
 void ccReg_Files_i::loadFilter(ccReg::TID _id) {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE(boost::format("[CALL] ccReg_Files_i::loadFilter(%1%)") % _id);
   ccReg_PageTable_i::loadFilter(_id);
@@ -135,11 +138,12 @@ void ccReg_Files_i::loadFilter(ccReg::TID _id) {
 
 void ccReg_Files_i::saveFilter(const char* _name) {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
   TRACE(boost::format("[CALL] ccReg_Files_i::saveFilter('%1%')") % _name);
 
   std::auto_ptr<Register::Filter::Manager>
-      tmp_filter_manager(Register::Filter::Manager::create(dbm));
+      tmp_filter_manager(Register::Filter::Manager::create());
   tmp_filter_manager->save(Register::Filter::FT_FILE, _name, uf);
 }
 

@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.59)
-AC_INIT([fred-server], [2.2.0])
+AC_INIT([fred-server], [2.3.10])
 AC_CONFIG_SRCDIR(src/corba/server.cc)
 AC_CONFIG_HEADER([config.h])
 AC_CONFIG_MACRO_DIR([m4])
@@ -24,7 +24,7 @@ m4_pattern_allow([^AC_MSG_])
 AC_DEFUN([AS_AC_TEST_CORBA_PORTS],
 [
  AC_MSG_CHECKING([whether CORBA ports are unique])
- if test $PIFDPORT -eq $RIFDPORT -o $PIFDPORT -eq $ADIFDPORT -o $RIFDPORT -eq $ADIFDPORT; then
+ if test $PIFDPORT -eq $RIFDPORT -o $PIFDPORT -eq $ADIFDPORT -o $RIFDPORT -eq $ADIFDPORT -o $LOGDPORT -eq $PIFDPORT -o $LOGDPORT -eq $RIFDPORT -o $LOGDPORT -eq $ADIFDPORT; then
 	 AC_MSG_RESULT([no])
 	 AC_MSG_ERROR([each of CORBA port must be unique])
  else
@@ -45,8 +45,10 @@ PKG_PROG_PKG_CONFIG
 # Checks for libraries.
 AC_CHECK_LIB([pthread], [pthread_exit])
 
-# Check for omniORB
-PKG_CHECK_MODULES(OMNIORB4, [omniORB4 != 4.1.1, omniDynamic4, omnithread3])
+# Check for omniORB (note that 4.1.1 is bugged for us)
+PKG_CHECK_MODULES(OMNIORB4, [omniORB4 > 4.1.1, omniDynamic4, omnithread3])
+# check for libxml2
+PKG_CHECK_MODULES(XML2, [libxml-2.0 >= 2.5.0])
 
 AX_BOOST_BASE
 AX_BOOST_DATE_TIME
@@ -57,6 +59,9 @@ AX_BOOST_REGEX
 AX_BOOST_THREAD 
 # For filter serialization to xml
 AX_BOOST_SERIALIZATION
+
+# For unittests
+AX_BOOST_UNIT_TEST_FRAMEWORK
 
 
 # Checks for PostgreSQL headers and libs
@@ -118,6 +123,11 @@ AC_ARG_WITH([nshost], [AS_HELP_STRING([--with-nshost],
 			[CORBA nameservice host name [localhost]])],
 			[AC_SUBST([NSHOST], [$withval])],
 			[AC_SUBST([NSHOST], [localhost])])
+			
+AC_ARG_WITH([monitoring_hosts_file], [AS_HELP_STRING([--with-monitoring-hosts-file],
+			[File containing list of monitoring machines [$SYSCONFDIR/fred/monitoring_hosts.conf]])],
+			[AC_SUBST([MONITORINGIPS], [$withval])],
+			[AC_SUBST([MONITORINGIPS], [/usr/local/etc/fred/monitoring_hosts.conf])])
 
 # corba nameservice port
 AC_ARG_WITH([nsport], [AS_HELP_STRING([--with-nsport],
@@ -133,7 +143,7 @@ AC_ARG_WITH([nscontext], [AS_HELP_STRING([--with-nscontext],
 #put context name into config.h file
 AC_DEFINE_UNQUOTED([CONTEXT_NAME], [["]$NSCONTEXT["]], [name of CORBA Nameservice context])
 
-# cirba rifd port
+# corba rifd port
 AC_ARG_WITH([rifdport], [AS_HELP_STRING([--with-rifdport],
 			[CORBA fred-rifd port [2222]])],
 			[AC_SUBST([RIFDPORT], [$withval])],
@@ -148,6 +158,12 @@ AC_ARG_WITH([adifdport], [AS_HELP_STRING([--with-adifdport],
 			[CORBA fred-adifd port [2224]])],
 			[AC_SUBST([ADIFDPORT], [$withval])],
 			[AC_SUBST([ADIFDPORT], [2224])])
+#logd port
+AC_ARG_WITH([logdport], [AS_HELP_STRING([--with-logdport],
+			[CORBA fred-logd port [2226]])],
+			[AC_SUBST([LOGDPORT], [$withval])],
+			[AC_SUBST([LOGDPORT], [2226])])
+
 
 AS_AC_TEST_CORBA_PORTS()
 
@@ -223,6 +239,10 @@ if test "$libidn" == "no"; then
   AC_MSG_ERROR([Libidn not found])
 fi
 
+# libmagic
+# AC_CHECK_LIB(magic, magic_open)
+# AC_CHECK_HEADERS(magic.h,,[AC_MSG_ERROR([magic.h not found])])
+
 AC_CONFIG_FILES([Makefile
                  util/Makefile
                  util/types/Makefile
@@ -236,9 +256,14 @@ AC_CONFIG_FILES([Makefile
                  src/corba/Makefile
                  src/corba/admin/Makefile
                  src/corba/epp/Makefile
+                 src/corba/log/Makefile
                  src/cli_admin/Makefile
+                 tools/Makefile
+                 tools/logd_migration/Makefile
                  fred-server.spec
                  config/server.conf
                  init-scripts/fred-server
-                 src/cli_admin/banking.sh])
+                 src/cli_admin/banking.sh
+                 ])
 AC_OUTPUT
+

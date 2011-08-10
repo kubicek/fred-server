@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -23,93 +23,35 @@
 
 namespace Admin {
 
-ContactClient::ContactClient()
+const struct options *
+ContactClient::getOpts()
 {
-    m_options = new boost::program_options::options_description(
-            "Contact related options");
-    m_options->add_options()
-        addOptStr(CONTACT_INFO_NAME)
-        addOpt(CONTACT_INFO2_NAME)
-        addOpt(CONTACT_LIST_NAME)
-        addOpt(CONTACT_LIST_HELP_NAME)
-        addOpt(CONTACT_LIST_PLAIN_NAME)
-        addOpt(CONTACT_SHOW_OPTS_NAME);
-
-    m_optionsInvis = new boost::program_options::options_description(
-            "Contact related sub options");
-    m_optionsInvis->add_options()
-        add_ID()
-        add_HANDLE()
-        add_NAME()
-        add_ORGANIZATION()
-        add_CITY()
-        add_EMAIL()
-        add_NOTIFY_EMAIL()
-        add_VAT()
-        add_SSN()
-        add_REGISTRAR_ID()
-        add_REGISTRAR_HANDLE()
-        add_REGISTRAR_NAME()
-        add_CRDATE()
-        add_UPDATE()
-        add_TRANSDATE()
-        add_DELDATE();
-}
-
-ContactClient::ContactClient(
-        std::string connstring,
-        std::string nsAddr) : BaseClient(connstring, nsAddr)
-{
-    m_db.OpenDatabase(connstring.c_str());
-    m_options = NULL;
-    m_optionsInvis = NULL;
-}
-
-ContactClient::~ContactClient()
-{
-    delete m_options;
-    delete m_optionsInvis;
+    return m_opts;
 }
 
 void
-ContactClient::init(
-        std::string connstring,
-        std::string nsAddr,
-        Config::Conf &conf)
+ContactClient::runMethod()
 {
-    BaseClient::init(connstring, nsAddr);
-    m_db.OpenDatabase(connstring.c_str());
-    m_conf = conf;
-}
-
-boost::program_options::options_description *
-ContactClient::getVisibleOptions() const
-{
-    return m_options;
-}
-
-boost::program_options::options_description *
-ContactClient::getInvisibleOptions() const
-{
-    return m_optionsInvis;
-}
-
-int
-ContactClient::info2()
-{
-    return 0;
+    if (m_conf.hasOpt(CONTACT_INFO_NAME)) {
+        info();
+    } else if (m_conf.hasOpt(CONTACT_LIST_NAME)) {
+        list();
+    } else if (m_conf.hasOpt(CONTACT_SHOW_OPTS_NAME)) {
+        show_opts();
+    }
 }
 
 void
-ContactClient::show_opts() const
+ContactClient::show_opts()
 {
-    std::cout << *m_options << std::endl;
-    std::cout << *m_optionsInvis << std::endl;
+    callHelp(m_conf, no_help);
+    print_options("Contact", getOpts(), getOptsCount());
 }
 
-int
+void
 ContactClient::info()
 {
+    callHelp(m_conf, no_help);
     CLIENT_LOGIN;
 
     std::string name = m_conf.get<std::string>(CONTACT_INFO_NAME);
@@ -126,12 +68,13 @@ ContactClient::info()
 
     CLIENT_LOGOUT;
 
-    return 0;
+    return;
 }
 
 void
 ContactClient::list()
 {
+    callHelp(m_conf, list_help);
     std::auto_ptr<Register::Contact::Manager> conMan(
             Register::Contact::Manager::create(&m_db, true));
     std::auto_ptr<Register::Contact::List> conList(
@@ -163,7 +106,7 @@ ContactClient::list()
     unionFilter->addFilter(conFilter);
     apply_LIMIT(conList);
 
-    conList->reload(*unionFilter, m_dbman);
+    conList->reload(*unionFilter);
 
     std::cout << "<objects>\n";
     for (unsigned int i = 0; i < conList->getCount(); i++) {
@@ -254,8 +197,47 @@ ContactClient::list_help()
         << "    [--" << REGISTRAR_ID_NAME << "=<registrar_id_number>] \\\n"
         << "    [--" << REGISTRAR_HANDLE_NAME << "=<registrar_handle>] \\\n"
         << "    [--" << REGISTRAR_NAME_NAME << "=<registrar_name>] \\\n"
+        << "    [--" << CRDATE_NAME << "=<create_date>] \\\n"
+        << "    [--" << DELDATE_NAME << "=<delete_date>] \\\n"
+        << "    [--" << UPDATE_NAME << "=<update_date>] \\\n"
+        << "    [--" << TRANSDATE_NAME << "=<transfer_date>] \\\n"
         << "    [--" << FULL_LIST_NAME << "]\n"
         << std::endl;
+}
+
+#define ADDOPT(name, type, callable, visible) \
+    {CLIENT_CONTACT, name, name##_DESC, type, callable, visible}
+
+const struct options
+ContactClient::m_opts[] = {
+    ADDOPT(CONTACT_INFO_NAME, TYPE_STRING, true, true),
+    ADDOPT(CONTACT_LIST_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(CONTACT_LIST_PLAIN_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(CONTACT_SHOW_OPTS_NAME, TYPE_NOTYPE, true, true),
+    add_ID,
+    add_HANDLE,
+    add_NAME,
+    add_ORGANIZATION,
+    add_CITY,
+    add_EMAIL,
+    add_NOTIFY_EMAIL,
+    add_VAT,
+    add_SSN,
+    add_REGISTRAR_ID,
+    add_REGISTRAR_HANDLE,
+    add_REGISTRAR_NAME,
+    add_CRDATE,
+    add_UPDATE,
+    add_TRANSDATE,
+    add_DELDATE,
+};
+
+#undef ADDOPT
+
+int 
+ContactClient::getOptsCount()
+{
+    return sizeof(m_opts) / sizeof(options);
 }
 
 } // namespace Admin;

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -24,8 +24,8 @@
 #include <boost/date_time/posix_time/time_parsers.hpp>
 #include "log/logger.h"
 #include "register/register.h"
-#include "corba/admin/admin_impl.h"
-#include "corba/mailer_manager.h"
+// #include "corba/admin/admin_impl.h"
+// #include "corba/mailer_manager.h"
 
 #include "simple.h"
 #include "commonclient.h"
@@ -34,7 +34,6 @@
 #include "domainclient.h"
 #include "contactclient.h"
 #include "invoiceclient.h"
-#include "authinfoclient.h"
 #include "bankclient.h"
 #include "pollclient.h"
 #include "registrarclient.h"
@@ -44,32 +43,119 @@
 #include "fileclient.h"
 #include "mailclient.h"
 #include "publicreqclient.h"
+#include "enumparamclient.h"
 
 using namespace boost::posix_time;
 
 int
+findRequestExecutor(Config::Conf &conf, METHODS &methods)
+{
+    METHODS_IT it = methods.begin();
+    for (; it != methods.end(); ++it) {
+        if (conf.hasOpt(it->first)) {
+            return it->second;
+        }
+    }
+    return 0;
+}
+
+#define ADDOPT_NOTYPE(name, desc)   (name, desc)
+#define ADDOPT_STRING(name, desc)   (name, boost::program_options::value<std::string>(), desc)
+#define ADDOPT_INT(name, desc)   (name, boost::program_options::value<int>(), desc)
+#define ADDOPT_UINT(name, desc)   (name, boost::program_options::value<unsigned int>(), desc)
+#define ADDOPT_ULONGLONG(name, desc)    (name, boost::program_options::value<unsigned long long>(), desc)
+#define ADDOPT_DOUBLE(name, desc)   (name, boost::program_options::value<double>(), desc)
+#define ADDOPT_BOOL(name, desc)  (name, boost::program_options::value<bool>(), desc)
+
+void
+appendOptions(
+        boost::program_options::options_description &all,
+        boost::program_options::options_description &visible,
+        METHODS &methods,
+        const options *opts,
+        int optsCount)
+{
+    for (int i = 0; i < optsCount; i++) {
+        switch (opts[i].type) {
+            case TYPE_NOTYPE:
+                all.add_options()
+                    ADDOPT_NOTYPE(opts[i].name, opts[i].description);
+                if (opts[i].visible) {
+                    visible.add_options()
+                        ADDOPT_NOTYPE(opts[i].name, opts[i].description);
+                }
+                break;
+            case TYPE_STRING:
+                all.add_options()
+                    ADDOPT_STRING(opts[i].name, opts[i].description);
+                if (opts[i].visible) {
+                    visible.add_options()
+                        ADDOPT_STRING(opts[i].name, opts[i].description);
+                }
+                break;
+            case TYPE_INT:
+                all.add_options()
+                    ADDOPT_INT(opts[i].name, opts[i].description);
+                if (opts[i].visible) {
+                    visible.add_options()
+                        ADDOPT_INT(opts[i].name, opts[i].description);
+                }
+                break;
+            case TYPE_UINT:
+                all.add_options()
+                    ADDOPT_UINT(opts[i].name, opts[i].description);
+                if (opts[i].visible) {
+                    visible.add_options()
+                        ADDOPT_UINT(opts[i].name, opts[i].description);
+                }
+                break;
+            case TYPE_ULONGLONG:
+                all.add_options()
+                    ADDOPT_ULONGLONG(opts[i].name, opts[i].description);
+                if (opts[i].visible) {
+                    visible.add_options()
+                        ADDOPT_ULONGLONG(opts[i].name, opts[i].description);
+                }
+            case TYPE_BOOL:
+                all.add_options()
+                    ADDOPT_BOOL(opts[i].name, opts[i].description);
+                if (opts[i].visible) {
+                    visible.add_options()
+                        ADDOPT_BOOL(opts[i].name, opts[i].description);
+                }
+                break;
+            case TYPE_DOUBLE:
+                all.add_options()
+                    ADDOPT_DOUBLE(opts[i].name, opts[i].description);
+                if (opts[i].visible) {
+                    visible.add_options()
+                        ADDOPT_DOUBLE(opts[i].name, opts[i].description);
+                }
+                break;
+            default:
+                std::cerr << "Unknown type" << std::endl;
+                exit(1);
+        }
+        if (opts[i].callable) {
+            methods.insert(std::make_pair(opts[i].name, opts[i].client));
+        }
+    }
+}
+
+#undef ADDOPT_NOTYPE
+#undef ADDOPT_STRING
+#undef ADDOPT_INT
+#undef ADDOPT_UINT
+#undef ADDOPT_BOOL
+
+int
 main(int argc, char **argv)
 {
-    Admin::KeysetClient keyset;
-    Admin::DomainClient domain;
-    Admin::ContactClient contact;
-    Admin::InvoiceClient invoice;
-    Admin::AuthInfoClient authinfo;
-    Admin::BankClient bank;
-    Admin::PollClient poll;
-    Admin::RegistrarClient registrar;
-    Admin::NotifyClient notify;
-    Admin::ObjectClient object;
-    Admin::InfoBuffClient infobuff;
-    Admin::NssetClient nsset;
-    Admin::FileClient file;
-    Admin::MailClient mail;
-    Admin::PublicRequestClient publicrequest;
-
     try {
     boost::program_options::options_description generalOpts("General options");
     generalOpts.add_options()
-        addOptStrDef(CLI_LANGUAGE_NAME, "CS");
+        addOptStrDef(CLI_LANGUAGE_NAME, "CS")
+        addOpt(CLI_HELP_DATES_NAME);
 
     boost::program_options::options_description generalOptsInvis("General invisible options");
     generalOptsInvis.add_options()
@@ -91,7 +177,8 @@ main(int argc, char **argv)
         addOptStr(REG_FILECLIENT_PATH_NAME)
         addOptBool(REG_RESTRICTED_HANDLES_NAME)
         addOptStr(REG_DOCGEN_PATH_NAME)
-        addOptStr(REG_DOCGEN_TEMPLATE_PATH_NAME);
+        addOptStr(REG_DOCGEN_TEMPLATE_PATH_NAME)
+        addOptStr(LOGIN_REGISTRAR_NAME);
 
     boost::program_options::options_description fileOpts("");
     fileOpts.add(configurationOpts);
@@ -109,67 +196,39 @@ main(int argc, char **argv)
     boost::program_options::variables_map varMap;
 
     // all valid options - including invisible
-    boost::program_options::options_description all("All allowed options");
-    all.add(generalOpts).
+    boost::program_options::options_description allOpts("All allowed options");
+    allOpts.add(generalOpts).
         add(generalOptsInvis).
         add(configurationOpts).
-        add(*domain.getVisibleOptions()).
-        add(*domain.getInvisibleOptions()).
-        add(*keyset.getVisibleOptions()).
-        add(*keyset.getInvisibleOptions()).
-        add(*contact.getVisibleOptions()).
-        add(*contact.getInvisibleOptions()).
-        add(*invoice.getVisibleOptions()).
-        add(*invoice.getInvisibleOptions()).
-        add(*authinfo.getVisibleOptions()).
-        add(*authinfo.getInvisibleOptions()).
-        add(*bank.getVisibleOptions()).
-        add(*bank.getInvisibleOptions()).
-        add(*poll.getVisibleOptions()).
-        add(*poll.getInvisibleOptions()).
-        add(*registrar.getVisibleOptions()).
-        add(*registrar.getInvisibleOptions()).
-        add(*notify.getVisibleOptions()).
-        add(*notify.getInvisibleOptions()).
-        add(*object.getVisibleOptions()).
-        add(*object.getInvisibleOptions()).
-        add(*infobuff.getVisibleOptions()).
-        add(*infobuff.getInvisibleOptions()).
-        add(*nsset.getVisibleOptions()).
-        add(*nsset.getInvisibleOptions()).
-        add(*file.getVisibleOptions()).
-        add(*file.getInvisibleOptions()).
-        add(*mail.getVisibleOptions()).
-        add(*mail.getInvisibleOptions()).
-        add(*publicrequest.getVisibleOptions()).
-        add(*publicrequest.getInvisibleOptions()).
         add(commonOpts);
 
     // only visible options
-    boost::program_options::options_description visible("Allowed options");
-    visible.add(generalOpts).
-        add(configurationOpts).
-        add(*domain.getVisibleOptions()).
-        add(*keyset.getVisibleOptions()).
-        add(*contact.getVisibleOptions()).
-        add(*invoice.getVisibleOptions()).
-        add(*authinfo.getVisibleOptions()).
-        add(*bank.getVisibleOptions()).
-        add(*poll.getVisibleOptions()).
-        add(*registrar.getVisibleOptions()).
-        add(*notify.getVisibleOptions()).
-        add(*object.getVisibleOptions()).
-        add(*infobuff.getVisibleOptions()).
-        add(*nsset.getVisibleOptions()).
-        add(*file.getVisibleOptions()).
-        add(*mail.getVisibleOptions()).
-        add(*publicrequest.getVisibleOptions()).
-        add(commonOpts);
+    boost::program_options::options_description programOpts("Program options");
+    METHODS methods;
+
+#define APPENDOPTIONS(which)    appendOptions(allOpts, programOpts, methods, \
+        Admin::which::getOpts(), Admin::which::getOptsCount())
+    APPENDOPTIONS(DomainClient);
+    APPENDOPTIONS(KeysetClient);
+    APPENDOPTIONS(ContactClient);
+    APPENDOPTIONS(InvoiceClient);
+    APPENDOPTIONS(BankClient);
+    APPENDOPTIONS(PollClient);
+    APPENDOPTIONS(RegistrarClient);
+    APPENDOPTIONS(NotifyClient);
+    APPENDOPTIONS(ObjectClient);
+    APPENDOPTIONS(InfoBuffClient);
+    APPENDOPTIONS(NssetClient);
+    APPENDOPTIONS(FileClient);
+    APPENDOPTIONS(MailClient);
+    APPENDOPTIONS(PublicRequestClient);
+    APPENDOPTIONS(EnumParamClient);
+#undef APPENDOPTIONS
 
     Config::Manager confMan = Config::ConfigManager::instance_ref();
     try {
         confMan.init(argc, argv);
-        confMan.setCmdLineOptions(all);
+        confMan.setCmdLineOptions(allOpts);
         confMan.setCfgFileOptions(fileOpts, CONFIG_FILE);
         confMan.parse();
     } catch (Config::Manager::ConfigParseError &err) {
@@ -177,18 +236,10 @@ main(int argc, char **argv)
         exit(1);
     }
 
-    if (argc == 1 || confMan.isHelp()) {
-        std::cout << "Usage: " << argv[0] << " [options]" << std::endl;
-        std::cout << "Options:" << std::endl;
-        std::cout << visible << std::endl;
-        exit(0);
-    }
-
     if (confMan.isVersion()) {
         print_version();
         exit(0);
     }
-
     Config::Conf conf = confMan.get();
 
     Logging::Log::Level log_level;
@@ -208,31 +259,16 @@ main(int argc, char **argv)
         log_type = static_cast<Logging::Log::Type>(Logging::Log::LT_FILE);
     }
 
-    boost::any param;          
+    boost::any param;
     if (log_type == Logging::Log::LT_FILE) {
         param = conf.get<std::string>(LOG_FILE_NAME);
     }
     if (log_type == Logging::Log::LT_SYSLOG) {
         param = conf.get<unsigned>(LOG_SYSLOG_NAME);
     }
-    //conf.print(std::cout);
 
-   
-    Logging::Manager::instance_ref().get("tracer").addHandler(log_type, param);
-    Logging::Manager::instance_ref().get("tracer").setLevel(log_level);
-    Logging::Manager::instance_ref().get("db").addHandler(log_type, param);
-    Logging::Manager::instance_ref().get("db").setLevel(log_level);
-    Logging::Manager::instance_ref().get("register").addHandler(log_type, param);
-    Logging::Manager::instance_ref().get("register").setLevel(log_level);
-    Logging::Manager::instance_ref().get("corba").addHandler(log_type, param);
-    Logging::Manager::instance_ref().get("corba").setLevel(log_level);
-    Logging::Manager::instance_ref().get("mailer").addHandler(log_type, param);
-    Logging::Manager::instance_ref().get("mailer").setLevel(log_level);
-    Logging::Manager::instance_ref().get("old_log").addHandler(log_type, param);
-    Logging::Manager::instance_ref().get("old_log").setLevel(log_level);
-    Logging::Manager::instance_ref().get("fred-server").addHandler(log_type, param);
-    Logging::Manager::instance_ref().get("fred-server").setLevel(log_level);
-    
+    Logging::Manager::instance_ref().get(PACKAGE).addHandler(log_type, param);
+    Logging::Manager::instance_ref().get(PACKAGE).setLevel(log_level);
 
     std::stringstream connstring;
     std::stringstream nsAddr;
@@ -241,7 +277,7 @@ main(int argc, char **argv)
     if (conf.hasOpt(NS_PORT_NAME))
         nsAddr << ":" << conf.get<unsigned int>(NS_PORT_NAME);
 
-    connstring << "dbname=" << conf.get<std::string>(DB_NAME_NAME) 
+    connstring << "dbname=" << conf.get<std::string>(DB_NAME_NAME)
                << " user=" << conf.get<std::string>(DB_USER_NAME);
     if (conf.hasOpt(DB_HOST_NAME))
         connstring << " host=" << conf.get<std::string>(DB_HOST_NAME);
@@ -250,262 +286,124 @@ main(int argc, char **argv)
     if (conf.hasOpt(DB_PASS_NAME))
         connstring << " password=" << conf.get<std::string>(DB_PASS_NAME);
 
-    keyset.init(connstring.str(), nsAddr.str(), conf);
-    domain.init(connstring.str(), nsAddr.str(), conf);
-    contact.init(connstring.str(), nsAddr.str(), conf);
-    invoice.init(connstring.str(), nsAddr.str(), conf);
-    authinfo.init(connstring.str(), nsAddr.str(), conf);
-    bank.init(connstring.str(), nsAddr.str(), conf);
-    poll.init(connstring.str(), nsAddr.str(), conf);
-    registrar.init(connstring.str(), nsAddr.str(), conf);
-    notify.init(connstring.str(), nsAddr.str(), conf);
-    object.init(connstring.str(), nsAddr.str(), conf);
-    infobuff.init(connstring.str(), nsAddr.str(), conf);
-    nsset.init(connstring.str(), nsAddr.str(), conf);
-    file.init(connstring.str(), nsAddr.str(), conf);
-    mail.init(connstring.str(), nsAddr.str(), conf);
-    publicrequest.init(connstring.str(), nsAddr.str(), conf);
-
     if (conf.hasUnknown()) {
         std::vector<std::string> unknown(conf.getUnknown());
-        std::cout << "Unknown options:" << std::endl;
+        std::cout << "Unknown option(s):" << std::endl;
         for (int i = 0; i < (int)unknown.size(); i++) {
             std::cout << unknown[i] << std::endl;
         }
-        return 0;
+        exit(0);
     }
 
-    if (conf.hasOpt(INFOBUFF_MAKE_INFO_NAME)) {
-        infobuff.make_info();
-    } else if (conf.hasOpt(INFOBUFF_GET_CHUNK_NAME)) {
-        infobuff.get_chunk();
-    } else if (conf.hasOpt(INFOBUFF_SHOW_OPTS_NAME)) {
-        infobuff.show_opts();
+    Database::Manager::init(new Database::ConnectionFactory(connstring.str()));
+
+    if (conf.hasOpt(CLI_MOO_NAME)) {
+        print_moo();
+        exit(0);
+    } else if (conf.hasOpt(CLI_HELP_DATES_NAME)) {
+        help_dates();
+        exit(0);
     }
 
-    if (conf.hasOpt(CONTACT_INFO2_NAME)) {
-        contact.info2();
-    } else if (conf.hasOpt(CONTACT_INFO_NAME)) {
-        contact.info();
-    } else if (conf.hasOpt(CONTACT_LIST_NAME)) {
-        contact.list();
-    } else if (conf.hasOpt(CONTACT_LIST_HELP_NAME)) {
-        contact.list_help();
-    } else if (conf.hasOpt(CONTACT_SHOW_OPTS_NAME)) {
-        contact.show_opts();
+#define INIT_AND_RUN(what) { \
+        Admin::what pom(connstring.str(), nsAddr.str(), conf); \
+        pom.runMethod(); \
     }
+    switch (findRequestExecutor(conf, methods)) {
+        case CLIENT_DOMAIN:
+            INIT_AND_RUN(DomainClient);
+            break;
+        case CLIENT_KEYSET:
+            INIT_AND_RUN(KeysetClient);
+            break;
+        case CLIENT_CONTACT:
+            INIT_AND_RUN(ContactClient);
+            break;
+        case CLIENT_INVOICE:
+            INIT_AND_RUN(InvoiceClient);
+            break;
+        case CLIENT_BANK:
+            INIT_AND_RUN(BankClient);
+            break;
+        case CLIENT_POLL:
+            INIT_AND_RUN(PollClient);
+            break;
+        case CLIENT_REGISTRAR:
+            INIT_AND_RUN(RegistrarClient);
+            break;
+        case CLIENT_NOTIFY:
+            INIT_AND_RUN(NotifyClient);
+            break;
+        case CLIENT_OBJECT:
+            INIT_AND_RUN(ObjectClient);
+            break;
+        case CLIENT_INFOBUFF:
+            INIT_AND_RUN(InfoBuffClient);
+            break;
+        case CLIENT_NSSET:
+            INIT_AND_RUN(NssetClient);
+            break;
+        case CLIENT_FILE:
+            INIT_AND_RUN(FileClient);
+            break;
+        case CLIENT_MAIL:
+            INIT_AND_RUN(MailClient);
+            break;
+        case CLIENT_PUBLICREQUEST:
+            INIT_AND_RUN(PublicRequestClient);
+            break;
+        case CLIENT_ENUMPARAM:
+            INIT_AND_RUN(EnumParamClient);
+            break;
+        default:
+            if (confMan.isHelp()) {
+                std::cout << "Usage: " << argv[0]  << " [options]" << std::endl << std::endl;
+                std::cout << generalOpts << std::endl;
+                std::cout << configurationOpts << std::endl;
+                std::cout << commonOpts << std::endl;
+                std::cout << programOpts << std::endl;
+            } else {
+                std::cout << "Unknown client" << std::endl;
+            }
+            break;
+    }
+#undef INIT_AND_RUN
 
-    if (conf.hasOpt(KEYSET_LIST_NAME)) {
-        keyset.list();
-    } else if (conf.hasOpt(KEYSET_CHECK_NAME)) {
-        keyset.check();
-    } else if (conf.hasOpt(KEYSET_SEND_AUTH_INFO_NAME)) {
-        keyset.send_auth_info();
-    } else if (conf.hasOpt(KEYSET_TRANSFER_NAME)) {
-        keyset.transfer();
-    } else if (conf.hasOpt(KEYSET_LIST_PLAIN_NAME)) {
-        keyset.list_plain();
-    } else if (conf.hasOpt(KEYSET_UPDATE_NAME)) {
-        keyset.update();
-    } else if (conf.hasOpt(KEYSET_DELETE_NAME)) {
-        keyset.del();
-    } else if (conf.hasOpt(KEYSET_UPDATE_HELP_NAME)) {
-        keyset.update_help();
-    } else if (conf.hasOpt(KEYSET_CREATE_HELP_NAME)) {
-        keyset.create_help();
-    } else if (conf.hasOpt(KEYSET_DELETE_HELP_NAME)) {
-        keyset.delete_help();
-    } else if (conf.hasOpt(KEYSET_INFO_HELP_NAME)) {
-        keyset.info_help();
-    } else if (conf.hasOpt(KEYSET_CHECK_HELP_NAME)) {
-        keyset.check_help();
-    } else if (conf.hasOpt(KEYSET_LIST_HELP_NAME)) {
-        keyset.list_help();
-    } else if (conf.hasOpt(KEYSET_CREATE_NAME)) {
-        keyset.create();
-    } else if (conf.hasOpt(KEYSET_INFO2_NAME)) {
-        keyset.info2();
-    } else if (conf.hasOpt(KEYSET_INFO_NAME)) {
-        keyset.info();
-    } else if (conf.hasOpt(KEYSET_SHOW_OPTS_NAME)) {
-        keyset.show_opts();
     }
-    
-    if (conf.hasOpt(DOMAIN_LIST_PLAIN_NAME)) {
-        domain.domain_list_plain();
-    } else if (conf.hasOpt(DOMAIN_CREATE_HELP_NAME)) {
-        domain.domain_create_help();
-    } else if (conf.hasOpt(DOMAIN_UPDATE_HELP_NAME)) {
-        domain.domain_update_help();
-    } else if (conf.hasOpt(DOMAIN_CREATE_NAME)) {
-        domain.domain_create();
-    } else if (conf.hasOpt(DOMAIN_UPDATE_NAME)) {
-        domain.domain_update();
-    } else if (conf.hasOpt(DOMAIN_INFO_NAME)) {
-        domain.domain_info();
-    } else if (conf.hasOpt(DOMAIN_LIST_HELP_NAME)) {
-        domain.list_help();
-    } else if (conf.hasOpt(DOMAIN_LIST_NAME)) {
-        domain.domain_list();
-    } else if (conf.hasOpt(DOMAIN_SHOW_OPTS_NAME)) {
-        domain.show_opts();
-    }
-    
-    if (conf.hasOpt(INVOICE_LIST_NAME)) {
-        invoice.list();
-    } else if (conf.hasOpt(INVOICE_ARCHIVE_NAME)) {
-        invoice.archive();
-    } else if (conf.hasOpt(INVOICE_LIST_HELP_NAME)) {
-        invoice.list_help();
-    } else if (conf.hasOpt(INVOICE_ARCHIVE_HELP_NAME)) {
-        invoice.archive_help();
-    } else if (conf.hasOpt(INVOICE_LIST_FILTERS_NAME)) {
-        invoice.list_filters();
-    } else if (conf.hasOpt(INVOICE_SHOW_OPTS_NAME)) {
-        invoice.show_opts();
-    } else if (conf.hasOpt(INVOICE_ADD_PREFIX_NAME)) {
-        invoice.add_invoice_prefix();
-    } else if (conf.hasOpt(INVOICE_ADD_PREFIX_HELP_NAME)) {
-        invoice.add_invoice_prefix_help();
-    }
-
-    if (conf.hasOpt(AUTHINFO_PDF_NAME)) {
-        authinfo.pdf();
-    } else if (conf.hasOpt(AUTHINFO_PDF_HELP_NAME)) {
-        authinfo.pdf_help();
-    } else if (conf.hasOpt(AUTHINFO_SHOW_OPTS_NAME)) {
-        authinfo.show_opts();
-    }
-    
-    if (conf.hasOpt(BANK_ONLINE_LIST_NAME)) {
-        bank.online_list();
-    } else if (conf.hasOpt(BANK_STATEMENT_LIST_NAME)) {
-        bank.statement_list();
-    } else if (conf.hasOpt(BANK_SHOW_OPTS_NAME)) {
-        bank.show_opts();
-    } else if (conf.hasOpt(BANK_ADD_ACCOUNT_NAME)) {
-        bank.add_bank_account();
-    } else if (conf.hasOpt(BANK_ADD_ACCOUNT_HELP_NAME)) {
-        bank.add_bank_account_help();
-    }
-
-    if (conf.hasOpt(POLL_LIST_ALL_NAME)) {
-        poll.list_all();
-    } else if (conf.hasOpt(POLL_LIST_NEXT_NAME)) {
-        poll.list_next();
-    } else if (conf.hasOpt(POLL_CREATE_STATE_CHANGES_NAME) ||
-            conf.hasOpt(POLL_CREATE_STATE_CHANGES_2_NAME)) {
-        poll.create_state_changes();
-    } else if (conf.hasOpt(POLL_CREATE_LOW_CREDIT_NAME) ||
-            conf.hasOpt(POLL_CREATE_LOW_CREDIT_2_NAME)) {
-        poll.create_low_credit();
-    } else if (conf.hasOpt(POLL_SET_SEEN_NAME)) {
-        poll.set_seen();
-    } else if (conf.hasOpt(POLL_SHOW_OPTS_NAME)) {
-        poll.show_opts();
-    }
-    
-    if (conf.hasOpt(REGISTRAR_ZONE_ADD_NAME)) {
-        registrar.zone_add();
-    } else if (conf.hasOpt(REGISTRAR_ZONE_NS_ADD_NAME)) {
-        registrar.zone_ns_add();
-    } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ADD_NAME)) {
-        registrar.registrar_add();
-    } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ADD_ZONE_NAME)) {
-        registrar.registrar_add_zone();
-    } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ACL_ADD_NAME)) {
-        registrar.registrar_acl_add();
-    } else if (conf.hasOpt(REGISTRAR_PRICE_ADD_NAME)) {
-        registrar.price_add();
-    } else if (conf.hasOpt(REGISTRAR_ZONE_ADD_HELP_NAME)) {
-        registrar.zone_add_help();
-    } else if (conf.hasOpt(REGISTRAR_ZONE_NS_ADD_HELP_NAME)) {
-        registrar.zone_ns_add_help();
-    } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ADD_HELP_NAME)) {
-        registrar.registrar_add_help();
-    } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ADD_ZONE_HELP_NAME)) {
-        registrar.registrar_add_zone_help();
-    } else if (conf.hasOpt(REGISTRAR_REGISTRAR_ACL_ADD_HELP_NAME)) {
-        registrar.registrar_acl_add_help();
-    } else if (conf.hasOpt(REGISTRAR_PRICE_ADD_HELP_NAME)) {
-        registrar.price_add_help();
-    } else if (conf.hasOpt(REGISTRAR_LIST_NAME)) {
-        registrar.list();
-    } else if (conf.hasOpt(REGISTRAR_SHOW_OPTS_NAME)) {
-        registrar.show_opts();
-    }
-    
-    if (conf.hasOpt(NOTIFY_STATE_CHANGES_NAME)) {
-        notify.state_changes();
-    } else if (conf.hasOpt(NOTIFY_LETTERS_CREATE_NAME)) {
-        notify.letters_create();
-    } else if (conf.hasOpt(NOTIFY_SHOW_OPTS_NAME)) {
-        notify.show_opts();
-    }
-
-    if (conf.hasOpt(OBJECT_NEW_STATE_REQUEST_NAME)) {
-        object.new_state_request();
-    } else if (conf.hasOpt(OBJECT_LIST_NAME)) {
-        object.list();
-    } else if (conf.hasOpt(OBJECT_UPDATE_STATES_NAME)) {
-        return object.update_states();
-    } else if (conf.hasOpt(OBJECT_DELETE_CANDIDATES_NAME)) {
-        return object.delete_candidates();
-    } else if (conf.hasOpt(OBJECT_REGULAR_PROCEDURE_NAME)) {
-        return object.regular_procedure();
-    } else if (conf.hasOpt(OBJECT_SHOW_OPTS_NAME)) {
-        object.show_opts();
-    }
-    
-    if (conf.hasOpt(NSSET_LIST_NAME)) {
-        nsset.list();
-    } else if (conf.hasOpt(NSSET_LIST_HELP_NAME)) {
-        nsset.list_help();
-    } else if (conf.hasOpt(NSSET_SHOW_OPTS_NAME)) {
-        nsset.show_opts();
-    }
-
-    if (conf.hasOpt(FILE_LIST_NAME)) {
-        file.list();
-    } else if (conf.hasOpt(FILE_LIST_HELP_NAME)) {
-        file.list_help();
-    } else if (conf.hasOpt(FILE_SHOW_OPTS_NAME)) {
-        file.show_opts();
-    }
-
-    if (conf.hasOpt(MAIL_LIST_NAME)) {
-        mail.list();
-    } else if (conf.hasOpt(MAIL_LIST_HELP_NAME)) {
-        mail.list_help();
-    } else if (conf.hasOpt(MAIL_SHOW_OPTS_NAME)) {
-        mail.show_opts();
-    }
-
-    if (conf.hasOpt(PUBLICREQ_LIST_NAME)) {
-        publicrequest.list();
-    } else if (conf.hasOpt(PUBLICREQ_LIST_HELP_NAME)) {
-        publicrequest.list_help();
-    } else if (conf.hasOpt(PUBLICREQ_SHOW_OPTS_NAME)) {
-        publicrequest.show_opts();
-    }
-
-    } catch (ccReg::EPP::EppError &e) {
-        std::cerr << "EppError code: " << e.errCode << ", message: " 
+    catch (ccReg::EPP::EppError &e) {
+        std::stringstream message;
+        message << "EppError code: " << e.errCode << ", message: "
             << e.errMsg << std::endl;
         for (int ii = 0; ii < (int)e.errorList.length(); ii++) {
-            std::cerr << "Reason code: " << e.errorList[ii].code << ", message: " 
-                << e.errorList[ii].reason << std::endl;
+            message << "Reason code: " << e.errorList[ii].code
+                    << ", message: "
+                    << e.errorList[ii].reason
+                    << ", Position: " << e.errorList[ii].position;
         }
-    } catch (CORBA::Exception &e) {
-        std::cerr << "CORBA error" << std::endl;
-    } catch (std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;;
-        std::exit(2);
-    } catch (Register::SQL_ERROR) {
+
+        LOGGER(PACKAGE).error(message.str());
+        std::cerr << message.str();
+    }
+    catch (CORBA::Exception &e) {
+        std::stringstream message("CORBA::Exception");
+
+        LOGGER(PACKAGE).error(message.str());
+        std::cerr << message.str() << std::endl;
+        return 3;
+    }
+    catch (std::exception &e) {
+        std::stringstream message("Error: ");
+        message << e.what();
+
+        LOGGER(PACKAGE).error(message.str());
+        std::cerr << message.str() << std::endl;
+        return 2;
+    }
+    catch (Register::SQL_ERROR) {
         std::cerr << "SQL ERROR" << std::endl;
-        std::exit(1);
+        return 1;
     }
 
-    std::exit(0);
+    return 0;
 }
 

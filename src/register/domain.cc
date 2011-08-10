@@ -27,25 +27,42 @@
 #include "object_impl.h"
 #include "sql.h"
 #include "old_utils/dbsql.h"
-#include "db_settings.h"
 #include "model/model_filters.h"
 #include "log/logger.h"
 
 namespace Register {
 namespace Domain {
 class DomainImpl : public ObjectImpl, public virtual Domain {
-  struct AdminInfo {
+  struct AdminInfo
+  {
     TID id;
     std::string handle;
+    std::string name;
+    std::string organization;
+    std::string phone;
 
-    AdminInfo(TID _id, const std::string& _handle) :
-      id(_id), handle(_handle) {
-    }
+    AdminInfo(TID _id
+            , const std::string& _handle
+            , const std::string& _name
+            , const std::string& _organization
+            , const std::string& _phone)
+        : id(_id)
+        , handle(_handle)
+        , name(_name)
+        , organization(_organization)
+        , phone( _phone)
+    {}
 
-    bool operator==(const AdminInfo& _ai) const {
-      return (id == _ai.id && handle == _ai.handle);
+    bool operator==(const AdminInfo& _ai) const
+    {
+      return (id == _ai.id
+              && handle == _ai.handle
+              && name == _ai.name
+              && organization == _ai.organization
+              && phone == _ai.phone
+              );
     }
-  };
+  };//struct AdminInfo
 
   typedef std::vector<AdminInfo> AdminInfoList;
   std::string fqdn;
@@ -57,6 +74,7 @@ class DomainImpl : public ObjectImpl, public virtual Domain {
   std::string registrantHandle;
   std::string registrantName;
   std::string registrantOrganization;
+  std::string registrantPhone;
   AdminInfoList adminList;
   AdminInfoList tempList;
   date exDate;
@@ -75,6 +93,7 @@ public:
              const std::string& _registrantHandle,
              const std::string& _registrantName, 
              const std::string& _registrantOrganization,
+             const std::string& _registrantPhone,
              TID _registrar,
              const std::string& _registrarHandle, const ptime& _crDate, const ptime& _trDate,
              const ptime& _upDate, const ptime& _erDate, TID _createRegistrar,
@@ -89,7 +108,8 @@ public:
                _updateRegistrar, _updateRegistrarHandle, _authPw, _roid),
         fqdn(_fqdn), fqdnIDN(zm->decodeIDN(fqdn)), zone(_zone), nsset(_nsset), nssetHandle(_nssetHandle),
         registrant(_registrant), registrantHandle(_registrantHandle), 
-        registrantName(_registrantName), registrantOrganization(_registrantOrganization), exDate(_exDate),
+        registrantName(_registrantName), registrantOrganization(_registrantOrganization),
+        registrantPhone(_registrantPhone),exDate(_exDate),
         valExDate(_valExDate), publish(false), zoneStatus(_zoneStatus),
         zoneStatusTime(_zoneStatusTime), 
         outZoneDate(_outZoneDate), cancelDate(_cancelDate),
@@ -140,6 +160,9 @@ public:
   virtual const std::string& getRegistrantOrganization() const {
     return registrantOrganization;
   }
+  virtual const std::string& getRegistrantPhone() const {
+      return registrantPhone;
+  }
   virtual TID getRegistrantId() const {
     return registrant;
   }
@@ -167,21 +190,110 @@ public:
   virtual ptime getCancelDate() const {
     return cancelDate;
   }
-  virtual unsigned getAdminCount(unsigned role) const {
+  virtual unsigned getAdminCount(unsigned role) const
+  {
+      TRACE(boost::format
+          ("[CALL] DomainImpl::getAdminCount role: %1% ")
+          % role );
     return role == 1 ? adminList.size() : tempList.size();
-  }
-  virtual TID getAdminIdByIdx(unsigned idx, unsigned role) const
-      throw (NOT_FOUND) {
-    if (idx >= getAdminCount(role))
-      throw NOT_FOUND();
-    return role == 1 ? adminList[idx].id : tempList[idx].id;
-  }
-  virtual const std::string& getAdminHandleByIdx(unsigned idx, unsigned role) const
-      throw (NOT_FOUND) {
-    if (idx >= getAdminCount(role))
-      throw NOT_FOUND();
-    return role == 1 ? adminList[idx].handle : tempList[idx].handle;
-  }
+  }//getAdminCount
+  virtual TID getAdminIdByIdx(unsigned idx, unsigned role=1) const
+      throw (NOT_FOUND)
+  {
+    TRACE(boost::format
+        ("[CALL] DomainImpl::getAdminIdByIdx idx: %1% role: %2% ")
+        % idx % role );
+      try
+      {
+        if (idx >= getAdminCount(role))
+          throw NOT_FOUND();
+        return role == 1 ? adminList[idx].id : tempList[idx].id;
+      }//try
+      catch(...)
+      {
+          LOGGER(PACKAGE).error(boost::format
+                  ("DomainImpl::getAdminIdByIdx error idx: %1% role: %2% ")
+                          % idx % role );
+          throw NOT_FOUND();
+      }//catch(...)
+  }//getAdminIdByIdx
+  virtual const std::string& getAdminHandleByIdx(unsigned idx, unsigned role=1) const
+      throw (NOT_FOUND)
+  {
+      TRACE(boost::format
+          ("[CALL] DomainImpl::getAdminHandleByIdx idx: %1% role: %2% ")
+          % idx % role );
+        try
+        {
+            if (idx >= getAdminCount(role))
+              throw NOT_FOUND();
+            return role == 1 ? adminList[idx].handle : tempList[idx].handle;
+        }//try
+        catch(...)
+        {
+            LOGGER(PACKAGE).error(boost::format
+                    ("DomainImpl::getAdminHandleByIdx error idx: %1% role: %2% ")
+                            % idx % role );
+            throw NOT_FOUND();
+        }//catch(...)
+  }//getAdminHandleByIdx
+  virtual const std::string getAdminNameByIdx(unsigned idx, unsigned role=1) const
+  {
+      TRACE(boost::format
+          ("[CALL] DomainImpl::getAdminNameByIdx idx: %1% role: %2% ")
+          % idx % role );
+        try
+        {
+          if (idx >= getAdminCount(role))
+              return std::string("");
+          return role == 1 ? adminList[idx].name : tempList[idx].name;
+        }//try
+        catch(...)
+        {
+            LOGGER(PACKAGE).error(boost::format
+                    ("DomainImpl::getAdminNameByIdx error idx: %1% role: %2% ")
+                            % idx % role );
+            throw;
+        }//catch(...)
+  }//getAdminNameByIdx
+  virtual const std::string getAdminOrganizationByIdx(unsigned idx, unsigned role=1) const
+  {
+      TRACE(boost::format
+          ("[CALL] DomainImpl::getAdminOrganizationByIdx idx: %1% role: %2% ")
+          % idx % role );
+        try
+        {
+          if (idx >= getAdminCount(role))
+              return std::string("");
+          return role == 1 ? adminList[idx].organization : tempList[idx].organization;
+        }//try
+        catch(...)
+        {
+            LOGGER(PACKAGE).error(boost::format
+                    ("DomainImpl::getAdminOrganizationByIdx error idx: %1% role: %2% ")
+                            % idx % role );
+            throw;
+        }//catch(...)
+  }//getAdminOrganizationByIdx
+  virtual const std::string getAdminPhoneByIdx(unsigned idx, unsigned role=1) const
+  {
+      TRACE(boost::format
+          ("[CALL] DomainImpl::getAdminPhoneByIdx idx: %1% role: %2% ")
+          % idx % role );
+        try
+        {
+          if (idx >= getAdminCount(role))
+              return std::string("");
+          return role == 1 ? adminList[idx].phone : tempList[idx].phone;
+        }//try
+        catch(...)
+        {
+            LOGGER(PACKAGE).error(boost::format
+                    ("DomainImpl::getAdminPhoneByIdx error idx: %1% role: %2% ")
+                            % idx % role );
+            throw;
+        }//catch(...)
+  }//getAdminPhoneByIdx
   virtual void removeAdminId(TID id) {
     // find id in list and delete
   }
@@ -193,11 +305,17 @@ public:
     return id_ == id;
   }
   /// add one admin handle - for domain intialization
-      void addAdminHandle(TID id, const std::string& handle, unsigned role=1) {
+  void addAdminHandle(TID id
+          , const std::string& handle
+          , const std::string& name
+          , const std::string& organization
+          , const std::string& phone
+          , unsigned role=1)
+  {
     if (role == 1)
-      adminList.push_back(AdminInfo(id, handle));
+      adminList.push_back(AdminInfo(id, handle, name, organization, phone));
     else
-      tempList.push_back(AdminInfo(id, handle));
+      tempList.push_back(AdminInfo(id, handle, name, organization, phone));
   }
   /// add nsset handle - for domain intialization
   void addNSSetHandle(const std::string& handle) {
@@ -232,11 +350,73 @@ COMPARE_CLASS_IMPL(DomainImpl, DeleteDate)
 COMPARE_CLASS_IMPL(DomainImpl, RegistrantHandle)
 COMPARE_CLASS_IMPL(DomainImpl, RegistrantName)
 COMPARE_CLASS_IMPL(DomainImpl, RegistrantOrganization)
+COMPARE_CLASS_IMPL(DomainImpl, RegistrantPhone)
 COMPARE_CLASS_IMPL(DomainImpl, RegistrarHandle)
 COMPARE_CLASS_IMPL(DomainImpl, ZoneStatus)
 COMPARE_CLASS_IMPL(DomainImpl, ExpirationDate)
 COMPARE_CLASS_IMPL(DomainImpl, OutZoneDate)
 COMPARE_CLASS_IMPL(DomainImpl, CancelDate)
+
+
+class CompareAdminNameByIdx
+{
+    bool asc_;
+    unsigned idx_;
+public:
+  CompareAdminNameByIdx(bool _asc, unsigned _idx) : asc_(_asc), idx_(_idx) { }
+  bool operator()(CommonObject *_left, CommonObject *_right) const {
+      DomainImpl *l_casted = dynamic_cast<DomainImpl *>(_left);
+      DomainImpl *r_casted = dynamic_cast<DomainImpl *>(_right);
+    if (l_casted == 0 || r_casted == 0) {
+      /* this should never happen */
+      throw std::bad_cast();
+    }
+
+    return (asc_ ? l_casted->getAdminNameByIdx(idx_) < r_casted->getAdminNameByIdx(idx_)
+                 : l_casted->getAdminNameByIdx(idx_) > r_casted->getAdminNameByIdx(idx_));
+    }
+
+};//class CompareAdminNameByIdx
+
+class CompareAdminOrganizationByIdx
+{
+    bool asc_;
+    unsigned idx_;
+public:
+  CompareAdminOrganizationByIdx(bool _asc, unsigned _idx) : asc_(_asc), idx_(_idx) { }
+  bool operator()(CommonObject *_left, CommonObject *_right) const {
+      DomainImpl *l_casted = dynamic_cast<DomainImpl *>(_left);
+      DomainImpl *r_casted = dynamic_cast<DomainImpl *>(_right);
+    if (l_casted == 0 || r_casted == 0) {
+      /* this should never happen */
+      throw std::bad_cast();
+    }
+
+    return (asc_ ? l_casted->getAdminOrganizationByIdx(idx_) < r_casted->getAdminOrganizationByIdx(idx_)
+                 : l_casted->getAdminOrganizationByIdx(idx_) > r_casted->getAdminOrganizationByIdx(idx_));
+    }
+
+};//class CompareAdminOrganizationByIdx
+
+class CompareAdminPhoneByIdx
+{
+    bool asc_;
+    unsigned idx_;
+public:
+  CompareAdminPhoneByIdx(bool _asc, unsigned _idx) : asc_(_asc), idx_(_idx) { }
+  bool operator()(CommonObject *_left, CommonObject *_right) const {
+      DomainImpl *l_casted = dynamic_cast<DomainImpl *>(_left);
+      DomainImpl *r_casted = dynamic_cast<DomainImpl *>(_right);
+    if (l_casted == 0 || r_casted == 0) {
+      /* this should never happen */
+      throw std::bad_cast();
+    }
+
+    return (asc_ ? l_casted->getAdminPhoneByIdx(idx_) < r_casted->getAdminPhoneByIdx(idx_)
+                 : l_casted->getAdminPhoneByIdx(idx_) > r_casted->getAdminPhoneByIdx(idx_));
+    }
+
+};//class CompareAdminPhoneByIdx
 
 
 class ListImpl : virtual public List, public ObjectListImpl {
@@ -487,7 +667,7 @@ public:
     sql << from.rdbuf();
     sql << where.rdbuf();
   }
-  virtual void reload(Database::Filters::Union &uf, Database::Manager* dbm) {
+  virtual void reload(Database::Filters::Union &uf) {
     TRACE("[CALL] Domain::ListImpl::reload()");
     clear();
     uf.clearQueries();
@@ -524,7 +704,7 @@ public:
 
     Database::SelectQuery object_info_query;
     object_info_query.select() << "t_1.id, tmp.id, t_1.name, t_2.zone, t_2.nsset, t_2.keyset, "
-        << "t_3.id, t_3.name, t_4.name, t_4.organization, t_5.clid, "
+        << "t_3.id, t_3.name, t_4.name, t_4.organization, t_4.telephone, t_5.clid, "
         << "t_1.crdate, t_5.trdate, t_5.update, t_1.erdate, t_1.crid, t_5.upid, "
         << "t_5.authinfopw, t_1.roid, t_2.exdate, "
         << "(((t_2.exdate + (SELECT val || ' day' FROM enum_parameters WHERE id = 4)::interval)::timestamp + (SELECT val || ' hours' FROM enum_parameters WHERE name = 'regular_day_procedure_period')::interval) AT TIME ZONE (SELECT val FROM enum_parameters WHERE name = 'regular_day_procedure_zone'))::timestamp as outzonedate, "
@@ -545,18 +725,18 @@ public:
     object_info_query.order_by() << "tmp.id";
 
     try {
-      std::auto_ptr<Database::Connection> conn(dbm->getConnection());
+        Database::Connection conn = Database::Manager::acquire();  
       
       Database::Query create_tmp_table("SELECT create_tmp_table('" + std::string(getTempTableName()) + "')");
-      conn->exec(create_tmp_table);
-      conn->exec(tmp_table_query);
+      conn.exec(create_tmp_table);
+      conn.exec(tmp_table_query);
       
       // TODO: use this and rewrite conn to conn_ specified in CommonListImpl
       // fillTempTable(tmp_table_query);
 
       // TEMP: should be cached somewhere
       Database::Query registrars_query("SELECT id, handle FROM registrar");
-      Database::Result r_registrars = conn->exec(registrars_query);
+      Database::Result r_registrars = conn.exec(registrars_query);
       for (Database::Result::Iterator it = r_registrars.begin(); it != r_registrars.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
@@ -565,7 +745,7 @@ public:
         registrars_table[id] = handle;
       }
 
-      Database::Result r_info = conn->exec(object_info_query);
+      Database::Result r_info = conn.exec(object_info_query);
       for (Database::Result::Iterator it = r_info.begin(); it != r_info.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
@@ -581,6 +761,7 @@ public:
         std::string        registrantHandle      = *(++col);
         std::string        registrantName        = *(++col);
         std::string        registrantOrg         = *(++col);
+        std::string        registrantPhone       = *(++col);
         Database::ID       registrar             = *(++col);
         std::string        registrarHandle       = registrars_table[registrar];
         Database::DateTime crDate                = *(++col);
@@ -624,6 +805,7 @@ public:
                 registrantHandle,
                 registrantName,
                 registrantOrg,
+                registrantPhone,
                 registrar,
                 registrarHandle,
                 crDate,
@@ -654,16 +836,18 @@ public:
       /// load admin contacts info
       resetHistoryIDSequence();
       Database::SelectQuery admins_query;
-      admins_query.select() << "tmp.id, t_2.domainid, t_1.id, t_1.name, t_2.role";
+      admins_query.select() << "tmp.id, t_2.domainid, t_1.id, t_1.name, t_3.name, t_3.organization, t_3.telephone, t_2.role";
       // admins_query.from() << getTempTableName() << " tmp "
       //                     << "JOIN domain_contact_map t_2 ON (tmp.id = t_2.domainid) "
       //                     << "JOIN object_registry t_1 ON (t_2.contactid = t_1.id)";
       admins_query.from() << getTempTableName() << " tmp "
-                          << "JOIN domain_contact_map_history t_2 ON (tmp.id = t_2.historyid) "
-                          << "JOIN object_registry t_1 ON (t_2.contactid = t_1.id)";
+                             "JOIN domain_contact_map_history t_2 ON (tmp.id = t_2.historyid) "
+                             "JOIN object_registry t_1 ON (t_2.contactid = t_1.id) "
+                             "JOIN contact_history t_3 ON (t_1.historyid = t_3.historyid) "
+                              ;
       admins_query.order_by() << "tmp.id";
 
-      Database::Result r_admins = conn->exec(admins_query);
+      Database::Result r_admins = conn.exec(admins_query);
       for (Database::Result::Iterator it = r_admins.begin(); it != r_admins.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
@@ -671,11 +855,15 @@ public:
         Database::ID domain_id        = *(++col);
         Database::ID admin_id         = *(++col);
         std::string  admin_handle     = *(++col);
+        std::string  admin_name       = *(++col);
+        std::string  admin_organization    = *(++col);
+        std::string  admin_phone      = *(++col);
         unsigned     admin_role       = *(++col);
 
         DomainImpl *domain_ptr = dynamic_cast<DomainImpl *>(findHistoryIDSequence(domain_historyid));
         if (domain_ptr)
-          domain_ptr->addAdminHandle(admin_id, admin_handle, admin_role);
+          domain_ptr->addAdminHandle(admin_id, admin_handle
+                  , admin_name, admin_organization, admin_phone, admin_role);
       }
 
       /// load nssets info
@@ -691,7 +879,7 @@ public:
       << "JOIN object_registry t_1 ON (t_1.id = t_2.nsset)";
       nssets_query.order_by() << "tmp.id";
 
-      Database::Result r_nssets = conn->exec(nssets_query);
+      Database::Result r_nssets = conn.exec(nssets_query);
       for (Database::Result::Iterator it = r_nssets.begin(); it != r_nssets.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
@@ -715,7 +903,7 @@ public:
           << "JOIN object_registry t_1 ON (t_1.id = t_2.keyset)";
       keysets_query.order_by() << "tmp.id";
 
-      Database::Result r_keysets = conn->exec(keysets_query);
+      Database::Result r_keysets = conn.exec(keysets_query);
       for (Database::Result::Iterator it = r_keysets.begin(); it != r_keysets.end(); ++it) {
           Database::Row::Iterator col = (*it).begin();
 
@@ -736,7 +924,7 @@ public:
                               << "JOIN enumval_history t_1 ON (tmp.id = t_1.historyid)";
       validation_query.order_by() << "tmp.id";
         
-      Database::Result r_validation = conn->exec(validation_query);
+      Database::Result r_validation = conn.exec(validation_query);
       Database::Result::Iterator it = r_validation.begin();
       for (; it != r_validation.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
@@ -759,7 +947,7 @@ public:
       }
 
       /// load object state
-      ObjectListImpl::reload(conn.get(), history);
+      ObjectListImpl::reload(history);
       /* checks if row number result load limit is active and set flag */ 
       CommonListImpl::reload();
     }
@@ -770,7 +958,7 @@ public:
       LOGGER(PACKAGE).error(boost::format("%1%") % ex.what());
     }
 
-  }
+  }//reload(Database::Filters::Union &uf)
   virtual void reload() throw (SQL_ERROR) {
     std::map<TID,std::string> registrars;
     std::ostringstream sql;
@@ -833,6 +1021,7 @@ public:
           db->GetFieldValue(i,6), // registrant handle
           db->GetFieldValue(i,7), // registrant organization
           db->GetFieldValue(i,8), // registrant name
+          std::string(""),
           STR_TO_ID(db->GetFieldValue(i,9)), // registrar
           registrars[STR_TO_ID(db->GetFieldValue(i,9))], // registrar handle
           MAKE_TIME(i,10), // crdate
@@ -882,7 +1071,9 @@ public:
       if (!dom)
         throw SQL_ERROR();
       dom->addAdminHandle(STR_TO_ID(db->GetFieldValue(i, 1)),
-      db->GetFieldValue(i, 2), atoi(db->GetFieldValue(i, 3)));
+              db->GetFieldValue(i, 2)
+              , std::string("") , std::string("") , std::string("")
+              , atoi(db->GetFieldValue(i, 3)));
     }
     db->FreeSelect();
     // add nsset handles (instead of LEFT JOIN)
@@ -992,6 +1183,9 @@ public:
       case MT_REGISTRANT_ORG:
         stable_sort(data_.begin(), data_.end(), CompareRegistrantOrganization(asc));
         break;
+      case MT_REGISTRANT_PHONE:
+        stable_sort(data_.begin(), data_.end(), CompareRegistrantPhone(asc));
+        break;
       case MT_REGISTRAR_HANDLE:
         stable_sort(data_.begin(), data_.end(), CompareRegistrarHandle(asc));
         break;
@@ -1007,6 +1201,33 @@ public:
       case MT_CANCELDATE:
         stable_sort(data_.begin(), data_.end(), CompareCancelDate(asc));
         break;
+      case MT_1ADMIN_NAME:
+          stable_sort(data_.begin(), data_.end(), CompareAdminNameByIdx(asc,0));
+          break;
+      case MT_1ADMIN_ORG:
+          stable_sort(data_.begin(), data_.end(), CompareAdminOrganizationByIdx(asc,0));
+          break;
+      case MT_1ADMIN_PHONE:
+          stable_sort(data_.begin(), data_.end(), CompareAdminPhoneByIdx(asc,0));
+          break;
+      case MT_2ADMIN_NAME:
+          stable_sort(data_.begin(), data_.end(), CompareAdminNameByIdx(asc,1));
+          break;
+      case MT_2ADMIN_ORG:
+          stable_sort(data_.begin(), data_.end(), CompareAdminOrganizationByIdx(asc,1));
+          break;
+      case MT_2ADMIN_PHONE:
+          stable_sort(data_.begin(), data_.end(), CompareAdminPhoneByIdx(asc,1));
+          break;
+      case MT_3ADMIN_NAME:
+          stable_sort(data_.begin(), data_.end(), CompareAdminNameByIdx(asc,2));
+          break;
+      case MT_3ADMIN_ORG:
+          stable_sort(data_.begin(), data_.end(), CompareAdminOrganizationByIdx(asc,2));
+          break;
+      case MT_3ADMIN_PHONE:
+          stable_sort(data_.begin(), data_.end(), CompareAdminPhoneByIdx(asc,2));
+          break;
     }
   }
   virtual const char *getTempTableName() const {
@@ -1028,7 +1249,7 @@ public:
     Zone::DomainName domain; // parsed domain name
     try { zm->parseDomainName(fqdn,domain,allowIDN); }
     catch (Zone::INVALID_DOMAIN_NAME) {return CA_INVALID_HANDLE;}
-    const Zone::Zone *z = zm->findZoneId(fqdn);
+    const Zone::Zone *z = zm->findApplicableZone(fqdn);
     // TLD domain allowed only if zone.fqdn='' is in zone list 
     if (!z && domain.size() == 1)
       return CA_INVALID_HANDLE;
@@ -1053,7 +1274,7 @@ public:
     std::stringstream sql;
     // domain can be subdomain or parent domain of registred domain
     // there could be a lot of subdomains therefor LIMIT 1
-    if (zm->findZoneId(fqdn)->isEnumZone())
+    if (zm->findApplicableZone(fqdn)->isEnumZone())
       sql << "SELECT o.name, o.id FROM object_registry o "
           << "WHERE o.type=3 AND o.erdate ISNULL AND " << "(('" << fqdn
           << "' LIKE '%.'|| o.name) OR " << "(o.name LIKE '%.'||'" << fqdn
@@ -1095,6 +1316,19 @@ public:
       ret = atol(db->GetFieldValue( 0, 0));
     db->FreeSelect();
     return ret;
+  }
+  /// interface method implementation
+  unsigned long getSignedDomainCount(const std::string & _fqdn) const
+  {
+	std::stringstream sql;
+	unsigned long ret = 0;
+	sql << "SELECT count(*) FROM domain d "
+			"JOIN zone z ON (d.zone = z.id) AND z.fqdn = LOWER('" << db->Escape2(_fqdn) << "') "
+		<< "WHERE d.keyset IS NOT NULL";
+	if (db->ExecSelect(sql.str().c_str()) && db->GetSelectRows() == 1)
+	  ret = atol(db->GetFieldValue( 0, 0));
+	db->FreeSelect();
+	return ret;
   }
   /// interface method implementation
   unsigned long getEnumNumberCount() const {

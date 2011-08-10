@@ -9,10 +9,11 @@
 #include <boost/archive/xml_oarchive.hpp>
 
 #include "settings.h"
-#include "keyset_filter.h"
 #include "model_filters.h"
 #include "db/database.h"
 #include "log/logger.h"
+
+#include "registrar_filter.h"
 
 namespace Database {
   typedef Factory::Simple<PSQLConnection> ConnectionFactory;
@@ -30,17 +31,34 @@ using namespace Database;
 using namespace Database::Filters;
 
 Connection* init_connection() {
-  std::string conninfo = "host=localhost dbname=fred user=fred";
-  Manager db_manager(new ConnectionFactory(conninfo));
+	/*
+  // std::string conninfo = "host=localhost dbname=fred user=fred port=22345";
+  Manager db_manager(conninfo);
   Connection *conn = db_manager.getConnection();
+	*/
+
+  Connection *conn;
+  try {
+  	conn = new Connection("host=localhost dbname=fred user=fred port=5432");
+  } catch (Database::Exception& ex) {
+	std::cout << "Error while connecting to the database " << ex.what() << std::endl;
+	return NULL;
+  }
+
   return conn;
 }
 
 void exec_and_print(SelectQuery& _q, Union& _f) {
   _f.serialize(_q);
 
+  std::string info_query_str = str(boost::format("%1% LIMIT %2%") % _q.str() % 1000);
+
+  std::cout << "\n" << "exec_and_print: " << info_query_str << "\n"
+  << std::endl;
+
   std::auto_ptr<Connection> conn(init_connection());
-  Result result = conn->exec(_q);
+  if(conn.get() == NULL) return;
+  Result result = conn->exec(info_query_str);
 
   for (Result::Iterator it = result.begin(); it != result.end(); ++it) {
     Row row = *it;
@@ -52,7 +70,6 @@ void exec_and_print(SelectQuery& _q, Union& _f) {
   std::cout << "(" << result.size() << " rows)" << std::endl << std::endl;
 }
 
-
 int main(int argc, char *argv[]) {
   try {
 
@@ -60,10 +77,88 @@ int main(int argc, char *argv[]) {
     Logging::Manager::instance_ref().get("db").setLevel(Logging::Log::LL_DEBUG);
     Logging::Manager::instance_ref().get("tracer").addHandler(Logging::Log::LT_CONSOLE);
     Logging::Manager::instance_ref().get("tracer").setLevel(Logging::Log::LL_TRACE);
+    Logging::Manager::instance_ref().get(PACKAGE).addHandler(Logging::Log::LT_CONSOLE);
+    Logging::Manager::instance_ref().get(PACKAGE).setLevel(Logging::Log::LL_TRACE);
 
+    //Zone Test
+
+    bool at_least_one = false;
+    Database::Filters::Zone *zoneFilter;
+        zoneFilter = new Database::Filters::ZoneSoaImpl(true);
+      Database::Filters::Union *uf;
+      uf = new Database::Filters::Union();
+      uf->addFilter(zoneFilter);
+
+      Database::SelectQuery info_query;
+                        std::auto_ptr<Database::Filters::Iterator> fit(uf->createIterator());
+                        for (fit->first(); !fit->isDone(); fit->next())
+                        {
+                          Database::Filters::Zone *zf =
+                              dynamic_cast<Database::Filters::Zone*>(fit->get());
+                          if (!zf)
+                            continue;
+
+                          Database::SelectQuery *tmp = new Database::SelectQuery();
+                          tmp->select() << "z.id, z.fqdn, z.ex_period_min, z.ex_period_max"
+                            ", z.val_period, z.dots_max, z.enum_zone"
+                            ", zs.ttl, zs.hostmaster, zs.serial, zs.refresh, zs.update_retr"
+                            ", zs.expiry, zs.minimum, zs.ns_fqdn";
+                          tmp->from() << "zone z JOIN zone_soa zs ON z.id = zs.zone";
+                          tmp->order_by() << "z.id";
+
+                          uf->addQuery(tmp);
+                          at_least_one = true;
+                        }//for fit
+
+                        if (!at_least_one) {
+                          LOGGER(PACKAGE).error("wrong filter passed for reload ZoneList!");
+                          return 0;//return;
+                        }
+
+                        /* manually add query part to order result by id
+                         * need for findIDSequence() */
+                        //uf.serialize(info_query);
+                        //std::string info_query_str = str(boost::format("%1% ORDER BY id LIMIT %2%") % info_query.str() % m_limit);
+
+                        exec_and_print(info_query, *uf);
+                            return 0;
+
+
+
+      //Zone Test End
+    /*
+    //Registrar Test
     SelectQuery sq;
     Union uf;
-    //		
+
+    Registrar *r = new RegistrarImpl(true);
+    Zone &z = r->addActiveZone();
+    z.addFqdn().setValue("*.arpa");
+
+
+    SelectQuery *sq1 = new SelectQuery;
+    //r->addHandle() = "*";
+
+
+    sq1->addSelect("id name handle url", r->joinRegistrarTable());
+
+    uf.clear();
+    uf.addFilter(r);
+    //uf.addFilter(z);
+    uf.addQuery(sq1);
+
+    //sq.addSelect("id name handle url",r->joinRegistrarTable());
+
+    exec_and_print(sq, uf);
+    return 0;
+
+    //Registrar Test End
+
+    */
+
+    //SelectQuery sq;
+    //Union uf;
+    //
     //		EppAction *ef = new EppActionImpl();
     //		Object *of = ef->addObject();
     //		ef->addSession();
@@ -87,7 +182,7 @@ int main(int argc, char *argv[]) {
     //		sq.clear();
 
 
-    SelectQuery *sq1; //, *sq2;
+    //SelectQuery *sq1; //, *sq2;
     // sq1 = new SelectQuery();
     // sq2 = new SelectQuery();
 
@@ -148,58 +243,43 @@ int main(int argc, char *argv[]) {
     //    uf.clear();
     //
     //    return 1;
-    
+
 //    File *f = new FileImpl();
 //    f->addMimeType().setValue("*/pdf");
-//    
+//
 //    uf.addFilter(f);
 //    sq1 = new SelectQuery();
 //    sq1->addSelect("id", f->joinFileTable());
 //    uf.addQuery(sq1);
-//      
+//
 //    exec_and_print(sq, uf);
-//      
+//
 //    return 1;
-//    
+//
 //    Mail *m = new MailImpl();
 //    //m->addId().setValue(Database::ID(28));
 //    //m->addMessage().setValue("Contact data change");
 //    //m->addHandle().setValue("CID:JIRI");
 //    //m->addType().setValue(1);
 //    m->addAttachment().addName().setValue("150800001.pdf");
-//    
+//
 //    uf.addFilter(m);
 //    sq1 = new SelectQuery();
 //    sq1->addSelect("id", m->joinMailTable());
 //    uf.addQuery(sq1);
-//    
+//
 //    exec_and_print(sq, uf);
-//    
+//
 //    return 1;
 
-//    EppAction *epp_filter = new EppActionImpl();
-//    epp_filter->addEppCodeResponse().setValue(2504);
-//
-//    uf.addFilter(epp_filter);
-//    sq1 = new SelectQuery();
-//    sq1->addSelect("*", epp_filter->joinActionTable());
-//    uf.addQuery(sq1);
-//
-//    exec_and_print(sq, uf);   
-//    
-//    return 1;
 
-    Settings sett;
-    sett.set("filter.history", "on");
-
+/*
     Domain *df_test = new DomainHistoryImpl();
     df_test->addHandle().setValue("d*");
     df_test->addZoneId().setValue(Database::ID(3));
     df_test->addRegistrant().addHandle().setValue("CID:TOM");
-    df_test->addObjectState().addStateId().setValue(Database::ID(15));
 
     uf.addFilter(df_test);
-    uf.settings(&sett);
     sq1 = new SelectQuery();
     sq1->addSelect(new Column("historyid", df_test->joinObjectTable(), "DISTINCT"));
     sq1->addSelect("id roid name", df_test->joinObjectRegistryTable());
@@ -222,19 +302,19 @@ int main(int argc, char *argv[]) {
     // exec_and_print__(sq, uf);
 
     return 1;
-    
+
     Invoice *i = new InvoiceImpl();
     //i->addFile().addName().setValue("soubor.pdf");
     i->addRegistrar().addHandle().setValue("REG-FRED_A");
-   
+
     uf.addFilter(i);
     sq1 = new SelectQuery();
     sq1->addSelect("*", i->joinInvoiceTable());
     uf.addQuery(sq1);
 
     exec_and_print(sq, uf);
-   
-    return 1;    
+
+    return 1;
 
     Database::InsertQuery iq("public_request");
     iq.add("state", Database::Value(10));
@@ -253,16 +333,16 @@ int main(int argc, char *argv[]) {
     std::cout << "result 1 has " << r1__.size() << " rows" << std::endl;
     std::cout << "result 2 has " << r2__.size() << " rows" << std::endl;
 
-    
+
     return 1;
-    
+
     Database::Filters::PublicRequest *r = new Database::Filters::PublicRequestImpl();
     r->addCreateTime().setValue(DateTimeInterval(LAST_WEEK, -1));
     Object &ro = r->addObject();
     ro.addHandle().setValue("CID:MAN4");
 //    EppAction &re = r->addEppAction();
 //    re.addSvTRID().setValue("ccReg-0000000058");
-   
+
     uf.addFilter(r);
     sq1 = new SelectQuery();
     sq1->addSelect("*", r->joinRequestTable());
@@ -271,40 +351,107 @@ int main(int argc, char *argv[]) {
     exec_and_print(sq, uf);
 
     return 1;
+*/
+/*Req1
+// logging
+    RequestImpl *le = new RequestImpl(true);
+
+    // DateTimeInterval di(Date(2008, 9, 17), DateTime("2008-09-18 12:41:13"));
+    // DateTimeInterval di(DateTime("2008-10-23 11:00:30"), DateTime("2008-10-25 15:41:13"));
 
 
+    DateTimeInterval di(DateTime("2008-10-23 13:16:30"), DateTime("2009-11-23 13:20:13"));
+    le->addTimeBegin().setValue(di);
+
+//  le->addComponent().setValue(LC_UNIX_WHOIS);
+
+    RequestPropertyValue &pv = le->addRequestPropertyValue();
+
+    pv.addName().setValue("registrarId");
+    pv.addValue().setValue("REG-FRED_B");
+
+    uf.addFilter(le);
+    sq1 = new SelectQuery();
+*/
+/*
+    pv.addRequestProperty().addName().setValue("search axis");
+    pv.addValue().setValue("registrant");
+*/
+
+
+
+/*
+    le->addJoin (new Join( Column("id", le->joinTable("request")),
+			SQL_OP_EQ,
+			Column("entry_id", le->joinTable("property_value"))
+			));
+    le->addJoin (new Join( Column("property_id", le->joinTable("property_value")),
+			SQL_OP_EQ,
+			Column("id", le->joinTable("property"))
+			));
+*/
+/*Req2
+    sq1->addSelect("name", pv.joinRequestPropertyTable());
+    sq1->addSelect("value", pv.joinRequestPropertyValueTable());
+
+    sq1->addSelect("time_begin source_ip is_monitoring service", le->joinRequestTable());
+
+    uf.addQuery(sq1);
+
+    exec_and_print(sq, uf);
+
+    return 0;
+*/
+
+// ------------- contact
+
+/*
     Domain *d1 = new DomainHistoryImpl();
-    d1->addObjectState().addStateId().setValue(Database::ID(14));
-    //d1->addExpirationDate(DateInterval(PAST_MONTH, 1));
-    
+    // ObjectState &s = d1->addState();
+    // s.addId().setValue(Database::Null<int>(14));
+
+    DateTimeInterval di(Date(2008, 8, 01), Date(2008, 9, 13));
+
+    d1->addCreateTime().setValue(di);
+    // d1->addExpirationDate(DateInterval(PAST_MONTH, 1));
+    // d1->addExpirationDate() << di;
+
     Contact &d1c = d1->addRegistrant();
-    d1c.addName().setValue("Ondřej*");
+    //d1c.addName().setValue("Ondřej*");
+    d1c.addName().setValue("Jan*");
     // Filters::Value<std::string>& v2 = d1c->addCity(Database::Null<std::string>("Lysa nad Labem"));
     // v2.setValue("Praha 2");
-    
+
     // NSSet *d1n = d1->addNSSet();
     // Filters::Value<std::string>& v3 = d1n->addHostFQDN("");
     // v3.setValue("ns3.domain.cz");
-    
+
     uf.addFilter(d1);
-    
+
     sq1 = new SelectQuery();
-    sq1->addSelect("id name", d1->joinObjectRegistryTable());
+    // sq1->addSelect("*", d1->joinObjectRegistryTable());
+
     uf.addQuery(sq1);
+
+    std::cout << "-------------- exec_and_print: " << std::endl;
     exec_and_print(sq, uf);
+
+
     return 1;
-   
+*/
+/*ofstream
+
     std::ofstream ofsd;
     ofsd.open("test-d-filter.xml", std::ios_base::trunc);
     assert(ofsd.good());
     boost::archive::xml_oarchive save_d(ofsd);
     save_d << BOOST_SERIALIZATION_NVP(uf);
     ofsd.close();
-   
- 
+
+
     sq.clear();
     uf.clear();
-    
+
     Union uf2;
 
     std::ifstream ifsd("test-d-filter.xml");
@@ -315,7 +462,7 @@ int main(int argc, char *argv[]) {
 
     Union::iterator dfit = uf2.begin();
     Domain *d2 = dynamic_cast<DomainHistoryImpl *>(*dfit);
-    
+
     sq1 = new SelectQuery();
     sq1->addSelect("id crid name erdate", d2->joinObjectRegistryTable());
     sq1->addSelect("clid", d2->joinObjectTable());
@@ -323,26 +470,33 @@ int main(int argc, char *argv[]) {
 
     uf2.addQuery(sq1);
     exec_and_print(sq, uf2);
-    
+
     return 1;
-
+*/
     /*************************************************************************/
-
+/*Contact
     Contact *c1 = new ContactImpl();
     c1->addName().setValue("Fred");
 
     uf.clear();
     uf.addFilter(c1);
 
-    boost::archive::xml_oarchive save_c(std::cout);
-    save_c << BOOST_SERIALIZATION_NVP(uf);
+    //boost::archive::xml_oarchive save_c(std::cout);
+    //save_c << BOOST_SERIALIZATION_NVP(uf);
 
     sq.clear();
-    uf.clear();
 
-    std::ifstream ifsc("test-c-filter.xml");
-    assert(ifsc.good());
+    // std::ifstream ifsc("test-c-filter.xml");
+    // assert(ifsc.good());
 
+    sq1 = new SelectQuery();
+    sq1->addSelect("id crid name erdate", c1->joinObjectRegistryTable());
+
+    uf.addQuery(sq1);
+
+    exec_and_print(sq, uf);
+*/
+/*
     boost::archive::xml_iarchive load_c(ifsc);
     load_c >> BOOST_SERIALIZATION_NVP(uf);
 
@@ -354,6 +508,7 @@ int main(int argc, char *argv[]) {
 
     uf.addQuery(sq1);
     exec_and_print(sq, uf);
+*/
 
     //
     //		EppAction eaf;
@@ -372,7 +527,25 @@ int main(int argc, char *argv[]) {
     //		exec_and_print(sq, cf2);
     //		sq.clear();
 
-#endif // #if 0
+    // -------------------
+    /*
+    LogReader *lr = new LogReaderImpl();
+
+    lr->addDateInterval(DateTimeInterval(LAST_MONTH, -1));
+    lr->addComponent(Value<Comp>(MOD_WHOIS));
+    lr->addIpAddr("127.0.*");
+    lr->addProperties().addPair("inverseKey", "nsset");
+
+    uf.addFilter(lr);
+
+    sq1 = new SelectQuery();
+    sq1->addSelect("sourceIP component Timestamp name value", lr->joinProperties());
+
+    uf.addQuery(sq1);
+    exec_and_print(sq, uf);
+    */
+
+//#endif // #if 0
   }
   catch (Database::Exception& e) {
     std::cout << e.what() << std::endl;

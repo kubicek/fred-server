@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -53,24 +53,30 @@ private:
     ccReg::EPP_var m_epp;
     Config::Conf m_conf;
 
-    boost::program_options::options_description *m_options;
-    boost::program_options::options_description *m_optionsInvis;
+    static const struct options m_opts[];
 public:
-    FileClient();
-    FileClient(std::string connstring,
-            std::string nsAddr);
-    ~FileClient();
-    void init(std::string connstring,
-            std::string nsAddr,
-            Config::Conf &conf);
+    FileClient()
+    { }
+    FileClient(
+            const std::string &connstring,
+            const std::string &nsAddr,
+            const Config::Conf &conf):
+        BaseClient(connstring, nsAddr),
+        m_conf(conf)
+    {
+        m_db.OpenDatabase(connstring.c_str());
+    }
+    ~FileClient()
+    { }
 
-    boost::program_options::options_description *getVisibleOptions() const;
-    boost::program_options::options_description *getInvisibleOptions() const;
-    void show_opts() const;
+    static const struct options *getOpts();
+    static int getOptsCount();
+    void runMethod();
 
+    void show_opts();
     void list();
     void list_help();
-};
+}; // class FileClient
 
 } // namespace Admin;
 

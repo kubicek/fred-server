@@ -20,6 +20,7 @@ VARRUN_PATH=/home/jara/nic/enum/fred/trunk/scripts/root/var/run/
 RIFD_PORT=22348
 PIFD_PORT=22349
 ADIFD_PORT=22350
+LOGD_PORT=22357
 OPTIONS="-ORBnativeCharCodeSet UTF-8 -ORBendPoint giop:tcp::"
 
 MSG_START="Starting FRED central registry CORBA servers..."
@@ -102,7 +103,16 @@ fred_start() {
 	    NUM=$(($NUM+1))
         fi
     fi
-    if [ $NUM -eq 4 ]; then
+    if check_pidfile ${VARRUN_PATH}/fred-logd.pid; then NUM=$(($NUM+1)); else
+        ${FRED_PATH}/fred-logd ${OPTIONS}${LOGD_PORT} 2>/dev/null &
+        if store_pid "${FRED_PATH}/fred-logd" ${VARRUN_PATH}/fred-logd.pid
+	then
+	    NUM=$(($NUM+1))
+        fi
+    fi
+
+
+    if [ $NUM -eq 5 ]; then
         log_success_msg "${MSG_START}"
     else
 	log_failure_msg "${MSG_START}"
@@ -124,6 +134,7 @@ fred_status() {
     check_server_status "fred-rifd" "${VARRUN_PATH}/fred-rifd.pid"
     check_server_status "fred-pifd" "${VARRUN_PATH}/fred-pifd.pid"
     check_server_status "fred-adifd" "${VARRUN_PATH}/fred-adifd.pid"
+    check_server_status "fred-logd" "${VARRUN_PATH}/fred-logd.pid"
 }
 
 fred_stop() {
@@ -146,6 +157,13 @@ fred_stop() {
         STOP_SUCCEDED=$(($STOP_SUCCEDED * $?))
 	rm -f ${VARRUN_PATH}/fred-adifd.pid
     fi
+    if [ -f ${VARRUN_PATH}/fred-logd.pid ]
+    then
+	kill -TERM `cat ${VARRUN_PATH}/fred-logd.pid` 2>/dev/null
+        STOP_SUCCEDED=$(($STOP_SUCCEDED * $?))
+	rm -f ${VARRUN_PATH}/fred-logd.pid
+    fi
+
     /home/jara/nic/enum/fred/trunk/scripts/root/bin/pyfredctl stop > /dev/null
     STOP_SUCCEDED=$(($STOP_SUCCEDED * $?))
     if [ $STOP_SUCCEDED -eq 0 ]
@@ -245,6 +263,12 @@ init_cz()
     $ADMCMD --registrar_add_zone \
         --zone_fqdn=cz --handle=REG-FRED_B \
         --from_date="2007-01-01"
+    $ADMCMD --enum_parameter_change \
+        --parameter_name=handle_registration_protection_period \
+        --parameter_value=2
+    $ADMCMD --enum_parameter_change \
+        --parameter_name=roid_suffix \
+        --parameter_value=CZ
     exit 0
 }
 

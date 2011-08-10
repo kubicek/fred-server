@@ -28,7 +28,6 @@
 #include "register/mailer.h"
 #include "notifier_changes.h"
 
-#include "db/manager_old_db.h"
 
 
 #define MAX_SQLSTRING 512
@@ -85,6 +84,9 @@ bool EPPNotifier::Send()
     mm->sendEmail("", emails, "", getTemplate(), params, handles, attach);
   }
   catch (...) {
+    LOGGER(PACKAGE).error(boost::format("EPPNotifier: notification for '%1%' failed! "
+                "(object_id=%2% action=%3% registrar_id=%4%)")
+                % emails % objectID % enum_action % registrarID);
     return false;
   }
 
@@ -118,9 +120,8 @@ void EPPNotifier::constructMessages() {
               enum_action == EPP_NSsetUpdate   ||
               enum_action == EPP_KeySetUpdate)) {
     try {
-      Database::OldDBManager dbm(db);
 
-      MessageUpdateChanges changes(&dbm, rm_, objectID, enum_action);
+      MessageUpdateChanges changes(rm_, objectID, enum_action);
       MessageUpdateChanges::ChangesMap values = changes.compose();
 
       params["changes"] = values.size() > 0 ? "1" : "0";
@@ -133,7 +134,7 @@ void EPPNotifier::constructMessages() {
       }
     }
     catch (MessageUpdateChanges::NoChangesFound &ex) {
-      LOGGER(PACKAGE).error(boost::format("EPPNotifier: update changes - no history found (object_id=%1%)") % objectID);
+      LOGGER(PACKAGE).info(boost::format("EPPNotifier: update changes - no history found (object_id=%1%)") % objectID);
     }
     catch (Database::Exception &ex) {
       LOGGER(PACKAGE).error(boost::format("EPPNotifier: update changes - database error => %1%") % ex.what());

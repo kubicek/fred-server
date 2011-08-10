@@ -24,6 +24,8 @@
 #include <memory>
 
 #include "corba/nameservice.h"
+#include "types/datetime_interval.h"
+#include "types/date_interval.h"
 
 extern const char *corbaOpts[][2];
 extern const char g_prog_name[];
@@ -51,9 +53,19 @@ public:
 };
 
 std::vector<std::string> separate(const std::string str, int ch = ' ');
-std::vector<std::string> separateSpaces(const char *string);
+
+#define DATETIME_FROM   1
+#define DATETIME_TO     2
+
+#define PARSE_DATETIME  1
+#define PARSE_DATEONLY  2
+
+std::string createDateTime(std::string datetime, int interval=DATETIME_FROM, int type=PARSE_DATEONLY);
+Database::DateInterval *parseDate(std::string str);
+Database::DateTimeInterval *parseDateTime(std::string str);
 
 void print_version();
 void print_moo();
+void help_dates();
 
 #endif // _COMMONCLIENT_H_

@@ -53,6 +53,7 @@ public:
   const std::string to_string() const;
   const std::string iso_str() const;
   const std::string str() const; 
+  Date date() const;
 
   bool is_special() const;
 
@@ -80,6 +81,8 @@ public:
 
   /* datetime ouptut operator */
   friend std::ostream& operator<<(std::ostream &_os, const DateTime& _v);
+
+  DateTime operator=(const DateTime &sec);
 
 #ifdef HAVE_BOOST_SERIALIZATION
   /* boost serialization */

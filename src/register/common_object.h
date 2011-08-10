@@ -23,7 +23,9 @@ enum FilterType {
   FT_INVOICE,
   FT_PUBLICREQUEST,
   FT_MAIL,
-  FT_FILE
+  FT_FILE,
+  FT_LOGGER,
+  FT_STATEMENTITEM
 };
 
 /*

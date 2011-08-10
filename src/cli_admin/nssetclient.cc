@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -22,84 +22,35 @@
 
 namespace Admin {
 
-NssetClient::NssetClient()
+const struct options *
+NssetClient::getOpts()
 {
-    m_options = new boost::program_options::options_description(
-            "NSSet related options");
-    m_options->add_options()
-        addOpt(NSSET_LIST_NAME)
-        addOpt(NSSET_LIST_HELP_NAME)
-        addOpt(NSSET_SHOW_OPTS_NAME);
-
-    m_optionsInvis = new boost::program_options::options_description(
-            "NSSet related sub options");
-    m_optionsInvis->add_options()
-        add_ID()
-        add_HANDLE()
-        add_FQDN()
-        add_IP()
-        add_ADMIN_ID()
-        add_ADMIN_HANDLE()
-        add_ADMIN_NAME()
-        add_REGISTRAR_ID()
-        add_REGISTRAR_HANDLE()
-        add_REGISTRAR_NAME()
-        add_CRDATE()
-        add_UPDATE()
-        add_TRANSDATE()
-        add_DELDATE();
-}
-
-NssetClient::NssetClient(
-        std::string connstring,
-        std::string nsAddr) : BaseClient(connstring, nsAddr)
-{
-    m_db.OpenDatabase(connstring.c_str());
-    m_options = NULL;
-    m_optionsInvis = NULL;
-}
-
-NssetClient::~NssetClient()
-{
-    delete m_options;
-    delete m_optionsInvis;
+    return m_opts;
 }
 
 void
-NssetClient::init(
-        std::string connstring,
-        std::string nsAddr,
-        Config::Conf &conf)
+NssetClient::runMethod()
 {
-    BaseClient::init(connstring, nsAddr);
-    m_db.OpenDatabase(connstring.c_str());
-    m_conf = conf;
-}
-
-boost::program_options::options_description *
-NssetClient::getVisibleOptions() const
-{
-    return m_options;
-}
-
-boost::program_options::options_description *
-NssetClient::getInvisibleOptions() const
-{
-    return m_optionsInvis;
+    if (m_conf.hasOpt(NSSET_LIST_NAME)) {
+        list();
+    } else if (m_conf.hasOpt(NSSET_SHOW_OPTS_NAME)) {
+        show_opts();
+    }
 }
 
 void
-NssetClient::show_opts() const
+NssetClient::show_opts() 
 {
-    std::cout << *m_options << std::endl;
-    std::cout << *m_optionsInvis << std::endl;
+    callHelp(m_conf, no_help);
+    print_options("Nsset", getOpts(), getOptsCount());
 }
 
 void
 NssetClient::list()
 {
+    callHelp(m_conf, list_help);
     std::auto_ptr<Register::Zone::Manager> zoneMan(
-            Register::Zone::Manager::create(&m_db));
+            Register::Zone::Manager::create());
     std::auto_ptr<Register::NSSet::Manager> nssMan(
             Register::NSSet::Manager::create(
                 &m_db,
@@ -146,7 +97,7 @@ NssetClient::list()
     unionFilter->addFilter(nssFilter);
     nssList->setLimit(m_conf.get<unsigned int>(LIMIT_NAME));
 
-    nssList->reload(*unionFilter, m_dbman);
+    nssList->reload(*unionFilter);
 
     std::cout << "<objects>\n";
     for (unsigned int i = 0; i < nssList->getCount(); i++) {
@@ -231,8 +182,43 @@ NssetClient::list_help()
         << "    [--" << REGISTRAR_NAME_NAME << "=<registrar_name>] \\\n"
         << "    [--" << FQDN_NAME << "=<fqdn>] \\\n"
         << "    [--" << IP_NAME << "=<ip>] \\\n"
+        << "    [--" << CRDATE_NAME << "=<create_date>] \\\n"
+        << "    [--" << DELDATE_NAME << "=<delete_date>] \\\n"
+        << "    [--" << UPDATE_NAME << "=<update_date>] \\\n"
+        << "    [--" << TRANSDATE_NAME << "=<transfer_date>] \\\n"
         << "    [--" << FULL_LIST_NAME << "]\n"
         << std::endl;
+}
+
+#define ADDOPT(name, type, callable, visible) \
+    {CLIENT_NSSET, name, name##_DESC, type, callable, visible}
+
+const struct options
+NssetClient::m_opts[] = {
+    ADDOPT(NSSET_LIST_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(NSSET_SHOW_OPTS_NAME, TYPE_NOTYPE, true, true),
+    add_ID,
+    add_HANDLE,
+    add_FQDN,
+    add_IP,
+    add_ADMIN_ID,
+    add_ADMIN_HANDLE,
+    add_ADMIN_NAME,
+    add_REGISTRAR_ID,
+    add_REGISTRAR_HANDLE,
+    add_REGISTRAR_NAME,
+    add_CRDATE,
+    add_UPDATE,
+    add_TRANSDATE,
+    add_DELDATE,
+};
+
+#undef ADDOPT
+
+int 
+NssetClient::getOptsCount()
+{
+    return sizeof(m_opts) / sizeof(options);
 }
 
 } // namespace Admin;

@@ -17,6 +17,7 @@
 #include "old_utils/dbsql.h"
 #include "old_utils/conf.h"
 #include "model/model_filters.h"
+#include "bankinginvoicing_impl.h"
 
 #include "conf/manager.h"
 
@@ -28,9 +29,9 @@ private:
   std::string m_connection_string;
   NameService *ns;
   Config::Conf& cfg;
+  ccReg_BankingInvoicing_i bankingInvoicing;
   DB db;
   std::auto_ptr<Register::Manager> register_manager_;
-  Database::Manager m_db_manager;
 
   typedef std::map<std::string, ccReg_Session_i*> SessionListType;
   SessionListType m_session_list;
@@ -59,8 +60,7 @@ public:
       throw (ccReg::Admin::AuthFailed);
   
   // session management
-  virtual char* createSession(const char* username)
-      throw (ccReg::Admin::AuthFailed);
+  virtual char* createSession(const char* username);
   virtual void destroySession(const char* _session_id);
   virtual ccReg::Session_ptr getSession(const char* sessionID)
       throw (ccReg::Admin::ObjectNotFound);
@@ -74,7 +74,7 @@ public:
   ccReg::Registrar* getRegistrarByHandle(const char* handle)
       throw (ccReg::Admin::ObjectNotFound, ccReg::Admin::SQL_ERROR);
   void putRegistrar(const ccReg::Registrar& regData);
-  
+
   // contact detail
   void fillContact(ccReg::ContactDetail* cv, Register::Contact::Contact* c);
   ccReg::ContactDetail* getContactByHandle(const char* handle)
@@ -130,14 +130,11 @@ public:
       throw (ccReg::Admin::ObjectNotFound);
   ccReg::EPPAction* getEPPActionBySvTRID(const char* svTRID)
       throw (ccReg::Admin::ObjectNotFound);
-  void fillAuthInfoRequest(ccReg::AuthInfoRequest::Detail *carid,
-                           Register::AuthInfoRequest::Detail *rarid);
-  ccReg::AuthInfoRequest::Detail* getAuthInfoRequestById(ccReg::TID id)
-      throw (ccReg::Admin::ObjectNotFound);
   ccReg::Mailing::Detail* getEmailById(ccReg::TID id)
       throw (ccReg::Admin::ObjectNotFound);
   // statistics
   CORBA::Long getDomainCount(const char *zone);
+  CORBA::Long getSignedDomainCount(const char *_fqdn);
   CORBA::Long getEnumNumberCount();
   // counters
   ccReg::EPPActionTypeSeq* getEPPActionTypeList();
@@ -152,10 +149,15 @@ public:
   /// testovaci fce na typ objektu
   void checkHandle(const char* handle, ccReg::CheckHandleTypeSeq_out ch);
 
+  /* disabled in FRED 2.3
   void fillInvoice(ccReg::Invoicing::Invoice *ci,
                    Register::Invoicing::Invoice *i);
+  
+   
   ccReg::Invoicing::Invoice* getInvoiceById(ccReg::TID id)
       throw (ccReg::Admin::ObjectNotFound);
+   **/
+  
   char* getCreditByZone(const char*registrarHandle, ccReg::TID zone);
   void generateLetters();
   bool setInZoneStatus(ccReg::TID domainId);

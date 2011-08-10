@@ -16,6 +16,8 @@
 
 #include "log/logger.h"
 
+#include <boost/shared_ptr.hpp>
+
 namespace Database {
 namespace Filters {
 
@@ -43,7 +45,7 @@ public:
   virtual bool empty() const {
     return filter_list.empty();
   }
-  
+
   void clearFilters();
   void clearQueries();
   void clear();
@@ -67,7 +69,7 @@ public:
   template<class Archive> void serialize(Archive& _ar,
       const unsigned int _version) {
     /*
-     * Need registering all classes which can be hold in 'filter_list' 
+     * Need registering all classes which can be hold in 'filter_list'
      * by Filter* pointer
      * CAUTION: Do not change the class order, append new clases after
      * last otherwise saved filters will be unable to load
@@ -102,7 +104,15 @@ public:
     _ar.register_type(static_cast<KeySetImpl *>(NULL));
     _ar.register_type(static_cast<KeySetHistoryImpl *>(NULL));
     _ar.register_type(static_cast<ObjectStateImpl *>(NULL));
+    _ar.register_type(static_cast<OnlineStatementImpl *>(NULL));
+    _ar.register_type(static_cast<BankPaymentImpl *>(NULL));
+    // _ar.register_type(static_cast<StatementHeadImpl *>(NULL));
 
+    _ar.register_type(static_cast<RequestImpl *>(NULL));
+    _ar.register_type(static_cast<RequestDataImpl *>(NULL));
+    _ar.register_type(static_cast<RequestPropertyValueImpl *>(NULL));
+    _ar.register_type(static_cast<RequestServiceType *>(NULL));
+    _ar.register_type(static_cast<RequestActionType *>(NULL));
 
     _ar & BOOST_SERIALIZATION_NVP(filter_list);
   }
@@ -114,13 +124,50 @@ public:
   const Settings* settings() const {
     return settings_ptr_;
   }
-  
+
 protected:
   std::vector<Filter*> filter_list;
   std::vector<Database::SelectQuery*> query_list;
 
   const Settings *settings_ptr_;
+};//class Union
+
+
+typedef boost::shared_ptr<Union> UnionPtr;
+template < typename DELETER >
+class CreateUnionPtrT
+{
+protected:
+    UnionPtr m_ptr;
+public:
+    CreateUnionPtrT()
+    : m_ptr(new Union(),DELETER())
+    {
+        TRACE(boost::format("[CALL] CreateUnionPtrT::CreateUnionPtrT Union* m_ptr: '%1% ") % m_ptr.get());
+    }
+
+    operator UnionPtr() const
+    {
+        return m_ptr;
+    }
+
 };
+///deleter functor for Union
+struct ClearDeleteUnion
+{
+    void operator()(Union* u)
+    {
+        TRACE(boost::format("[CALL] ClearDeleteUnion::operator(Union* u: '%1%' )") % u);
+        try
+        {
+            if(u) u->clear();
+        }
+        catch(...){}
+        delete u;
+    }
+};
+///UnionPtr factory
+typedef CreateUnionPtrT<ClearDeleteUnion> CreateClearedUnionPtr;
 
 }
 }

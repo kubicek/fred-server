@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -24,34 +24,27 @@
 #ifndef BASE_CLIENT_H_
 #define BASE_CLIENT_H_
 
+#include "simple.h"
 
 namespace Admin {
-
 
 class BaseClient {
 protected:
   std::string        m_connstring;
   std::string        m_nsAddr;
-  Database::Manager *m_dbman;
-
 
 public:
-  BaseClient() : m_dbman(0) {
+  BaseClient() {
   }
 
 
   BaseClient(const std::string &_conn_string,
              const std::string &_nsaddr)
            : m_connstring(_conn_string),
-             m_nsAddr(_nsaddr),
-             m_dbman(new Database::Manager(new ConnectionFactory(_conn_string))) {
+             m_nsAddr(_nsaddr) {
   }
 
-
   virtual ~BaseClient() {
-    if (m_dbman) {
-      delete m_dbman;
-    }
   }
 
 
@@ -59,12 +52,49 @@ public:
             const std::string &_nsaddr) {
     m_connstring = _conn_string;
     m_nsAddr     = _nsaddr;
-    m_dbman      = new Database::Manager(new ConnectionFactory(m_connstring));
   }
-};
+  void no_help()
+  {
+    std::cout << "There is no help for this topic" << std::endl;
+  }
 
+  void print_options(const std::string &clientName, 
+          const struct options *opts, int count)
+  {
+      if (count == 0) {
+          std::cout << "No parameters" << std::endl;
+          return;
+      }
+      std::string omg;
+      std::cout << clientName << std::endl << "Callable parameters:" << std::endl;
+      for (int i = 0; i < count; i++) {
+          if (opts[i].callable) {
+              if (opts[i].type != TYPE_NOTYPE) {
+                  omg = opts[i].name + std::string(" arg");
+              } else {
+                  omg = opts[i].name;
+              }
+              std::cout.width(24);
+              std::cout << std::left << omg << " - " << opts[i].description << std::endl;
+          }
+      }
+      std::cout << std::endl << "Other parametrs:" << std::endl;
+      for (int i = 0; i < count; i++) {
+          if (!opts[i].callable) {
+              if (opts[i].type != TYPE_NOTYPE) {
+                  omg = opts[i].name + std::string(" arg");
+              } else {
+                  omg = opts[i].name;
+              }
+              std::cout.width(24);
+              std::cout << std::left << omg;
+              std::cout << " - " << opts[i].description << std::endl;
+          }
+      }
+  }
+}; // class BaseClient
 
-}
+} // namespace Admin
 
 
 #endif /*BASE_CLIENT_H_*/

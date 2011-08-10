@@ -84,7 +84,10 @@ public:
     }
   }
 
-
+  static const std::string& getConnectionString() {
+    return conn_factory_->getConnectionString();
+  }   
+  
   /**
    * Explicit release database connection for actual thread
    * back to pool
@@ -93,17 +96,16 @@ public:
    *                        2. factory release (i.e. to pool)
    */
   static void release() {
-#ifdef HAVE_LOGGER
     PerThreadData_ *tmp = data_.get();
     if (tmp) {
+#ifdef HAVE_LOGGER
       LOGGER(PACKAGE).debug(boost::format("[tss] release state: conn=%1%  trans=%2%") % tmp->conn % &tmp->trans);
-    }
 #endif
-    // PerThreadData_ *tmp = data_.get();
-    // if (tmp && tmp->conn) {
-    //   conn_factory_->release(tmp->conn);
-    //   tmp->conn = 0;
-    // }
+    }
+    if (tmp && tmp->conn) {
+       conn_factory_->release(tmp->conn);
+       tmp->conn = 0;
+    }
   }
 
 

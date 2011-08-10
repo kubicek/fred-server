@@ -37,7 +37,7 @@ ccReg_KeySets_i::getColumnHeaders()
 }
 
 Registry::TableRow *
-ccReg_KeySets_i::getRow(CORBA::Short row)
+ccReg_KeySets_i::getRow(CORBA::UShort row)
     throw (ccReg::Table::INVALID_ROW)
 {
   Logging::Context ctx(base_context_);
@@ -86,7 +86,7 @@ ccReg_KeySets_i::sortByColumn(CORBA::Short column, CORBA::Boolean dir)
 }
 
 ccReg::TID
-ccReg_KeySets_i::getRowId(CORBA::Short row)
+ccReg_KeySets_i::getRowId(CORBA::UShort row)
     throw (ccReg::Table::INVALID_ROW)
 {
   Logging::Context ctx(base_context_);
@@ -123,9 +123,10 @@ void
 ccReg_KeySets_i::reload()
 {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
     TRACE("[CALL] ccReg_KeySets_i::reload()");
-    m_kl->reload(uf, dbm);
+    m_kl->reload(uf);
     m_kl->deleteDuplicatesId();
 }
 
@@ -145,6 +146,7 @@ CORBA::ULongLong
 ccReg_KeySets_i::resultSize()
 {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
     TRACE("[CALL] ccReg_KeySets_i::resultSize()");
     return m_kl->getRealCount(uf);
@@ -154,6 +156,7 @@ void
 ccReg_KeySets_i::loadFilter(ccReg::TID id)
 {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
     TRACE(boost::format("[CALL] ccReg_KeySets_i::loadFilter(%1%)") % id);
 
@@ -173,11 +176,12 @@ void
 ccReg_KeySets_i::saveFilter(const char *name)
 {
   Logging::Context ctx(base_context_);
+  ConnectionReleaser releaser;
 
     TRACE(boost::format("[CALL] ccReg_KeySets_i::saveFilter('%1%')") % name);
     
     std::auto_ptr<Register::Filter::Manager> tmp_filter_manager(
-            Register::Filter::Manager::create(dbm));
+            Register::Filter::Manager::create());
     tmp_filter_manager->save(Register::Filter::FT_KEYSET, name, uf);
 }
 

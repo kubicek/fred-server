@@ -77,6 +77,12 @@ const std::string DateTime::str() const {
   return to_simple_string(value);
 }
 
+Date
+DateTime::date() const
+{
+    return Date(value.date());
+}
+
 
 bool DateTime::is_special() const {
   return value.is_special();
@@ -114,6 +120,13 @@ bool operator==(const DateTime &_left, const DateTime &_right) {
 
 bool operator!=(const DateTime &_left, const DateTime &_right) {
   return !(_left == _right);
+}
+
+DateTime
+DateTime::operator=(const DateTime &sec)
+{
+    value = sec.value;
+    return sec;
 }
 
 
@@ -179,7 +192,6 @@ DateTime operator-(const DateTime& _d, const Minutes& _minutes) {
 DateTime operator-(const DateTime& _d, const Seconds& _seconds) {
   return DateTime(_d.value - seconds((Seconds::value_type)_seconds));
 }
-
 
 /*
  * datetime output operator

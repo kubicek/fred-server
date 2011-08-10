@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -21,102 +21,48 @@
 #include "domainclient.h"
 #include "register/register.h"
 
+#define addMethod(methods, name) \
+    methods.insert(std::make_pair(name, DOMAIN_CLIENT))
+
 namespace Admin {
 
-DomainClient::DomainClient()
+const struct options *
+DomainClient::getOpts()
 {
-    m_options = new boost::program_options::options_description(
-            "Domain related options");
-    m_options->add_options()
-        addOpt(DOMAIN_LIST_NAME)
-        addOpt(DOMAIN_LIST_PLAIN_NAME)
-        addOptStr(DOMAIN_INFO_NAME)
-        addOptStr(DOMAIN_CREATE_NAME)
-        addOptStr(DOMAIN_UPDATE_NAME)
-        addOpt(DOMAIN_CREATE_HELP_NAME)
-        addOpt(DOMAIN_UPDATE_HELP_NAME)
-        addOpt(DOMAIN_LIST_PLAIN_NAME)
-        addOpt(DOMAIN_SHOW_OPTS_NAME);
-
-    m_optionsInvis = new boost::program_options::options_description(
-            "Domain related sub options");
-    m_optionsInvis->add_options()
-        add_ID()
-        add_FQDN()
-        add_NSSET_ID()
-        add_NSSET_HANDLE()
-        add_ANY_NSSET()
-        add_KEYSET_ID()
-        add_KEYSET_HANDLE()
-        add_ANY_KEYSET()
-        add_REGISTRANT_ID()
-        add_REGISTRANT_NAME()
-        add_REGISTRANT_HANDLE()
-        add_ADMIN_ID()
-        add_ADMIN_HANDLE()
-        add_ADMIN_NAME()
-        add_REGISTRAR_ID()
-        add_REGISTRAR_HANDLE()
-        add_REGISTRAR_NAME()
-        add_ADMIN()
-        add_ADMIN_ADD()
-        add_ADMIN_REM()
-        add_CRDATE()
-        add_UPDATE()
-        add_DELDATE()
-        add_TRANSDATE();
-    // TODO updateregistrar, createregistrar, authpw, type, state, ...
-}
-
-DomainClient::DomainClient(
-        std::string connstring,
-        std::string nsAddr) : BaseClient(connstring, nsAddr)
-{
-    m_db.OpenDatabase(connstring.c_str());
-    m_options = NULL;
-    m_optionsInvis = NULL;
-}
-DomainClient::~DomainClient()
-{
-    delete m_options;
-    delete m_optionsInvis;
+    return m_opts;
 }
 
 void
-DomainClient::init(
-        std::string connstring,
-        std::string nsAddr,
-        Config::Conf &conf)
+DomainClient::runMethod()
 {
-    BaseClient::init(connstring, nsAddr);
-    m_db.OpenDatabase(connstring.c_str());
-    m_conf = conf;
-}
-
-boost::program_options::options_description *
-DomainClient::getVisibleOptions() const
-{
-    return m_options;
-}
-
-boost::program_options::options_description *
-DomainClient::getInvisibleOptions() const
-{
-    return m_optionsInvis;
+    if (m_conf.hasOpt(DOMAIN_LIST_PLAIN_NAME)) {
+        domain_list_plain();
+    } else if (m_conf.hasOpt(DOMAIN_CREATE_NAME)) {
+        domain_create();
+    } else if (m_conf.hasOpt(DOMAIN_UPDATE_NAME)) {
+        domain_update();
+    } else if (m_conf.hasOpt(DOMAIN_INFO_NAME)) {
+        domain_info();
+    } else if (m_conf.hasOpt(DOMAIN_LIST_NAME)) {
+        domain_list();
+    } else if (m_conf.hasOpt(DOMAIN_SHOW_OPTS_NAME)) {
+        show_opts();
+    }
 }
 
 void
-DomainClient::show_opts() const
+DomainClient::show_opts()
 {
-    std::cout << *m_options << std::endl;
-    std::cout << *m_optionsInvis << std::endl;
+    callHelp(m_conf, no_help);
+    print_options("Domain", getOpts(), getOptsCount());
 }
 
 void
 DomainClient::domain_list()
 {
+    callHelp(m_conf, list_help);
     std::auto_ptr<Register::Zone::Manager> zoneMan(
-            Register::Zone::Manager::create(&m_db));
+            Register::Zone::Manager::create());
 
     std::auto_ptr<Register::Domain::Manager> domMan(
             Register::Domain::Manager::create(&m_db, zoneMan.get()));
@@ -139,6 +85,10 @@ DomainClient::domain_list()
     apply_REGISTRANT_ID(domFilter);
     apply_REGISTRANT_HANDLE(domFilter);
     apply_REGISTRANT_NAME(domFilter);
+    apply_CRDATE(domFilter);
+    apply_DELDATE(domFilter);
+    apply_TRANSDATE(domFilter);
+    apply_UPDATE(domFilter);
 
     if (m_conf.hasOpt(ADMIN_ID_NAME))
         domFilter->addAdminContact().addId().setValue(
@@ -150,49 +100,16 @@ DomainClient::domain_list()
         domFilter->addAdminContact().addName().setValue(
                 m_conf.get<std::string>(ADMIN_NAME_NAME));
 
-    if (m_conf.hasOpt(DOMAIN_EXP_DATE_FROM_NAME) || m_conf.hasOpt(DOMAIN_EXP_DATE_TO_NAME)) {
-        Database::Date expDateFrom(NEG_INF);
-        Database::Date expDateTo(POS_INF);
-        if (m_conf.hasOpt(DOMAIN_EXP_DATE_FROM_NAME))
-            expDateFrom.from_string(
-                    m_conf.get<std::string>(DOMAIN_EXP_DATE_FROM_NAME));
-        if (m_conf.hasOpt(DOMAIN_EXP_DATE_TO_NAME))
-            expDateTo.from_string(
-                    m_conf.get<std::string>(DOMAIN_EXP_DATE_TO_NAME));
-        domFilter->addExpirationDate().setValue(
-                Database::DateInterval(expDateFrom, expDateTo));
-    }
-    if (m_conf.hasOpt(DOMAIN_OUT_DATE_FROM_NAME) || m_conf.hasOpt(DOMAIN_OUT_DATE_TO_NAME)) {
-        Database::Date outDateFrom(NEG_INF);
-        Database::Date outDateTo(POS_INF);
-        if (m_conf.hasOpt(DOMAIN_OUT_DATE_FROM_NAME))
-            outDateFrom.from_string(
-                    m_conf.get<std::string>(DOMAIN_OUT_DATE_FROM_NAME));
-        if (m_conf.hasOpt(DOMAIN_OUT_DATE_TO_NAME))
-            outDateTo.from_string(
-                    m_conf.get<std::string>(DOMAIN_OUT_DATE_TO_NAME));
-        domFilter->addOutZoneDate().setValue(
-                Database::DateInterval(outDateFrom, outDateTo));
-    }
-    if (m_conf.hasOpt(DOMAIN_CANC_DATE_FROM_NAME) || m_conf.hasOpt(DOMAIN_CANC_DATE_TO_NAME)) {
-        Database::Date cancDateFrom(NEG_INF);
-        Database::Date cancDateTo(POS_INF);
-        if (m_conf.hasOpt(DOMAIN_CANC_DATE_FROM_NAME))
-            cancDateFrom.from_string(
-                    m_conf.get<std::string>(DOMAIN_CANC_DATE_FROM_NAME));
-        if (m_conf.hasOpt(DOMAIN_CANC_DATE_TO_NAME))
-            cancDateTo.from_string(
-                    m_conf.get<std::string>(DOMAIN_CANC_DATE_TO_NAME));
-        domFilter->addCancelDate().setValue(
-                Database::DateInterval(cancDateFrom, cancDateTo));
-    }
+    apply_DATE(domFilter, DOMAIN_OUT_DATE_NAME, OutZone);
+    apply_DATE(domFilter, DOMAIN_EXP_DATE_NAME, Expiration);
+    apply_DATE(domFilter, DOMAIN_CANC_DATE_NAME, Cancel);
 
     Database::Filters::Union *unionFilter;
     unionFilter = new Database::Filters::Union();
     unionFilter->addFilter(domFilter);
 
     apply_LIMIT(domList);
-    domList->reload(*unionFilter, m_dbman);
+    domList->reload(*unionFilter);
 
     std::cout << "<objects>\n";
     for (unsigned int i = 0; i < domList->getCount(); i++) {
@@ -266,14 +183,14 @@ DomainClient::domain_list()
     delete unionFilter;
 }
 
-int
+void
 DomainClient::domain_create()
 {
+    callHelp(m_conf, domain_create_help);
     std::string fqdn = m_conf.get<std::string>(DOMAIN_CREATE_NAME).c_str();
     std::string registrant = m_conf.get<std::string>(DOMAIN_REGISTRANT_NAME).c_str();
     std::string nsset = m_conf.get<std::string>(DOMAIN_NSSET_NAME).c_str();
     std::string keyset = m_conf.get<std::string>(DOMAIN_KEYSET_NAME).c_str();
-    //std::string authInfoPw = m_conf.get<std::string>(AUTH_INFO_PW_NAME).c_str();
     std::string authInfoPw = m_conf.get<std::string>(AUTH_PW_NAME).c_str();
     std::string admins = m_conf.get<std::string>(ADMIN_NAME).c_str();
     unsigned int period = m_conf.get<unsigned int>(DOMAIN_PERIOD_NAME);
@@ -339,12 +256,13 @@ DomainClient::domain_create()
     std::cout << "return code: " << r->code << std::endl;
 
     CLIENT_LOGOUT;
-    return 0;
+    return;
 }
 
-int
+void
 DomainClient::domain_update()
 {
+    callHelp(m_conf, domain_update_help);
     std::string fqdn = m_conf.get<std::string>(DOMAIN_UPDATE_NAME);
     std::string registrant = m_conf.get<std::string>(REGISTRANT_HANDLE_NAME);
     std::string nsset = m_conf.get<std::string>(NSSET_HANDLE_NAME);
@@ -421,11 +339,12 @@ DomainClient::domain_update()
 
     std::cout << "return code: " << r->code << std::endl;
     CLIENT_LOGOUT;
-    return 0;
+    return;
 }
-int
+void
 DomainClient::domain_info()
 {
+    callHelp(m_conf, no_help);
     std::string name = m_conf.get<std::string>(DOMAIN_INFO_NAME);
 
     CLIENT_LOGIN;
@@ -443,11 +362,12 @@ DomainClient::domain_info()
     std::cout << k->keyset << std::endl;
 
     CLIENT_LOGOUT;
-    return 0;
+    return;
 }
-int
+void
 DomainClient::domain_list_plain()
 {
+    callHelp(m_conf, no_help);
     CLIENT_LOGIN;
     std::string name = m_conf.get<std::string>(DOMAIN_LIST_PLAIN_NAME).c_str();
     std::string cltrid;
@@ -463,7 +383,7 @@ DomainClient::domain_list_plain()
         std::cout << (*k)[i] << std::endl;
 
     CLIENT_LOGOUT;
-    return 0;
+    return;
 }
 
 void
@@ -471,14 +391,14 @@ DomainClient::domain_update_help()
 {
     std::cout
         << "** Domain update **\n\n"
-        << "  " << g_prog_name << " --domain-update=<domain_fqdn> \\\n"
-        << "    [--registrant-handle=<registrant_handle> \\\n"
-        << "    [--nsset-handle<new_nsset>] \\\n"
-        << "    [--keyset-handle=<new_keyset>] \\\n"
-        << "    [--auth-info-pw=<new_authinfo_password>] \\\n"
-        << "    [--admins-add=<list_of_admins_to_add>] \\\n"
-        << "    [--admins-rem=<list_of_admins_to_rem>] \\\n"
-        << "    [--admins-rem-temp=<list_of_temp_admins_to_rem>]"
+        << "  " << g_prog_name << " --" << DOMAIN_UPDATE_NAME << "=<domain_fqdn> \\\n"
+        << "    [--" << REGISTRAR_HANDLE_NAME << "=<registrant_handle> \\\n"
+        << "    [--" << NSSET_HANDLE_NAME << "=<new_nsset>] \\\n"
+        << "    [--" << KEYSET_HANDLE_NAME << "=<new_keyset>] \\\n"
+        << "    [--" << AUTH_PW_NAME << "=<new_authinfo_password>] \\\n"
+        << "    [--" << ADMIN_ADD_NAME << "=<list_of_admins_to_add>] \\\n"
+        << "    [--" << ADMIN_REM_NAME << "=<list_of_admins_to_rem>] \\\n"
+        << "    [--" << ADMIN_REM_TEMP_NAME << "=<list_of_temp_admins_to_rem>]"
         << std::endl;
 }
 
@@ -487,17 +407,18 @@ DomainClient::domain_create_help()
 {
     std::cout
         << "** Domain create **\n\n"
-        << "  " << g_prog_name << " --domain-create=<domain_fqdn> \\\n"
-        << "    --registrant-handle=<registrant_handle> \\\n"
-        << "    [--nsset-handle=<nsset_handle>] \\\n"
-        << "    [--keyset-handle=<keyset_handle>] \\\n"
-        << "    [--auth-info-pw=<authinfo_password>] \\\n"
-        << "    --admins=<list_of_admins_contact_handles> \\\n"
-        << "    --period=<period_in_months>\n\n"
+        << "  " << g_prog_name << " --" << DOMAIN_CREATE_NAME << "=<domain_fqdn> \\\n"
+        << "    --" << DOMAIN_REGISTRANT_NAME << "=<registrant_handle> \\\n"
+        << "    [--" << NSSET_HANDLE_NAME << "=<nsset_handle>] \\\n"
+        << "    [--" << KEYSET_HANDLE_NAME << "=<keyset_handle>] \\\n"
+        << "    [--" << AUTH_PW_NAME << "=<authinfo_password>] \\\n"
+        << "    --" << ADMIN_NAME_DESC << "=<list_of_admins_contact_handles> \\\n"
+        << "    --" << DOMAIN_PERIOD_NAME << "=<period_in_months>\n\n"
         << "Domain creation example:\n"
-        << "\t$ " << g_prog_name << " --domain-create=example.cz "
-        << "--admins=\"CON::001 CON::005\" --nsset-handle=\"NSS::137\" "
-        << "--period=24 --registrar-handle=\"CON::005\"\n"
+        << "\t$ " << g_prog_name << " --" << DOMAIN_CREATE_NAME << "=example.cz "
+        << "--" << ADMIN_NAME_DESC << "=\"CON::001 CON::005\" --"
+        << NSSET_HANDLE_NAME << "\"NSS::137\" "
+        << "--" << DOMAIN_PERIOD_NAME << "=24 --" << DOMAIN_REGISTRANT_NAME << "=\"CON::005\"\n"
         << "will create domain with FQDN ``example.cz'', administrator contacts "
         << "``CON::001'' and ``CON::005'', with NSSet ``NSS::137'', valid for "
         << "2 years and without any keyset."
@@ -528,8 +449,60 @@ DomainClient::list_help()
         << "    [--" << REGISTRAR_ID_NAME << "=<registrar_id_number>] \\\n"
         << "    [--" << REGISTRAR_HANDLE_NAME << "=<registrar_handle>] \\\n"
         << "    [--" << REGISTRAR_NAME_NAME << "=<registrar_name>] \\\n"
+        << "    [--" << CRDATE_NAME << "=<create_date>] \\\n"
+        << "    [--" << DELDATE_NAME << "=<delete_date>] \\\n"
+        << "    [--" << UPDATE_NAME << "=<update_date>] \\\n"
+        << "    [--" << TRANSDATE_NAME << "=<transfer_date>] \\\n"
         << "    [--" << FULL_LIST_NAME << "]\n"
         << std::endl;
 }
 
+#define ADDOPT(name, type, callable, visible) \
+    {CLIENT_DOMAIN, name, name##_DESC, type, callable, visible}
+
+const struct options
+DomainClient::m_opts[] = {
+    ADDOPT(DOMAIN_LIST_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(DOMAIN_LIST_PLAIN_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(DOMAIN_INFO_NAME, TYPE_STRING, true, true),
+    ADDOPT(DOMAIN_CREATE_NAME, TYPE_STRING, true, true),
+    ADDOPT(DOMAIN_UPDATE_NAME, TYPE_STRING, true, true),
+    ADDOPT(DOMAIN_LIST_PLAIN_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(DOMAIN_SHOW_OPTS_NAME, TYPE_NOTYPE, true, true),
+    ADDOPT(DOMAIN_OUT_DATE_NAME, TYPE_STRING, false, false),
+    ADDOPT(DOMAIN_EXP_DATE_NAME, TYPE_STRING, false, false),
+    ADDOPT(DOMAIN_CANC_DATE_NAME, TYPE_STRING, false, false),
+    add_ID,
+    add_FQDN,
+    add_NSSET_ID,
+    add_NSSET_HANDLE,
+    add_ANY_NSSET,
+    add_KEYSET_ID,
+    add_KEYSET_HANDLE,
+    add_ANY_KEYSET,
+    add_REGISTRANT_ID,
+    add_REGISTRANT_NAME,
+    add_REGISTRANT_HANDLE,
+    add_ADMIN_ID,
+    add_ADMIN_HANDLE,
+    add_ADMIN_NAME,
+    add_REGISTRAR_ID,
+    add_REGISTRAR_HANDLE,
+    add_REGISTRAR_NAME,
+    add_ADMIN,
+    add_ADMIN_ADD,
+    add_ADMIN_REM,
+    add_CRDATE,
+    add_UPDATE,
+    add_DELDATE,
+    add_TRANSDATE
+};
+
+#undef ADDOPT
+
+int 
+DomainClient::getOptsCount()
+{
+    return sizeof(m_opts) / sizeof(options);
+}
 } // namespace Admin;

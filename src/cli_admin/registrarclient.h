@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2008  CZ.NIC, z.s.p.o.
+ *  Copyright (C) 2008, 2009  CZ.NIC, z.s.p.o.
  *
  *  This file is part of FRED.
  *
@@ -42,15 +42,12 @@
 #define REGISTRAR_REGISTRAR_ADD_HELP_NAME_DESC      "help for registrar_add"
 #define REGISTRAR_REGISTRAR_ADD_ZONE_HELP_NAME      "registrar_add_zone_help"
 #define REGISTRAR_REGISTRAR_ADD_ZONE_HELP_NAME_DESC "help for registrar_add_zone"
-#define REGISTRAR_ZONE_NS_ADD_HELP_NAME             "zone_ns_add_help"
-#define REGISTRAR_ZONE_NS_ADD_HELP_NAME_DESC        "help for zone_ns_add_help"
-#define REGISTRAR_REGISTRAR_ACL_ADD_HELP_NAME       "registrar_acl_add_help"
-#define REGISTRAR_REGISTRAR_ACL_ADD_HELP_NAME_DESC  "help for registrar_acl_add"
-#define REGISTRAR_PRICE_ADD_HELP_NAME               "price_add_help"
-#define REGISTRAR_PRICE_ADD_HELP_NAME_DESC          "help for price_add"
 
 #define REGISTRAR_ZONE_FQDN_NAME        "zone_fqdn"
 #define REGISTRAR_ZONE_FQDN_NAME_DESC   "fqdn of new zone"
+
+#define REGISTRAR_ZONE_ID_NAME          "zone_id"
+#define REGISTRAR_ZONE_ID_NAME_DESC     "zone id"
 
 #define REGISTRAR_ICO_NAME              "ico"
 #define REGISTRAR_ICO_NAME_DESC         "organization identifier number"
@@ -151,28 +148,34 @@ private:
     ccReg::EPP_var m_epp;
     Config::Conf m_conf;
 
-    boost::program_options::options_description *m_options;
-    boost::program_options::options_description *m_optionsInvis;
+    static const struct options m_opts[];
 public:
-    RegistrarClient();
-    RegistrarClient(std::string connstring,
-            std::string nsAddr);
-    ~RegistrarClient();
-    void init(std::string connstring,
-            std::string nsAddr,
-            Config::Conf &conf);
+    RegistrarClient()
+    { }
+    RegistrarClient(
+            const std::string &connstring,
+            const std::string &nsAddr,
+            const Config::Conf &conf):
+        BaseClient(connstring, nsAddr),
+        m_conf(conf)
+    {
+        m_db.OpenDatabase(connstring.c_str());
+    }
+    ~RegistrarClient()
+    { }
 
-    boost::program_options::options_description *getVisibleOptions() const;
-    boost::program_options::options_description *getInvisibleOptions() const;
-    void show_opts() const;
+    static const struct options *getOpts();
+    static int getOptsCount();
+    void runMethod();
 
+    void show_opts();
     void list();
-    int zone_add();
-    int zone_ns_add();
-    int registrar_add();
-    int registrar_acl_add();
-    int registrar_add_zone();
-    int price_add();
+    void zone_add();
+    void zone_ns_add();
+    void registrar_add();
+    void registrar_acl_add();
+    void registrar_add_zone();
+    void price_add();
 
     void zone_add_help();
     void zone_ns_add_help();
@@ -180,7 +183,7 @@ public:
     void registrar_acl_add_help();
     void registrar_add_zone_help();
     void price_add_help();
-};
+}; // class RegistrarClient
 
 } // namespace Admin;
 

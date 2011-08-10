@@ -90,33 +90,36 @@ public:
 
 class ManagerImpl : virtual public Manager {
   DB *db;
-  Database::Manager *m_db_manager;
   bool m_restricted_handles;
 
-  std::auto_ptr<Zone::Manager> m_zone_manager;
+  Zone::Manager::ZoneManagerPtr m_zone_manager;
   std::auto_ptr<Domain::Manager> m_domain_manager;
-  std::auto_ptr<Registrar::Manager> m_registrar_manager;
+  Registrar::Manager::AutoPtr m_registrar_manager;
   std::auto_ptr<Contact::Manager> m_contact_manager;
   std::auto_ptr<NSSet::Manager> m_nsset_manager;
   std::auto_ptr<KeySet::Manager> m_keyset_manager;
   std::auto_ptr<Filter::Manager> m_filter_manager;
+  std::auto_ptr<Logger::Manager> m_request_manager;
 
   std::vector<CountryDesc> m_countries;
   std::vector<StatusDescImpl> statusList;
 
 public:
-  ManagerImpl(DB *_db, bool _restrictedHandles) :
-    db(_db), m_restricted_handles(_restrictedHandles) {
-    m_db_manager = 0;
-
-    m_zone_manager.reset(Zone::Manager::create(db));
+  ManagerImpl(DB *_db, bool _restrictedHandles)
+    : db(_db)
+    , m_restricted_handles(_restrictedHandles)
+    , m_zone_manager(Zone::Manager::create())
+    , m_registrar_manager(Registrar::Manager::create(db))
+  {
     m_domain_manager.reset(Domain::Manager::create(db, m_zone_manager.get()));
-    m_registrar_manager.reset(Registrar::Manager::create(db));
     m_contact_manager.reset(Contact::Manager::create(db, m_restricted_handles));
     m_nsset_manager.reset(NSSet::Manager::create(db,
                                                  m_zone_manager.get(),
                                                  m_restricted_handles));
     m_keyset_manager.reset(KeySet::Manager::create(db, m_restricted_handles));
+	
+    // m_request_manager.reset(Logger::Manager::create(db));
+    
     // TEMP: this will be ok when DBase::Manager ptr will be initilized
     // here in constructor (not in dbManagerInit method)
     // m_filter_manager.reset(Filter::Manager::create(m_db_manager));
@@ -128,25 +131,7 @@ public:
     cd.cc = "SK";
     cd.name = "Slovak Republic";
     m_countries.push_back(cd);
-  }
-  /// upper constructor replacement
-  ManagerImpl(Database::Manager *_db_manager, bool _restricted_handles) :
-    m_db_manager(_db_manager), m_restricted_handles(_restricted_handles) {
-    /// initialize all other managers
-    /// TODO: db -> change to db_manager; needs other constructor update
-    m_zone_manager.reset(Zone::Manager::create(db));
-    m_domain_manager.reset(Domain::Manager::create(db, m_zone_manager.get()));
-    m_registrar_manager.reset(Registrar::Manager::create(db));
-    m_contact_manager.reset(Contact::Manager::create(db, m_restricted_handles));
-    m_nsset_manager.reset(NSSet::Manager::create(db,
-                                                 m_zone_manager.get(),
-                                                 m_restricted_handles));
-    m_keyset_manager.reset(KeySet::Manager::create(db, m_restricted_handles));
-    m_filter_manager.reset(Filter::Manager::create(m_db_manager));
-
-    /// load country codes descrition from database
-    loadCountryDesc();
-  }
+  }//ManagerImpl
 
   Zone::Manager *getZoneManager() const {
     return m_zone_manager.get();
@@ -175,6 +160,10 @@ public:
 
   Filter::Manager* getFilterManager() const {
     return m_filter_manager.get();
+  }
+
+  Logger::Manager* getRequestManager() const {
+    return m_request_manager.get();
   }
 
   /// interface method implementation
@@ -278,8 +267,8 @@ public:
     country_query.from() << "enum_country";
 
     try {
-      std::auto_ptr<Database::Connection> conn(m_db_manager->getConnection());
-      Database::Result r_country = conn->exec(country_query);
+      Database::Connection conn = Database::Manager::acquire();
+      Database::Result r_country = conn.exec(country_query);
       
       m_countries.clear();
       for (Database::Result::Iterator it = r_country.begin(); it != r_country.end(); ++it) {
@@ -386,9 +375,8 @@ public:
   }
 
   /// TEMP: method for initialization new Database manager
-  virtual void dbManagerInit(Database::Manager *_db_manager) {
-    m_db_manager = _db_manager;
-    m_filter_manager.reset(Filter::Manager::create(m_db_manager));
+  virtual void dbManagerInit() {
+    m_filter_manager.reset(Filter::Manager::create());
     
     /// load country codes descrition from database
     loadCountryDesc();
@@ -400,11 +388,4 @@ Manager *Manager::create(DB *db, bool _restrictedHandles) {
   return new ManagerImpl(db, _restrictedHandles);
 }
 
-/// upper create factory method replacement
-Manager *create(Database::Manager *_db_manager, bool _restricted_handles) {
-  TRACE(boost::format("[CALL] Register::Manager::create(%1%, %2%)")
-      % _db_manager % _restricted_handles);
-  return new ManagerImpl(_db_manager, _restricted_handles);
-}
-
-}
+}//namespace Register
