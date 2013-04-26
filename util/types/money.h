@@ -1,91 +1,31 @@
+/*
+ * Copyright (C) 2011  CZ.NIC, z.s.p.o.
+ *
+ * This file is part of FRED.
+ *
+ * FRED is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 2 of the License.
+ *
+ * FRED is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with FRED.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/**
+ *  @money.h
+ *  type for money calculation
+ */
+
 #ifndef MONEY_H_
 #define MONEY_H_
 
-#include <ostream>
-#include <istream>
-#include "config.h"
+#include "util/decimal/decimal.h"
 
-#ifdef HAVE_BOOST_SERIALIZATION
-#include <boost/serialization/nvp.hpp>
-#include <boost/serialization/utility.hpp>
-#include <boost/serialization/version.hpp>
-#endif
+typedef Decimal Money;
 
-namespace Database {
-
-/*
- * class representing currency type
- */
-
-class Money {
-public:
-  typedef long long value_type;
-
-  /* constructors */
-  Money() : value_(0) {
-  }
-
-  Money(value_type _value) : value_(_value) {
-  }
-
-  Money(const int value): value_(value)
-  { }
-  Money(const unsigned int value): value_(value)
-  { }
-  Money(const long int value): value_(value)
-  { }
-  Money(const unsigned long int value): value_(value)
-  { }
-  Money(const char *value)
-  {
-      from_string(std::string(value));
-  }
-  Money(const std::string &value)
-  {
-      from_string(value);
-  }
-
-  Money(const Money &sec): value_(sec.value_)
-  { }
-  operator value_type() const {
-    return value_;
-  }
-
-  /* string construct and getter */
-  void from_string(const std::string& _value);
-  const std::string to_string() const;
-  const std::string format() const;
-  void format(std::string);
-
-  /* comparison operators */
-  friend bool operator<(const Money& _left, const Money& _right);
-  friend bool operator>(const Money& _left, const Money& _right);
-  friend bool operator<=(const Money& _left, const Money& _right);
-  friend bool operator>=(const Money& _left, const Money& _right);
-  friend bool operator==(const Money& _left, const Money& _right);
-  friend bool operator!=(const Money& _left, const Money& _right);
-  friend Money operator+(const Money& _left, const Money& _right);
-  friend Money operator-(const Money& _left, const Money& _right);
-  Money operator=(const Money& sec);
-  
-  /* output operator */
-  friend std::ostream& operator<<(std::ostream &_os, const Money& _v);
-  friend std::istream& operator>>(std::istream &_is, Money& _v);
-
-#ifdef HAVE_BOOST_SERIALIZATION
-  /* boost serialization */
-  friend class boost::serialization::access;
-  template<class Archive> void serialize(Archive& _ar,
-      const unsigned int _version) {
-    _ar & BOOST_SERIALIZATION_NVP(value_);
-  }
-#endif
-
-private:
-  value_type value_;
-};
-
-}
-
-#endif /*MONEY_H_*/
-
+#endif // MONEY_H_

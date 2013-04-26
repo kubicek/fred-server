@@ -16,81 +16,80 @@
  *  along with FRED.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "simple.h"
 #include "commonclient.h"
 #include "registrarclient.h"
+
+#include "corba/file_manager_client.h"
+#include "types/money.h"
 
 #include <string>
 #include <vector>
 
 namespace Admin {
 
-const struct options *
-RegistrarClient::getOpts()
-{
-    return m_opts;
-}
 
 void
 RegistrarClient::runMethod()
 {
-    if (m_conf.hasOpt(REGISTRAR_ZONE_ADD_NAME)) {
+    if (zone_add_) {//REGISTRAR_ZONE_ADD_NAME
         zone_add();
-    } else if (m_conf.hasOpt(REGISTRAR_REGISTRAR_ADD_NAME)) {
+    } else if (registrar_add_) {//REGISTRAR_REGISTRAR_ADD_NAME
         registrar_add();
-    } else if (m_conf.hasOpt(REGISTRAR_REGISTRAR_ADD_ZONE_NAME)) {
+    } else if (registrar_add_zone_) {//REGISTRAR_REGISTRAR_ADD_ZONE_NAME
         registrar_add_zone();
-    } else if (m_conf.hasOpt(REGISTRAR_LIST_NAME)) {
+    } else if (registrar_create_certification_) {//REGISTRAR_REGISTRAR_CREATE_CERTIFICATION_NAME
+        registrar_create_certification();
+    } else if (registrar_create_group_) {//REGISTRAR_REGISTRAR_CREATE_GROUP_NAME
+        registrar_create_group();
+    } else if (registrar_into_group_) {//REGISTRAR_REGISTRAR_INTO_GROUP_NAME
+    	registrar_into_group();
+    } else if (registrar_list_) {//REGISTRAR_LIST_NAME
         list();
-    } else if (m_conf.hasOpt(REGISTRAR_SHOW_OPTS_NAME)) {
-        show_opts();
-    } else if (m_conf.hasOpt(REGISTRAR_ZONE_NS_ADD_NAME)) {
+    } else if (registrar_show_opts_) {//REGISTRAR_SHOW_OPTS_NAME
+        //show_opts();
+    } else if (zone_ns_add_) {//REGISTRAR_ZONE_NS_ADD_NAME
         zone_ns_add();
-    } else if (m_conf.hasOpt(REGISTRAR_REGISTRAR_ACL_ADD_NAME)) {
+    } else if (registrar_acl_add_) {//REGISTRAR_REGISTRAR_ACL_ADD_NAME
         registrar_acl_add();
-    } else if (m_conf.hasOpt(REGISTRAR_PRICE_ADD_NAME)) {
+    } else if (price_add_) {//REGISTRAR_PRICE_ADD_NAME
         price_add();
     }
 }
 
 void
-RegistrarClient::show_opts() 
-{
-    callHelp(m_conf, no_help);
-    print_options("Registrar", getOpts(), getOptsCount());
-}
-
-void
 RegistrarClient::list()
 {
-    callHelp(m_conf, no_help);
-    Register::Registrar::Manager::AutoPtr regMan
-             = Register::Registrar::Manager::create(&m_db);
 
-    Register::Registrar
+    Fred::Registrar::Manager::AutoPtr regMan
+             = Fred::Registrar::Manager::create(m_db);
+
+    Fred::Registrar
         ::RegistrarList::AutoPtr reg_list(regMan->createList());
 
     std::auto_ptr<Database::Filters::Registrar>
         regFilter ( new Database::Filters::RegistrarImpl(true));
 
-    if (m_conf.hasOpt(ID_NAME))
+    if (registrar_list_params_.id.is_value_set())//ID_NAME
         regFilter->addId().setValue(
-                Database::ID(m_conf.get<unsigned int>(ID_NAME)));
-    if (m_conf.hasOpt(HANDLE_NAME))
+                Database::ID(registrar_list_params_.id.get_value()));
+    if (registrar_list_params_.handle.is_value_set())//HANDLE_NAME
         regFilter->addHandle().setValue(
-                m_conf.get<std::string>(HANDLE_NAME));
-    if (m_conf.hasOpt(NAME_NAME))
+                registrar_list_params_.handle.get_value());
+    if (registrar_list_params_.name_name.is_value_set())//NAME_NAME
+        regFilter->addName().setValue(
+                registrar_list_params_.name_name.get_value());
+    if (registrar_list_params_.organization.is_value_set())//ORGANIZATION_NAME
         regFilter->addOrganization().setValue(
-                m_conf.get<std::string>(ORGANIZATION_NAME));
-    if (m_conf.hasOpt(CITY_NAME))
+                registrar_list_params_.organization.get_value());
+    if (registrar_list_params_.city.is_value_set())//CITY_NAME
         regFilter->addCity().setValue(
-                m_conf.get<std::string>(CITY_NAME));
-    if (m_conf.hasOpt(EMAIL_NAME))
+                registrar_list_params_.city.get_value());
+    if (registrar_list_params_.email.is_value_set())//EMAIL_NAME
         regFilter->addEmail().setValue(
-                m_conf.get<std::string>(EMAIL_NAME));
-    if (m_conf.hasOpt(COUNTRY_NAME))
+                registrar_list_params_.email.get_value());
+    if (registrar_list_params_.country.is_value_set())//COUNTRY_NAME
         regFilter->addCountryCode().setValue(
-                m_conf.get<std::string>(COUNTRY_NAME));
+                registrar_list_params_.country.get_value());
 
     Database::Filters::UnionPtr unionFilter
         = Database::Filters::CreateClearedUnionPtr();
@@ -132,57 +131,68 @@ RegistrarClient::list()
     std::cout << "</object>" << std::endl;
 }
 
-#define SET_IF_PRESENT(var, type, name)                     \
-    if (m_conf.hasOpt(name)) {                              \
-        var = m_conf.get<type>(name);                       \
-    }
 void
 RegistrarClient::zone_add()
 {
-    callHelp(m_conf, zone_add_help);
-    Register::Zone::Manager::ZoneManagerPtr zoneMan
-        = Register::Zone::Manager::create();
-    std::string fqdn = m_conf.get<std::string>(REGISTRAR_ZONE_FQDN_NAME);
+    Fred::Zone::Manager::ZoneManagerPtr zoneMan
+        = Fred::Zone::Manager::create();
+    std::string fqdn = zone_add_params_.zone_fqdn;//REGISTRAR_ZONE_FQDN_NAME
     int exPeriodMin = 12;
     int exPeriodMax = 120;
     int ttl = 18000;
     std::string hostmaster = "hostmaster@localhost";
-    int updateRetr = 3600;
-    int refresh = 16000;
-    int expiry = 1209600;
-    int minimum = 7200;
+    int updateRetr = 300;
+    int refresh = 900;
+    int expiry = 604800;
+    int minimum = 900;
     std::string nsFqdn("localhost");
 
-    SET_IF_PRESENT(exPeriodMin, int, REGISTRAR_EX_PERIOD_MIN_NAME);
-    SET_IF_PRESENT(exPeriodMax, int, REGISTRAR_EX_PERIOD_MAX_NAME);
-    SET_IF_PRESENT(ttl, int, REGISTRAR_TTL_NAME);
-    SET_IF_PRESENT(hostmaster, std::string, REGISTRAR_HOSTMASTER_NAME);
-    SET_IF_PRESENT(updateRetr, int, REGISTRAR_UPDATE_RETR_NAME);
-    SET_IF_PRESENT(refresh, int, REGISTRAR_REFRESH_NAME);
-    SET_IF_PRESENT(expiry, int, REGISTRAR_EXPIRY_NAME);
-    SET_IF_PRESENT(minimum, int, REGISTRAR_MINIMUM_NAME);
-    SET_IF_PRESENT(nsFqdn, std::string, REGISTRAR_NS_FQDN_NAME);
+    if (zone_add_params_.ex_period_min.is_value_set()) {
+        exPeriodMin = zone_add_params_.ex_period_min.get_value();
+    };//REGISTRAR_EX_PERIOD_MIN_NAME
+    if (zone_add_params_.ex_period_max.is_value_set()) {
+        exPeriodMax = zone_add_params_.ex_period_max.get_value();
+    };//REGISTRAR_EX_PERIOD_MAX_NAME
+    if (zone_add_params_.ttl.is_value_set()) {
+        ttl = zone_add_params_.ttl.get_value();
+    };//REGISTRAR_TTL_NAME
+    if (zone_add_params_.hostmaster.is_value_set()) {
+        hostmaster = zone_add_params_.hostmaster.get_value();
+    };//REGISTRAR_HOSTMASTER_NAME
+    if (zone_add_params_.update_retr.is_value_set()) {
+        updateRetr = zone_add_params_.update_retr.get_value();
+    };//REGISTRAR_UPDATE_RETR_NAME
+    if (zone_add_params_.refresh.is_value_set()) {
+        refresh = zone_add_params_.refresh.get_value();
+    };//REGISTRAR_REFRESH_NAME
+    if (zone_add_params_.expiry.is_value_set()) {
+        expiry = zone_add_params_.expiry.get_value();
+    };//REGISTRAR_EXPIRY_NAME
+    if (zone_add_params_.minimum.is_value_set()) {
+        minimum = zone_add_params_.minimum.get_value();
+    };//REGISTRAR_MINIMUM_NAME
+    if (zone_add_params_.ns_fqdn.is_value_set()) {
+        nsFqdn = zone_add_params_.ns_fqdn.get_value();
+    };//REGISTRAR_NS_FQDN_NAME
     try {
         zoneMan->addZone(fqdn, exPeriodMin, exPeriodMax, ttl, hostmaster,
                 refresh, updateRetr, expiry, minimum, nsFqdn);
-    } catch (Register::ALREADY_EXISTS) {
+    } catch (Fred::ALREADY_EXISTS) {
         std::cerr << "Zone '" << fqdn << "' already exists" << std::endl;
     }
     return;
 }
-#undef SET_IF_PRESENT
 
 void
 RegistrarClient::zone_ns_add()
 {
-    callHelp(m_conf, zone_ns_add_help);
-    Register::Zone::Manager::ZoneManagerPtr zoneMan
-        = Register::Zone::Manager::create();
-    std::string zone = m_conf.get<std::string>(REGISTRAR_ZONE_FQDN_NAME);
-    std::string fqdn = m_conf.get<std::string>(REGISTRAR_NS_FQDN_NAME);
+    Fred::Zone::Manager::ZoneManagerPtr zoneMan
+        = Fred::Zone::Manager::create();
+    std::string zone = zone_ns_add_params_.zone_fqdn;//REGISTRAR_ZONE_FQDN_NAME
+    std::string fqdn = zone_ns_add_params_.ns_fqdn;//REGISTRAR_NS_FQDN_NAME
     std::string addr;
-    if (m_conf.hasOpt(REGISTRAR_ADDR_NAME)) {
-        addr = m_conf.get<std::string>(REGISTRAR_ADDR_NAME);
+    if (zone_ns_add_params_.addr.is_value_set()) {//REGISTRAR_ADDR_NAME
+        addr = zone_ns_add_params_.addr.get_value();
     } else {
         addr = "";
     }
@@ -193,40 +203,65 @@ RegistrarClient::zone_ns_add()
     }
 }
 
-#define SET_IF_PRESENT(setter, name)                        \
-    if (m_conf.hasOpt(name)) {                              \
-        registrar->setter(m_conf.get<std::string>(name));   \
-    }
 void
 RegistrarClient::registrar_add()
 {
-    callHelp(m_conf, registrar_add_help);
-    Register::Registrar::Manager::AutoPtr regMan
-             = Register::Registrar::Manager::create(&m_db);
-    Register::Registrar::Registrar::AutoPtr registrar = regMan->createRegistrar();
-    registrar->setHandle(m_conf.get<std::string>(REGISTRAR_ADD_HANDLE_NAME));
-    registrar->setCountry(m_conf.get<std::string>(REGISTRAR_COUNTRY_NAME));
-    SET_IF_PRESENT(setIco, REGISTRAR_ICO_NAME);
-    SET_IF_PRESENT(setDic, REGISTRAR_DIC_NAME);
-    SET_IF_PRESENT(setVarSymb, REGISTRAR_VAR_SYMB_NAME);
-    SET_IF_PRESENT(setName, REGISTRAR_ADD_NAME_NAME);
-    SET_IF_PRESENT(setOrganization, REGISTRAR_ORGANIZATION_NAME);
-    SET_IF_PRESENT(setStreet1, REGISTRAR_STREET1_NAME);
-    SET_IF_PRESENT(setStreet2, REGISTRAR_STREET2_NAME);
-    SET_IF_PRESENT(setStreet3, REGISTRAR_STREET3_NAME);
-    SET_IF_PRESENT(setCity, REGISTRAR_CITY_NAME);
-    SET_IF_PRESENT(setProvince, REGISTRAR_STATEORPROVINCE_NAME);
-    SET_IF_PRESENT(setPostalCode, REGISTRAR_POSTALCODE_NAME);
-    SET_IF_PRESENT(setTelephone, REGISTRAR_TELEPHONE_NAME);
-    SET_IF_PRESENT(setFax, REGISTRAR_FAX_NAME);
-    SET_IF_PRESENT(setEmail, REGISTRAR_EMAIL_NAME);
-    SET_IF_PRESENT(setURL, REGISTRAR_URL_NAME);
-    if (m_conf.hasOpt(REGISTRAR_SYSTEM_NAME)) {
+    Fred::Registrar::Manager::AutoPtr regMan
+             = Fred::Registrar::Manager::create(m_db);
+    Fred::Registrar::Registrar::AutoPtr registrar = regMan->createRegistrar();
+    registrar->setHandle(registrar_add_params_.handle);//REGISTRAR_ADD_HANDLE_NAME
+    registrar->setCountry(registrar_add_params_.country);//REGISTRAR_COUNTRY_NAME
+    if (registrar_add_params_.ico.is_value_set()) {
+        registrar->setIco(registrar_add_params_.ico.get_value());
+    };//REGISTRAR_ICO_NAME
+    if (registrar_add_params_.dic.is_value_set()) {
+        registrar->setDic(registrar_add_params_.dic.get_value());
+    };//REGISTRAR_DIC_NAME
+    if (registrar_add_params_.varsymb.is_value_set()) {
+        registrar->setVarSymb(registrar_add_params_.varsymb.get_value());
+    };//REGISTRAR_VAR_SYMB_NAME
+    if (registrar_add_params_.reg_name.is_value_set()) {
+        registrar->setName(registrar_add_params_.reg_name.get_value());
+    };//REGISTRAR_ADD_NAME_NAME
+    if (registrar_add_params_.organization.is_value_set()) {
+        registrar->setOrganization(registrar_add_params_.organization.get_value());
+    };//REGISTRAR_ORGANIZATION_NAME
+    if (registrar_add_params_.street1.is_value_set()) {
+        registrar->setStreet1(registrar_add_params_.street1.get_value());
+    };//REGISTRAR_STREET1_NAME
+    if (registrar_add_params_.street2.is_value_set()) {
+        registrar->setStreet2(registrar_add_params_.street2.get_value());
+    };//REGISTRAR_STREET2_NAME
+    if (registrar_add_params_.street3.is_value_set()) {
+        registrar->setStreet3(registrar_add_params_.street3.get_value());
+    };//REGISTRAR_STREET3_NAME
+    if (registrar_add_params_.city.is_value_set()) {
+        registrar->setCity(registrar_add_params_.city.get_value());
+    };//REGISTRAR_CITY_NAME
+    if (registrar_add_params_.stateorprovince.is_value_set()) {
+        registrar->setProvince(registrar_add_params_.stateorprovince.get_value());
+    };//REGISTRAR_STATEORPROVINCE_NAME
+    if (registrar_add_params_.postalcode.is_value_set()) {
+        registrar->setPostalCode(registrar_add_params_.postalcode.get_value());
+    };//REGISTRAR_POSTALCODE_NAME
+    if (registrar_add_params_.telephone.is_value_set()) {
+        registrar->setTelephone(registrar_add_params_.telephone.get_value());
+    };//REGISTRAR_TELEPHONE_NAME
+    if (registrar_add_params_.fax.is_value_set()) {
+        registrar->setFax(registrar_add_params_.fax.get_value());
+    };//REGISTRAR_FAX_NAME
+    if (registrar_add_params_.email.is_value_set()) {
+        registrar->setEmail(registrar_add_params_.email.get_value());
+    };//REGISTRAR_EMAIL_NAME
+    if (registrar_add_params_.url.is_value_set()) {
+        registrar->setURL(registrar_add_params_.url.get_value());
+    };//REGISTRAR_URL_NAME
+    if (registrar_add_params_.system) {//REGISTRAR_SYSTEM_NAME
         registrar->setSystem(true);
     } else {
         registrar->setSystem(false);
     }
-    if (m_conf.hasOpt(REGISTRAR_NO_VAT_NAME)) {
+    if (registrar_add_params_.no_vat) {//REGISTRAR_NO_VAT_NAME
         registrar->setVat(false);
     } else {
         registrar->setVat(true);
@@ -234,17 +269,14 @@ RegistrarClient::registrar_add()
     registrar->save();
 }
 
-#undef SET_IF_PRESENT
-
 void
 RegistrarClient::registrar_acl_add()
 {
-    callHelp(m_conf, registrar_acl_add_help);
-    Register::Registrar::Manager::AutoPtr regMan
-        = Register::Registrar::Manager::create(&m_db);
-    std::string handle = m_conf.get<std::string>(REGISTRAR_ADD_HANDLE_NAME);
-    std::string cert = m_conf.get<std::string>(REGISTRAR_CERT_NAME);
-    std::string pass = m_conf.get<std::string>(REGISTRAR_PASSWORD_NAME);
+    Fred::Registrar::Manager::AutoPtr regMan
+        = Fred::Registrar::Manager::create(m_db);
+    std::string handle = registrar_acl_add_params_.handle;//REGISTRAR_ADD_HANDLE_NAME
+    std::string cert = registrar_acl_add_params_.certificate;//REGISTRAR_CERT_NAME
+    std::string pass = registrar_acl_add_params_.password;//REGISTRAR_PASSWORD_NAME
     try {
         regMan->addRegistrarAcl(handle, cert, pass);
     } catch (...) {
@@ -255,243 +287,177 @@ RegistrarClient::registrar_acl_add()
 void
 RegistrarClient::registrar_add_zone()
 {
-    callHelp(m_conf, registrar_add_zone_help);
-    std::string zone = m_conf.get<std::string>(REGISTRAR_ZONE_FQDN_NAME);
-    std::string registrar = m_conf.get<std::string>(REGISTRAR_ADD_HANDLE_NAME);
+    std::string zone = registrar_add_zone_params_.zone_fqdn;//REGISTRAR_ZONE_FQDN_NAME
+    std::string registrar = registrar_add_zone_params_.handle;//REGISTRAR_ADD_HANDLE_NAME
     Database::Date fromDate;
     Database::Date toDate;
-    if (m_conf.hasOpt(REGISTRAR_FROM_DATE_NAME)) {
-        fromDate.from_string(m_conf.get<std::string>(REGISTRAR_FROM_DATE_NAME));
+    if (registrar_add_zone_params_.from_date.is_value_set()) {//REGISTRAR_FROM_DATE_NAME
+        fromDate.from_string(registrar_add_zone_params_.from_date.get_value());
     }
-    if (m_conf.hasOpt(REGISTRAR_TO_DATE_NAME)) {
-        toDate.from_string(m_conf.get<std::string>(REGISTRAR_TO_DATE_NAME));
+    if (registrar_add_zone_params_.to_date.is_value_set()) {//REGISTRAR_TO_DATE_NAME
+        toDate.from_string(registrar_add_zone_params_.to_date.get_value());
     }
-    Register::Registrar::addRegistrarZone(registrar, zone, fromDate, toDate);
+    Fred::Registrar::addRegistrarZone(registrar, zone, fromDate, toDate);
+    return;
+}
+
+void
+RegistrarClient::registrar_create_certification()
+{
+    std::string cert_eval_file =
+            registrar_create_certification_params_.certification_evaluation;//REGISTRAR_CERTIFICATION_EVALUATION_NAME
+
+    std::string cert_eval_file_mimetype =
+            registrar_create_certification_params_.certification_evaluation_mime_type;//REGISTRAR_CERTIFICATION_EVALUATION_MIME_TYPE_NAME
+
+    int score = registrar_create_certification_params_.certification_score;//REGISTRAR_CERTIFICATION_SCORE_NAME
+    if((score < 0) || (score > 5))
+        throw std::runtime_error("Invalid value of score");
+
+    std::string registrar_handle = registrar_create_certification_params_.handle;//REGISTRAR_ADD_HANDLE_NAME
+    Database::Date fromDate;
+    Database::Date toDate;
+    if (registrar_create_certification_params_.from_date.is_value_set())//REGISTRAR_FROM_DATE_NAME
+    {
+        fromDate.from_string(
+                registrar_create_certification_params_.from_date.get_value());
+    }
+    if (registrar_create_certification_params_.to_date.is_value_set())//REGISTRAR_TO_DATE_NAME
+    {
+        toDate.from_string(registrar_create_certification_params_.to_date.get_value());
+    }
+
+    // init file manager
+    CorbaClient corba_client(0, 0, m_nsAddr
+            , nameservice_context);//NS_CONTEXT_NAME
+    FileManagerClient fm_client(corba_client.getNS());
+    Fred::File::ManagerPtr file_manager(
+            Fred::File::Manager::create(&fm_client));
+
+    unsigned long long evaluation_file_id
+        = file_manager->upload(cert_eval_file
+        		, cert_eval_file_mimetype//"application/pdf"
+        		, 6);
+    if(evaluation_file_id < 1)
+        throw std::runtime_error("Invalid value of evaluation_file_id");
+
+    Fred::Registrar::Manager::AutoPtr regman(
+             Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+     ///create registrar certification
+     regman->createRegistrarCertification( registrar_handle
+             , fromDate//Database::Date(makeBoostDate(from))
+             , toDate//Database::Date(makeBoostDate(to))
+             , static_cast<Fred::Registrar::RegCertClass>(score)
+             , evaluation_file_id);
+
+    return;
+}
+
+void
+RegistrarClient::registrar_create_group()
+{
+    //callHelp(m_conf, registrar_create_group_help);
+    std::string group_name =
+            registrar_create_group_params_.registrar_group;//REGISTRAR_GROUP_NAME
+    if(group_name.empty())
+        throw std::runtime_error("RegistrarClient::registrar_create_group "
+                "error: group name is empty");
+    Fred::Registrar::Manager::AutoPtr regman(
+             Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+     ///create registrar certification
+     regman->createRegistrarGroup(group_name);
+    return;
+}
+
+void
+RegistrarClient::registrar_into_group()
+{
+    std::string registrar_handle
+        = registrar_into_group_params_.handle;//REGISTRAR_ADD_HANDLE_NAME
+
+    Database::Date fromDate = Database::Date(NOW);
+    Database::Date toDate;
+    if (registrar_into_group_params_.from_date)//REGISTRAR_FROM_DATE_NAME
+    {
+        fromDate.from_string(
+                registrar_into_group_params_.from_date);
+
+        if (fromDate.is_special())
+                throw std::runtime_error("RegistrarClient::registrar_into_group "
+                                "error: invalid from_date");
+    }
+
+
+    if (registrar_into_group_params_.to_date)//REGISTRAR_TO_DATE_NAME
+    {
+        toDate.from_string(registrar_into_group_params_.to_date);
+
+        if (toDate.is_special())
+                throw std::runtime_error("RegistrarClient::registrar_into_group "
+                                "error: invalid to_date");
+    }
+
+    if (fromDate > toDate)
+        throw std::runtime_error("RegistrarClient::registrar_into_group "
+                        "error: from_date > to_date");
+
+    std::string group_name =
+            registrar_into_group_params_.registrar_group;//REGISTRAR_GROUP_NAME
+
+    if(group_name.empty())
+        throw std::runtime_error("RegistrarClient::registrar_into_group "
+                "error: group name is empty");
+
+    Fred::Registrar::Manager::AutoPtr regman(
+             Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+     ///create registrar group membership
+     regman->createRegistrarGroupMembership(
+             registrar_handle,group_name,fromDate,toDate);
     return;
 }
 
 void
 RegistrarClient::price_add()
 {
-    callHelp(m_conf, price_add_help);
-    Register::Zone::Manager::ZoneManagerPtr zoneMan
-        = Register::Zone::Manager::create();
+    Fred::Zone::Manager::ZoneManagerPtr zoneMan
+        = Fred::Zone::Manager::create();
     Database::DateTime validFrom(Database::NOW_UTC);
-    if (m_conf.hasOpt(REGISTRAR_VALID_FROM_NAME)) {
-        validFrom.from_string(m_conf.get<std::string>(REGISTRAR_VALID_FROM_NAME));
+    if (price_add_params_.valid_from.is_value_set()) {//REGISTRAR_VALID_FROM_NAME
+        validFrom.from_string(price_add_params_.valid_from.get_value());
     }
     Database::DateTime validTo;
-    if (m_conf.hasOpt(REGISTRAR_VALID_TO_NAME)) {
-        validTo.from_string(m_conf.get<std::string>(REGISTRAR_VALID_TO_NAME));
+    if (price_add_params_.valid_to.is_value_set()) {//REGISTRAR_VALID_TO_NAME
+        validTo.from_string(price_add_params_.valid_to.get_value());
     }
-    Database::Money price(m_conf.get<int>(REGISTRAR_PRICE_NAME) * 100);
-    int period = 12;
-    if (m_conf.hasOpt(REGISTRAR_PERIOD_NAME)) {
-        period = m_conf.get<int>(REGISTRAR_PERIOD_NAME);
+    Money price(price_add_params_.operation_price.get_value());//REGISTRAR_PRICE_NAME
+    int period = 1;
+    if (price_add_params_.period.is_value_set()) {//REGISTRAR_PERIOD_NAME
+        period = price_add_params_.period.get_value();
     }
-    if (!(m_conf.hasOpt(REGISTRAR_ZONE_FQDN_NAME) ||
-            m_conf.hasOpt(REGISTRAR_ZONE_ID_NAME))) {
-        std::cerr << "You have to specity either ``--" << REGISTRAR_ZONE_FQDN_NAME
-            << "'' or ``--" << REGISTRAR_ZONE_ID_NAME << "''." << std::endl;
+    if (!(price_add_params_.zone_fqdn.is_value_set() ||//REGISTRAR_ZONE_FQDN_NAME
+            price_add_params_.zone_id.is_value_set())) {//REGISTRAR_ZONE_ID_NAME
+        std::cerr << "You have to specity either ``--zone_fqdn'' or ``--zone_id''." << std::endl;
         return;
     }
-    if (m_conf.hasOpt(REGISTRAR_CREATE_OPERATION_NAME)) {
-        if (m_conf.hasOpt(REGISTRAR_ZONE_FQDN_NAME)) {
-            std::string zone = m_conf.get<std::string>(REGISTRAR_ZONE_FQDN_NAME);
-            zoneMan->addPrice(zone, Register::Zone::CREATE, validFrom,
-                    validTo, price, period);
-        } else {
-            unsigned int zoneId = m_conf.get<unsigned int>(REGISTRAR_ZONE_ID_NAME);
-            zoneMan->addPrice(zoneId, Register::Zone::CREATE, validFrom,
-                    validTo, price, period);
-        }
+
+    if (!price_add_params_.operation.is_value_set())
+    {
+        throw std::runtime_error("RegistrarClient::price_add: operation not set");
     }
-    if (m_conf.hasOpt(REGISTRAR_RENEW_OPERATION_NAME)) {
-        if (m_conf.hasOpt(REGISTRAR_ZONE_FQDN_NAME)) {
-            std::string zone = m_conf.get<std::string>(REGISTRAR_ZONE_FQDN_NAME);
-            zoneMan->addPrice(zone, Register::Zone::RENEW, validFrom,
-                    validTo, price, period);
-        } else {
-            unsigned int zoneId = m_conf.get<unsigned int>(REGISTRAR_ZONE_ID_NAME);
-            zoneMan->addPrice(zoneId, Register::Zone::RENEW, validFrom,
-                    validTo, price, period);
-        }
+    std::string operation = price_add_params_.operation.get_value();
+
+    if (price_add_params_.zone_fqdn.is_value_set()) {//REGISTRAR_ZONE_FQDN_NAME
+        std::string zone = price_add_params_.zone_fqdn.get_value();//REGISTRAR_ZONE_FQDN_NAME
+        zoneMan->addPrice(zone, operation, validFrom,
+                validTo, price, period
+                , price_add_params_.enable_postpaid_operation);
+    } else {
+        unsigned int zoneId = price_add_params_.zone_id.get_value();//REGISTRAR_ZONE_ID_NAME
+        zoneMan->addPrice(zoneId, operation, validFrom,
+                validTo, price, period
+                , price_add_params_.enable_postpaid_operation);
     }
-}
 
-void
-RegistrarClient::zone_add_help()
-{
-    std::cout <<
-        "** Add new zone **\n\n"
-        "  $ " << g_prog_name << " --" << REGISTRAR_ZONE_ADD_NAME << " \\\n"
-        "    --" << REGISTRAR_ZONE_FQDN_NAME << "=<zone_fqdn> \\\n"
-        "    [--" << REGISTRAR_EX_PERIOD_MIN_NAME << "=<ex_period_min>] \\\n"
-        "    [--" << REGISTRAR_EX_PERIOD_MAX_NAME << "=<ex_period_max>] \\\n"
-        "    [--" << REGISTRAR_TTL_NAME << "=<ttl>] \\\n"
-        "    [--" << REGISTRAR_HOSTMASTER_NAME << "=<hostmaster>] \\\n"
-        "    [--" << REGISTRAR_UPDATE_RETR_NAME << "=<update_retr>] \\\n"
-        "    [--" << REGISTRAR_REFRESH_NAME << "=<refresh>] \\\n"
-        "    [--" << REGISTRAR_EXPIRY_NAME << "=<expiry>] \\\n"
-        "    [--" << REGISTRAR_MINIMUM_NAME << "=<minimum>] \\\n"
-        "    [--" << REGISTRAR_NS_FQDN_NAME << "=<ns_fqdn>]\n"
-        << std::endl;
-}
-
-void
-RegistrarClient::zone_ns_add_help()
-{
-    std::cout <<
-        "** Add new nameserver to zone**\n\n"
-        "  $ " << g_prog_name << " --" << REGISTRAR_ZONE_NS_ADD_NAME << " \\\n"
-        "    --" << REGISTRAR_ZONE_FQDN_NAME << "=<zone_fqdn> \\\n"
-        "    --" << REGISTRAR_NS_FQDN_NAME << "=<ns_fqdn> \\\n"
-        "    --" << REGISTRAR_ADDR_NAME << "=<addr>\n"
-        << std::endl;
-}
-
-void
-RegistrarClient::registrar_add_help()
-{
-    std::cout <<
-        "** Add new registrar **\n\n"
-        "  $ " << g_prog_name << " --" << REGISTRAR_REGISTRAR_ADD_NAME << " \\\n"
-        "    --" << REGISTRAR_ADD_HANDLE_NAME << "=<registrar_handle> \\\n"
-        "    --" << REGISTRAR_COUNTRY_NAME << "=<country_code> \\\n"
-        "    [--" << REGISTRAR_ICO_NAME << "=<ico>] \\\n"
-        "    [--" << REGISTRAR_DIC_NAME << "=<dic>] \\\n"
-        "    [--" << REGISTRAR_VAR_SYMB_NAME << "=<var_symbol>] \\\n"
-        "    [--" << REGISTRAR_ADD_NAME_NAME << "=<name>] \\\n"
-        "    [--" << REGISTRAR_ORGANIZATION_NAME << "=<organizatin>] \\\n"
-        "    [--" << REGISTRAR_STREET1_NAME << "=<street1>] \\\n"
-        "    [--" << REGISTRAR_STREET2_NAME << "=<street2>] \\\n"
-        "    [--" << REGISTRAR_STREET3_NAME << "=<street3>] \\\n"
-        "    [--" << REGISTRAR_CITY_NAME << "=<city>] \\\n"
-        "    [--" << REGISTRAR_STATEORPROVINCE_NAME << "=<state_or_province>] \\\n"
-        "    [--" << REGISTRAR_POSTALCODE_NAME << "=<postal_code>] \\\n"
-        "    [--" << REGISTRAR_TELEPHONE_NAME << "=<telephone>] \\\n"
-        "    [--" << REGISTRAR_FAX_NAME << "=<fax>] \\\n"
-        "    [--" << REGISTRAR_EMAIL_NAME << "=<email>] \\\n"
-        "    [--" << REGISTRAR_URL_NAME << "=<url>] \\\n"
-        "    [--" << REGISTRAR_NO_VAT_NAME << "] \\\n"
-        "    [--" << REGISTRAR_SYSTEM_NAME << "]\n"
-        << std::endl;
-}
-void
-RegistrarClient::registrar_acl_add_help()
-{
-    std::cout << 
-        "** Add new certificate add password to registrar **\n\n"
-        "  $ " << g_prog_name << " --" << REGISTRAR_REGISTRAR_ACL_ADD_NAME << " \\\n"
-        "    --" << REGISTRAR_ADD_HANDLE_NAME << "=<handle> \\\n"
-        "    --" << REGISTRAR_CERT_NAME << "=<certificate> \\\n"
-        "    --" << REGISTRAR_PASSWORD_NAME << "=<password>\n"
-        << std::endl;
-}
-void
-RegistrarClient::registrar_add_zone_help()
-{
-    std::cout <<
-        "** Add registrar to zone **\n\n"
-        "  $ " << g_prog_name << " --" << REGISTRAR_REGISTRAR_ADD_ZONE_NAME << " \\\n"
-        "    --" << REGISTRAR_ZONE_FQDN_NAME << "=<zone_fqdn> \\\n"
-        "    --" << REGISTRAR_ADD_HANDLE_NAME << "=<registrar_handle> \\\n"
-        "    [--" << REGISTRAR_FROM_DATE_NAME << "=<valid_from_date>] \\\n"
-        "    [--" << REGISTRAR_TO_DATE_NAME << "=<valid_to_date>]\n"
-        << std::endl;
-}
-
-void
-RegistrarClient::price_add_help()
-{
-    std::cout <<
-        "** Add new price for the zone **\n\n"
-        "  $ " << g_prog_name << " --" << REGISTRAR_PRICE_ADD_NAME << " \\\n"
-        "    --" << REGISTRAR_CREATE_OPERATION_NAME << " | \\\n"
-        "    --" << REGISTRAR_RENEW_OPERATION_NAME << " \\\n"
-        "    --" << REGISTRAR_ZONE_FQDN_NAME << "=<zone_fqdn> | \\\n"
-        "    --" << REGISTRAR_ZONE_ID_NAME << "=<zone_id> \\\n"
-        "    [--" << REGISTRAR_VALID_FROM_NAME << "=<valid_from_timestamp>] \\\n"
-        "    [--" << REGISTRAR_VALID_TO_NAME << "=<valid_to_timestamp>] \\\n"
-        "    --" << REGISTRAR_PRICE_NAME << "=<price> \\\n"
-        "    [--" << REGISTRAR_PERIOD_NAME << "=<period>]\n"
-        << std::endl;
-    std::cout <<
-        "Default value for the ``valid from'' is NOW and NULL for ``valid_to''.\n"
-        "Default pediod is 12 (it means twelve months).\n";
-}
-
-#define ADDOPT(name, type, callable, visible) \
-    {CLIENT_REGISTRAR, name, name##_DESC, type, callable, visible}
-
-const struct options
-RegistrarClient::m_opts[] = {
-    ADDOPT(REGISTRAR_LIST_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(REGISTRAR_ZONE_ADD_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(REGISTRAR_ZONE_NS_ADD_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(REGISTRAR_REGISTRAR_ADD_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(REGISTRAR_REGISTRAR_ACL_ADD_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(REGISTRAR_REGISTRAR_ADD_ZONE_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(REGISTRAR_PRICE_ADD_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(REGISTRAR_SHOW_OPTS_NAME, TYPE_NOTYPE, true, true),
-    add_ID,
-    add_HANDLE,
-    add_NAME,
-    add_CITY,
-    add_EMAIL,
-    add_COUNTRY,
-    ADDOPT(REGISTRAR_ZONE_FQDN_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_ZONE_ID_NAME, TYPE_UINT, false, false),
-    ADDOPT(REGISTRAR_ADD_HANDLE_NAME, TYPE_STRING, false, false),
-
-
-
-    ADDOPT(REGISTRAR_ICO_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_DIC_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_VAR_SYMB_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_ADD_NAME_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_ORGANIZATION_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_STREET1_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_STREET2_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_STREET3_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_CITY_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_STATEORPROVINCE_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_POSTALCODE_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_COUNTRY_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_TELEPHONE_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_FAX_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_EMAIL_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_URL_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_CERT_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_PASSWORD_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_NO_VAT_NAME, TYPE_NOTYPE, false, false),
-    ADDOPT(REGISTRAR_SYSTEM_NAME, TYPE_NOTYPE, false, false),
-    ADDOPT(REGISTRAR_FROM_DATE_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_TO_DATE_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_EX_PERIOD_MAX_NAME, TYPE_INT, false, false),
-    ADDOPT(REGISTRAR_EX_PERIOD_MIN_NAME, TYPE_INT, false, false),
-    ADDOPT(REGISTRAR_TTL_NAME, TYPE_INT, false, false),
-    ADDOPT(REGISTRAR_HOSTMASTER_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_UPDATE_RETR_NAME, TYPE_INT, false, false),
-    ADDOPT(REGISTRAR_REFRESH_NAME, TYPE_INT, false, false),
-    ADDOPT(REGISTRAR_EXPIRY_NAME, TYPE_INT, false, false),
-    ADDOPT(REGISTRAR_MINIMUM_NAME, TYPE_INT, false, false),
-    ADDOPT(REGISTRAR_NS_FQDN_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_ADDR_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_CREATE_OPERATION_NAME, TYPE_NOTYPE, false, false),
-    ADDOPT(REGISTRAR_RENEW_OPERATION_NAME, TYPE_NOTYPE, false, false),
-    ADDOPT(REGISTRAR_VALID_FROM_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_VALID_TO_NAME, TYPE_STRING, false, false),
-    ADDOPT(REGISTRAR_PRICE_NAME, TYPE_INT, false, false),
-    ADDOPT(REGISTRAR_PERIOD_NAME, TYPE_INT, false, false)
-};
-
-#undef ADDOPT
-
-int 
-RegistrarClient::getOptsCount()
-{
-    return sizeof(m_opts) / sizeof(options);
 }
 
 } // namespace Admin;

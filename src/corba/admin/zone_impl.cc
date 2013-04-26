@@ -1,11 +1,11 @@
-#include <corba/ccReg.hh>
+#include <corba/Zone.hh>
 
 #include "zone_impl.h"
 
 #include "common.h"
 #include "log/logger.h"
 #include "log/context.h"
-#include "register/zone.h"
+#include "fredlib/zone.h"
 
 #include "corba/connection_releaser.h"
 
@@ -26,8 +26,8 @@
         ConnectionReleaser releaser;
     	try
     	{
-			std::auto_ptr<Register::Zone::Manager> zoneMan(
-					Register::Zone::Manager::create());
+			std::auto_ptr<Fred::Zone::Manager> zoneMan(
+					Fred::Zone::Manager::create());
 
 			zoneMan->addZone
 					( fqdn
@@ -66,8 +66,8 @@
         ConnectionReleaser releaser;
     	try
     	{
-			std::auto_ptr<Register::Zone::Manager> zoneMan(
-					Register::Zone::Manager::create());
+			std::auto_ptr<Fred::Zone::Manager> zoneMan(
+					Fred::Zone::Manager::create());
 
 			zoneMan->updateZoneByFqdn
 					( fqdn
@@ -91,7 +91,7 @@
     }
     bool ccReg_ZoneIf_i::updateZoneById
     (
-		ccReg::TID id
+        unsigned long long id
 		, const char* fqdn
 		, CORBA::Long ex_period_min
 		, CORBA::Long ex_period_max
@@ -107,8 +107,8 @@
         ConnectionReleaser releaser;
 		try
 		{
-			std::auto_ptr<Register::Zone::Manager> zoneMan(
-					Register::Zone::Manager::create());
+			std::auto_ptr<Fred::Zone::Manager> zoneMan(
+					Fred::Zone::Manager::create());
 
 			zoneMan->updateZoneById
 					( id
@@ -141,8 +141,8 @@
         ConnectionReleaser releaser;
 		try
 		{
-			std::auto_ptr<Register::Zone::Manager> zoneMan(
-					Register::Zone::Manager::create());
+			std::auto_ptr<Fred::Zone::Manager> zoneMan(
+					Fred::Zone::Manager::create());
 
 			zoneMan->addZoneNs(zone_fqdn, fqdn, addr);
 		}//try
@@ -157,7 +157,7 @@
 
     bool ccReg_ZoneIf_i::updateZoneNs
     (
-    		ccReg::TID id
+            unsigned long long id
     		, const char* zone_fqdn
     		, const char* fqdn
     		, const char* addr
@@ -166,8 +166,8 @@
         ConnectionReleaser releaser;
 		try
 		{
-			std::auto_ptr<Register::Zone::Manager> zoneMan(
-					Register::Zone::Manager::create());
+			std::auto_ptr<Fred::Zone::Manager> zoneMan(
+					Fred::Zone::Manager::create());
 			zoneMan->updateZoneNsById(id, zone_fqdn, fqdn, addr);
 		}//try
 		catch (...)

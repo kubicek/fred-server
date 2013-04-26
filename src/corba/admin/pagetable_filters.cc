@@ -1,6 +1,6 @@
 #include "pagetable_filters.h"
 
-ccReg_Filters_i::ccReg_Filters_i(Register::Filter::List& _filter_list) : 
+ccReg_Filters_i::ccReg_Filters_i(Fred::Filter::List& _filter_list) :
 	m_filter_list(_filter_list) {
 }
 
@@ -9,11 +9,11 @@ ccReg_Filters_i::~ccReg_Filters_i() {
 }
 
 void 
-ccReg_Filters_i::reload() {
+ccReg_Filters_i::reload_worker() {
   Logging::Context ctx(base_context_);
   ConnectionReleaser releaser;
 
-  TRACE("[CALL] ccReg_Filters_i::reload()");
+  TRACE("[CALL] ccReg_Filters_i::reload_worker()");
   m_filter_list.reload(uf);
 }
 
@@ -42,13 +42,13 @@ ccReg_Filters_i::getColumnHeaders() {
 
 Registry::TableRow* 
 ccReg_Filters_i::getRow(CORBA::UShort row) 
-  throw (ccReg::Table::INVALID_ROW) {
+  throw (Registry::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
 
   try {
-    const Register::Filter::Filter *item = m_filter_list.get(row);
+    const Fred::Filter::Filter *item = m_filter_list.get(row);
     if (!item) 
-    	  throw ccReg::Table::INVALID_ROW();
+    	  throw Registry::Table::INVALID_ROW();
     
     Registry::TableRow *tr = new Registry::TableRow;
     tr->length(4);
@@ -59,24 +59,24 @@ ccReg_Filters_i::getRow(CORBA::UShort row)
     return tr;
   }
   catch (...) {
-    throw ccReg::Table::INVALID_ROW();
+    throw Registry::Table::INVALID_ROW();
   }
 }
 
 ccReg::TID 
 ccReg_Filters_i::getRowId(CORBA::UShort row)
-  throw (ccReg::Table::INVALID_ROW) {
+  throw (Registry::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
  
   try {
-    const Register::Filter::Filter *item = m_filter_list.get(row);
+    const Fred::Filter::Filter *item = m_filter_list.get(row);
     if (!item) 
-  	  throw ccReg::Table::INVALID_ROW();
+  	  throw Registry::Table::INVALID_ROW();
     
     return item->getId();
   }
   catch (...) {
-    throw ccReg::Table::INVALID_ROW();
+    throw Registry::Table::INVALID_ROW();
   }
 }
 

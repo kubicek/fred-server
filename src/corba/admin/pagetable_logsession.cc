@@ -2,7 +2,7 @@
 
 const int ccReg_LogSession_i::NUM_COLUMNS = 4;
 
-ccReg_LogSession_i::ccReg_LogSession_i(Register::Session::List *_list) : m_lel (_list)  {
+ccReg_LogSession_i::ccReg_LogSession_i(Fred::Session::List *_list) : m_lel (_list)  {
 }
 
 ccReg_LogSession_i::~ccReg_LogSession_i() {
@@ -31,11 +31,11 @@ Registry::Table::ColumnHeaders* ccReg_LogSession_i::getColumnHeaders() {
 }
 
 Registry::TableRow* ccReg_LogSession_i::getRow(CORBA::UShort row)
-    throw (ccReg::Table::INVALID_ROW) {
+    throw (Registry::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
 
   try {
-    const Register::Session::Session *a = m_lel->get(row);
+    const Fred::Session::Session *a = m_lel->get(row);
     Registry::TableRow *tr = new Registry::TableRow;
     tr->length(NUM_COLUMNS);
 
@@ -46,7 +46,7 @@ Registry::TableRow* ccReg_LogSession_i::getRow(CORBA::UShort row)
     return tr;
   }
   catch (...) {
-    throw ccReg::Table::INVALID_ROW();
+    throw Registry::Table::INVALID_ROW();
   }
 }
 
@@ -60,27 +60,27 @@ void ccReg_LogSession_i::sortByColumn(CORBA::Short column, CORBA::Boolean dir) {
 
   switch (column) {
     case 0:
-      m_lel->sort(Register::Session::MT_NAME, dir);
+      m_lel->sort(Fred::Session::MT_NAME, dir);
       break;
     case 1:
-      m_lel->sort(Register::Session::MT_LOGIN_DATE, dir);
+      m_lel->sort(Fred::Session::MT_LOGIN_DATE, dir);
       break;
     case 2:
-      m_lel->sort(Register::Session::MT_LOGOUT_DATE, dir);
+      m_lel->sort(Fred::Session::MT_LOGOUT_DATE, dir);
       break;
     case 3:
-      m_lel->sort(Register::Session::MT_LANG, dir);
+      m_lel->sort(Fred::Session::MT_LANG, dir);
       break;
   }
 }
 
 ccReg::TID ccReg_LogSession_i::getRowId(CORBA::UShort row)
-    throw (ccReg::Table::INVALID_ROW) {
+    throw (Registry::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
 
-  const Register::Session::Session *a = m_lel->get(row);
+  const Fred::Session::Session *a = m_lel->get(row);
   if (!a)
-    throw ccReg::Table::INVALID_ROW();
+    throw Registry::Table::INVALID_ROW();
   return a->getId();
 }
 
@@ -100,12 +100,13 @@ CORBA::Short ccReg_LogSession_i::numColumns() {
   return NUM_COLUMNS;
 }
 
-void ccReg_LogSession_i::reload() {
+void ccReg_LogSession_i::reload_worker() {
   Logging::Context ctx(base_context_);
   ConnectionReleaser releaser;
 
-  TRACE("[CALL] ccReg_LogSession_i::reload()");
+  TRACE("[CALL] ccReg_LogSession_i::reload_worker()");
 //  m_lel->reload(uf, dbm);
+  m_lel->setTimeout(query_timeout);
   m_lel->reload(uf);
 }
 
@@ -148,22 +149,22 @@ void ccReg_LogSession_i::saveFilter(const char* _name) {
 
   TRACE(boost::format("[CALL] ccReg_LogSession_i::saveFilter('%1%')") % _name);
 
-  std::auto_ptr<Register::Filter::Manager>
-      tmp_filter_manager(Register::Filter::Manager::create());
-  tmp_filter_manager->save(Register::Filter::FT_SESSION, _name, uf);
+  std::auto_ptr<Fred::Filter::Manager>
+      tmp_filter_manager(Fred::Filter::Manager::create());
+  tmp_filter_manager->save(Fred::Filter::FT_SESSION, _name, uf);
 }
 
-Register::Session::Session* ccReg_LogSession_i::findId(ccReg::TID _id) {
+Fred::Session::Session* ccReg_LogSession_i::findId(ccReg::TID _id) {
   Logging::Context ctx(base_context_);
 
   try {
-    Register::Session::Session *s = dynamic_cast<Register::Session::Session* >(m_lel->findId(_id));
+    Fred::Session::Session *s = dynamic_cast<Fred::Session::Session* >(m_lel->findId(_id));
     if (s) {
       return s;
     }
     return 0;
   }
-  catch (Register::NOT_FOUND) {
+  catch (Fred::NOT_FOUND) {
     return 0;
   }
 }

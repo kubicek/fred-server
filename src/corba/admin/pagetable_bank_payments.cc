@@ -1,7 +1,7 @@
 #include "pagetable_bank_payments.h"
 
 ccReg_Payments_i::ccReg_Payments_i(
-        Register::Banking::PaymentList *list):
+        Fred::Banking::PaymentList *list):
     list_(list)
 {
 }
@@ -25,7 +25,7 @@ Registry::Table::ColumnHeaders *
 ccReg_Payments_i::getColumnHeaders()
 {
     Registry::Table::ColumnHeaders *ch = new Registry::Table::ColumnHeaders();
-    ch->length(9);
+    ch->length(numColumns());
 //    COLHEAD(ch, 0, "Id", CT_OID);
 //    COLHEAD(ch, 1, "Statement Head", CT_OID);
     COLHEAD(ch, 0, "Account Number", CT_OTHER);
@@ -42,6 +42,7 @@ ccReg_Payments_i::getColumnHeaders()
     COLHEAD(ch, 6, "Invoice", CT_OID);
     COLHEAD(ch, 7, "Account Name", CT_OTHER);
     COLHEAD(ch, 8, "Create Time", CT_OTHER);
+    COLHEAD(ch, 9, "Destination Account", CT_OTHER);
 
     /*
     COLHEAD(ch, 9, "Date", CT_OTHER);
@@ -54,21 +55,21 @@ ccReg_Payments_i::getColumnHeaders()
 
 Registry::TableRow *
 ccReg_Payments_i::getRow(CORBA::UShort row)
-    throw (ccReg::Table::INVALID_ROW)
+    throw (Registry::Table::INVALID_ROW)
 {
     Logging::Context ctx(base_context_);
 
-    const Register::Banking::Payment *data = list_->get(row);
+    const Fred::Banking::Payment *data = list_->get(row);
     if (!data) {
-        throw ccReg::Table::INVALID_ROW();
+        throw Registry::Table::INVALID_ROW();
     }
     Registry::TableRow *tr = new Registry::TableRow;
 
-    tr->length(9);
+    tr->length(numColumns());
 
     MAKE_OID(oid_id, data->getId(), C_STR(data->getId()), FT_STATEMENTITEM);
     MAKE_OID(oid_statement_id, data->getStatementId(), C_STR(data->getStatementId()), FT_STATEMENTHEAD);
-    MAKE_OID(oid_invoice_id, data->getInvoiceId(), C_STR(data->getInvoicePrefix()), FT_INVOICE);
+    MAKE_OID(oid_invoice_id, data->getAdvanceInvoiceId(), C_STR(data->getInvoicePrefix()), FT_INVOICE);
 
  //   (*tr)[0] <<= oid_id;
  //   (*tr)[1] <<= oid_statement_id;
@@ -86,6 +87,7 @@ ccReg_Payments_i::getRow(CORBA::UShort row)
     (*tr)[6] <<= oid_invoice_id;
     (*tr)[7] <<= C_STR(data->getAccountName());
     (*tr)[8] <<= C_STR(data->getCrTime());
+    (*tr)[9] <<= C_STR(data->getDestAccount());
 
     return tr;
 }
@@ -98,66 +100,87 @@ ccReg_Payments_i::sortByColumn(CORBA::Short column, CORBA::Boolean dir)
     TRACE(boost::format(
                 "[CALL] ccReg_Payments_i::sortByColumn(%1%, %2%)")
             % column % dir);
+    try
+    {
     ccReg_PageTable_i::sortByColumn(column, dir);
 
     switch (column) {
 //        case 0:
-//            list_->sort(Register::Banking::IMT_ID, dir);
+//            list_->sort(Fred::Banking::IMT_ID, dir);
 //            break;
 //        case 1:
-//            list_->sort(Register::Banking::IMT_STATEMENT_ID, dir);
+//            list_->sort(Fred::Banking::IMT_STATEMENT_ID, dir);
 //            break;
         case 0:
-            list_->sort(Register::Banking::IMT_ACCOUNT_NUMBER, dir);
+            list_->sort(Fred::Banking::IMT_ACCOUNT_NUMBER, dir);
             break;
         case 1:
-            list_->sort(Register::Banking::IMT_BANK_CODE, dir);
+            list_->sort(Fred::Banking::IMT_BANK_CODE, dir);
             break;
 //        case 4:
-//            list_->sort(Register::Banking::IMT_TYPE, dir);
+//            list_->sort(Fred::Banking::IMT_TYPE, dir);
 //            break;
 //        case 5:
-//            list_->sort(Register::Banking::IMT_CODE, dir);
+//            list_->sort(Fred::Banking::IMT_CODE, dir);
 //            break;
 //        case 6:
-//            list_->sort(Register::Banking::IMT_CONSTSYMB, dir);
+//            list_->sort(Fred::Banking::IMT_CONSTSYMB, dir);
 //            break;
         case 2:
-            list_->sort(Register::Banking::IMT_VARSYMB, dir);
+            list_->sort(Fred::Banking::IMT_VARSYMB, dir);
             break;
 //        case 8:
-//            list_->sort(Register::Banking::IMT_SPECSYMB, dir);
+//            list_->sort(Fred::Banking::IMT_SPECSYMB, dir);
 //            break;
         case 3:
-            list_->sort(Register::Banking::IMT_PRICE, dir);
+            list_->sort(Fred::Banking::IMT_PRICE, dir);
             break;
 //        case 10:
-//            list_->sort(Register::Banking::IMT_ACCOUNT_EVID, dir);
+//            list_->sort(Fred::Banking::IMT_ACCOUNT_EVID, dir);
 //            break;
         case 4:
-            list_->sort(Register::Banking::IMT_ACCOUNT_DATE, dir);
+            list_->sort(Fred::Banking::IMT_ACCOUNT_DATE, dir);
             break;
         case 5:
-            list_->sort(Register::Banking::IMT_ACCOUNT_MEMO, dir);
+            list_->sort(Fred::Banking::IMT_ACCOUNT_MEMO, dir);
             break;
         case 7:
-            list_->sort(Register::Banking::IMT_ACCOUNT_NAME, dir);
+            list_->sort(Fred::Banking::IMT_ACCOUNT_NAME, dir);
             break;
         case 8:
-            list_->sort(Register::Banking::IMT_CREATE_TIME, dir);
+            list_->sort(Fred::Banking::IMT_CREATE_TIME, dir);
             break;
+        case 9:
+            list_->sort(Fred::Banking::IMT_DEST_ACCOUNT, dir);
+            break;
+
+    }//switch
+    }//try
+    catch (const std::exception& ex)
+    {
+        Logging::Manager::instance_ref()
+            .get(PACKAGE)
+            .message( ERROR_LOG
+                , "ccReg_Payments_i::sortByColumn: std::exception %s", ex.what());
+    }
+    catch (...)
+    {
+        Logging::Manager::instance_ref()
+            .get(PACKAGE)
+            .message( ERROR_LOG
+                    , "ccReg_Payments_i::sortByColumn: unknown exception ");
     }
 }
 
 ccReg::TID
 ccReg_Payments_i::getRowId(CORBA::UShort row)
-    throw (ccReg::Table::INVALID_ROW)
+    throw (Registry::Table::INVALID_ROW)
 {
     Logging::Context ctx(base_context_);
 
-    const Register::Banking::Payment *data = list_->get(row);
+    const Fred::Banking::Payment *data = list_->get(row);
     if (!data) {
-        throw ccReg::Table::INVALID_ROW();
+        throw Registry::Table::INVALID_ROW();
     }
     return data->getId();
 }
@@ -179,15 +202,16 @@ ccReg_Payments_i::numRows()
 CORBA::Short
 ccReg_Payments_i::numColumns()
 {
-    return 9;
+    return 10;
 }
 
 void
-ccReg_Payments_i::reload()
+ccReg_Payments_i::reload_worker()
 {
     Logging::Context ctx(base_context_);
     ConnectionReleaser releaser;
 
+    list_->setTimeout(query_timeout);
     list_->reload(uf);
 }
 
@@ -242,22 +266,22 @@ ccReg_Payments_i::saveFilter(const char *name)
     TRACE(boost::format("[CALL] ccReg_Payments_i::saveFilter(%1%)")
             % name);
 
-    std::auto_ptr<Register::Filter::Manager> tmp_filter_manager(
-            Register::Filter::Manager::create());
-    tmp_filter_manager->save(Register::Filter::FT_STATEMENTITEM, name, uf);
+    std::auto_ptr<Fred::Filter::Manager> tmp_filter_manager(
+            Fred::Filter::Manager::create());
+    tmp_filter_manager->save(Fred::Filter::FT_STATEMENTITEM, name, uf);
 }
 
-Register::Banking::Payment *
+Fred::Banking::Payment *
 ccReg_Payments_i::findId(ccReg::TID id)
 {
     Logging::Context ctx(base_context_);
     try {
-        Register::Banking::Payment *data = list_->getById(id);
+        Fred::Banking::Payment *data = list_->getById(id);
         if (data) {
             return data;
         }
         return 0;
-    } catch (Register::NOT_FOUND) {
+    } catch (Fred::NOT_FOUND) {
         return 0;
     }
 }

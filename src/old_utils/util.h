@@ -54,10 +54,6 @@ bool get_HANDLE(
 bool get_handle(
   char * HANDLE, const char *handle, int typ);
 
-// generate ROID 
-void get_roid(
-  char *roid, char *prefix, int id);
-
 // convert  DNS host  to lower case 
 bool convert_hostname(
   char *HOST, const char *fqdn);
@@ -78,19 +74,11 @@ bool TestExDate(
 int TestPeriodyInterval(
   int period, int min, int max);
 
-// count VAT from price without tax with coefficient help and round VAT to dimes
-// count VAT for invoicing  and round 
-long count_dph(
-  long price, double koef);
 
 // convert registrar credit for pennies without conversion to float it takes also decimal comma or dot
 // convert currency  string for example   1.200,00  to logn value 120000
 long get_price(
   const char *priceStr);
-
-// reverse operation convert long to  currency  string 120000 -> 12000.00
-void get_priceStr(
-  char *priceStr, long price);
 
 // convert local date  to  UTC timestamp for SQL
 time_t get_utctime_from_localdate(
@@ -98,11 +86,11 @@ time_t get_utctime_from_localdate(
 
 // convert dateg from SQL result to  date
 void convert_rfc3339_date(
-  char *dateStr, const char *string);
+  char *dateStr, size_t len, const char *string);
 
 // convert UTC string timestamop to local time  rfc3339 with time zon
 void convert_rfc3339_timestamp(
-  char *dateStr, const char *string);
+  char *dateStr, size_t len, const char *string);
 
 // convert local  format of date date (CZ) DD.MM.YYYY to UTC time  
 time_t get_local_format_time_t(
@@ -114,9 +102,9 @@ time_t get_time_t(
 
 // convert time_t to  timestamp   rfc3339 with timezone ( true day ) for conver only date 
 void get_rfc3339_timestamp(
-  time_t t, char *string, bool day);
+  time_t t, char *string, size_t string_len, bool day);
 
 // convert  time_t to SQL  string  timestamp
 void get_timestamp(
-  char *string, time_t t);
+  char *string, size_t len, time_t t);
 

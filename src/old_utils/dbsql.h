@@ -1,14 +1,16 @@
 #ifndef __DBSQL_H__
 #define __DBSQL_H__
 
-#include "register/db_settings.h"
+#include "fredlib/db_settings.h"
 
 #include "util.h"
 #include "pqsql.h"
-#include "register/types.h"
+#include "fredlib/types.h"
 #include <map>
 #include <cstdlib>
 #include <boost/shared_ptr.hpp>
+#include <memory>
+#include <stdexcept>
 
 
 #define LANG_EN 0
@@ -16,17 +18,9 @@
 #define CMD_OK 1000 // OK command to the commit transaction
 #define CMD_FAILED(x) (x<2000) // all successfull codes
 #define MAX_SQLBUFFER 4096*25 // maximal lenght od the sqlBuffer
-#define MAX_SVTID 32 // length of the server  ticket  svTRID
+#define MAX_SVTID 64 // length of the server  ticket  svTRID
 
 class DB;
-class ParsedAction 
-{
-  std::map<unsigned, std::string> elements;
-public:
-  void add(unsigned id, const std::string& value);
-  bool executeSQL(Register::TID actionid, DB* db);
-};
-
 
 class DB : public PQ
 {
@@ -40,7 +34,6 @@ public:
   {
       svrTRID = NULL;
       memHandle=NULL;
-      actionID = 0;
       enum_action=0;
       loginID = 0;
   }
@@ -79,124 +72,18 @@ public:
   ///------------------------
   //   BILLING
 
-  // get price for operation defined in enum_operation_table from table price_list
-  long GetPrice(
-    int operation, int zone, int period);
-  bool SaveInvoiceCredit(
-    int regID, int objectID, int operation, int zone, int period,
-    const char *ExDate, long price, long price2, int invoiceID, int invoiceID2);
-  //  get credit from invoice  
-  bool InvoiceCountCredit(
-    long price, int invoiceID);
 
-  // operation  CREATE
-  bool BillingCreateDomain(
-    int regID, int zone, int objectID);
-  // operation RENEW
-  bool BillingRenewDomain(
-    int regID, int zone, int objectID, int period, const char *ExDate);
-
-  // count credit from invoce 
-  bool UpdateInvoiceCredit(
-    int regID, int operation, int zone, int period, const char *ExDate,
-    int objectID);
-
-  long GetRegistrarCredit(
+  std::string GetRegistrarCredit(
     int regID, int zoneID);
-
-  ///------------------------
-  /// INVOICING 
-
-  // count balence and used credit on invoice
-  long GetInvoiceBalance(
-    int aID, long credit);
-  long GetInvoiceSumaPrice(
-    int iID, int aID); //
-
-  // make factoring 
-  int MakeFactoring(
-    int regID, int zone, const char *timestampStr, const char *taxDateStr);
-
-  // make Invoice
-  int MakeNewInvoice(
-    const char *taxDateStr, const char *fromdateStr, const char *todateStr,
-    int zone, int regID, long price, unsigned int count);
-
-  // make new Invoice 
-  int MakeNewInvoiceAdvance(
-    const char *taxDateStr, int zone, int regID, long price);
-
-  // make prefix for invoice
-  int GetPrefixType(
-    const char *dateStr, int typ, int zone);
-  long GetInvoicePrefix(
-    const char *dateStr, int typ, int zone);
-
-  ///-------------------
-  // BANKING 
-
-  // return id of the account 
-  int GetBankAccount(
-    const char *accountStr, const char *codeStr);
-  // return number of the account for zone
-  int GetBankAccountZone(
-    int accountID);
-
-  // test oldBalance at account 
-  int TestBankAccount(
-    const char *accountStr, int num, long oldBalance, char* bank);
-
-  // update Balance  at the account
-  bool UpdateBankAccount(
-    int accountID, char *date, int num, long newBalance);
-
-  // save bankstatement  head list for account 
-  int SaveBankHead(
-    int accountID, int num, char *date, char *oldDate, long oldBalance,
-    long newBalance, long credit, long debet);
-
-  // save bank item for statement
-  int SaveBankItem(
-    int statemetID, char *account, char *bank, char *evidNum, char *date,
-    char *memo, int code, char *konstSymb, char *varSymb, char *specsymb,
-    long price);
-
-  // e-banka function for table bank_ebanka_list on-line bankstatement  via https
-  int TestEBankaList(
-    const char*ident); // return ident for E-banka list
-
-  int SaveEBankaList(
-    int account_id, const char *ident, long price, const char *datetimeStr,
-    const char *accountStr, const char *codeStr, const char *varsymb,
-    const char *konstsymb, const char *nameStr, const char *memoStr);
-
-  // gererated invoice from incoming price to the e-banka 
-  bool UpdateEBankaListInvoice(
-    int id, int invoiceID);
-
-  //
-  int GetSystemVAT(); // return VAT for invoicing depends at the actual time
-  double GetSystemKOEF(); // transformed koeficient to count VAT for price local function
-
-  // this bank statement is processed
-  bool UpdateBankStatementItem(
-    int id, int invoiceID);
 
   //----------------------------
   // EPP function for table action and action_xml
 
-  // save EPP masagege about transfered object to the table messages 
-  bool SaveEPPTransferMessage(
-    int oldregID, int regID, int objectID, int type);
-
-  // save generated  XML from  mod_eppd
-  int SaveXMLout(
-    const char *svTRID, const char *xml);
 
   // start of the EPP operation with clientID and save xml from epp-client 
-  bool BeginAction(
-    int clientID, int action, const char *clTRID, const char *xml,
-    ParsedAction* paction = NULL
+  bool BeginAction(   
+    unsigned long long clientID, int action, const char *clTRID, const char *xml,
+    unsigned long long requestID
   );
   // end of the EPP operation
   const char * EndAction(
@@ -217,14 +104,6 @@ public:
   {
     return enum_action;
   } // return  EPP operation
-  int GetActionID()
-  {
-    return actionID;
-  } // retrun action.id 
-  int GetLoginID()
-  {
-    return loginID;
-  } // return clientID
 
   //----------------------------
   // DATABASE  functions
@@ -389,7 +268,7 @@ public:
   ///---------------
   // history functions 
   int MakeHistory(
-    int objectID);// create insert into table history
+    int objectID, unsigned long long requestID);// create insert into table history
   bool SaveHistory(
     const char *table, const char *fname, int id); // save  row in table to the history table 
 
@@ -409,22 +288,24 @@ public:
 
   // save to the history and delete objects
   bool SaveNSSetHistory(
-    int id);
+    int id, unsigned long long request_id);
   bool DeleteNSSetObject(
     int id);
 
   bool SaveDomainHistory(
-    int id);
+    int id, unsigned long long request_id);
   bool DeleteDomainObject(
     int id);
 
   bool SaveContactHistory(
-    int id);
+    int id, unsigned long long request_id);
   bool DeleteContactObject(
     int id);
 
-  bool SaveKeySetHistory(int id);
-  bool DeleteKeySetObject(int id);
+  bool SaveKeySetHistory(
+    int id, unsigned long long request_id);
+  bool DeleteKeySetObject(
+    int id);
 
   /// SQL language 
 
@@ -555,9 +436,8 @@ private:
   char *svrTRID;
   char *sqlBuffer;
   char dtStr[MAX_DATE+1]; //  pfor return date
-  int actionID; // id from action table
   int historyID; // id from history table
-  int loginID; // id of the client action.clientID
+  unsigned long long loginID; // id of the client action.clientID
   short enum_action; // ID of the EPP operation from enum_action
 };//class DB
 
@@ -598,5 +478,34 @@ struct DBFreeSelect
 };
 ///DBSharedPtr factory
 typedef DBPtrT<DBFreeSelect> DBFreeSelectPtr;
+
+///deleter functor for DB calling Disconnect only
+struct DBDisconnect
+{
+    void operator()(DB* db)
+    {
+        try
+        {
+            if(db) db->Disconnect();
+            delete db;
+            db = 0;
+        }
+        catch(...){}
+    }
+};
+///DBSharedPtr factory
+typedef DBPtrT<DBDisconnect> DBDisconnectPtr;
+///DB auto_ptr
+typedef std::auto_ptr<DB> DBAutoPtr;
+
+///DBDisconnectPtr factory with custom exception
+template <class ExceptionInCaseOfConnectionFailure>
+DBSharedPtr connect_DB(const std::string& connection_string
+        ,ExceptionInCaseOfConnectionFailure ex)
+{
+    DBAutoPtr db( new DB);
+    if (!db->OpenDatabase(connection_string.c_str())) throw ex;
+    return DBDisconnectPtr(db.release());
+}//connect_DB
 
 #endif

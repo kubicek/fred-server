@@ -1,5 +1,5 @@
-#ifndef _STATEMENT_ITEM_FILTER_H_
-#define _STATEMENT_ITEM_FILTER_H_
+#ifndef _BANK_PAYMENT_FILTER_H_
+#define _BANK_PAYMENT_FILTER_H_
 
 #include "db/query/base_filters.h"
 #include "bank_statement_filter.h"
@@ -24,10 +24,11 @@ public:
     virtual Value<std::string> &addSpecSymb() = 0;
     virtual Value<std::string> &addAccountEvid() = 0;
     virtual Interval<Database::DateInterval> &addAccountDate() = 0;
-    virtual Value<Database::ID> &addInvoiceId() = 0;
     virtual Value<std::string> &addAccountName() = 0;
     virtual Interval<Database::DateTimeInterval> &addCrTime() = 0;
     virtual BankStatement &addBankStatement() = 0;
+    virtual Value<std::string> &addAccountMemo() = 0;
+    virtual Value<Database::ID> &addAccountId() = 0;
 
     friend class boost::serialization::access;
     template<class Archive> void serialize(
@@ -54,10 +55,11 @@ public:
     virtual Value<std::string> &addSpecSymb();
     virtual Value<std::string> &addAccountEvid();
     virtual Interval<Database::DateInterval> &addAccountDate();
-    virtual Value<Database::ID> &addInvoiceId();
     virtual Value<std::string> &addAccountName();
     virtual Interval<Database::DateTimeInterval> &addCrTime();
     virtual BankStatement &addBankStatement();
+    virtual Value<std::string> &addAccountMemo();
+    virtual Value<Database::ID> &addAccountId();
 
     friend class boost::serialization::access;
     template<class Archive> void serialize(
@@ -70,4 +72,4 @@ public:
 } // namespace Filters
 } // namespace Database
 
-#endif // _STATEMENT_ITEM_FILTER_H_
+#endif // _BANK_PAYMENT_FILTER_H_

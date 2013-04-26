@@ -35,7 +35,7 @@ void
 TechCheckManager::checkFromRegistrar(
   const std::string& registrar, const std::string& nsset, 
   int level, const FQDNList& fqdns, const char *cltrid
-) throw (INTERNAL_ERROR, REGISTRAR_NOT_FOUND, NSSET_NOT_FOUND)
+)
 {
   try {
     ccReg::Lists cfqdns;
@@ -47,10 +47,10 @@ TechCheckManager::checkFromRegistrar(
     _resolveInit();
     tc->checkNssetAsynch(reg,nss,level,false,true,ccReg::CHKR_EPP,cfqdns,cltrid);
   }
-  catch (ccReg::TechCheck::NssetNotFound) {
+  catch (ccReg::TechCheck::NssetNotFound&) {
     throw NSSET_NOT_FOUND();
   }
-  catch (ccReg::TechCheck::RegistrarNotFound) {
+  catch (ccReg::TechCheck::RegistrarNotFound&) {
     throw REGISTRAR_NOT_FOUND();
   }
   catch (...) {
@@ -59,7 +59,7 @@ TechCheckManager::checkFromRegistrar(
 }
 
 void 
-TechCheckManager::_resolveInit() throw (RESOLVE_FAILED)
+TechCheckManager::_resolveInit()
 {
   try {
     boost::mutex::scoped_lock scoped_lock(mutex);

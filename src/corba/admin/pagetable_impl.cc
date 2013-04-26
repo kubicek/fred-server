@@ -1,13 +1,13 @@
 #include <math.h>
 #include <memory>
 #include <iomanip>
-#include <corba/ccReg.hh>
+#include <corba/Admin.hh>
 
 #include "pagetable_impl.h"
 #include "log/logger.h"
 
 ccReg_PageTable_i::ccReg_PageTable_i()
-  : aPageSize(10), aPage(0), sorted_by_(-1), sorted_dir_(false)
+  : aPageSize(10), aPage(0), filterType(), sorted_by_(-1), sorted_dir_(false), query_timeout(DEFAULT_QUERY_TIMEOUT)
 {
   base_context_ = Logging::Context::get();
 }
@@ -38,9 +38,23 @@ ccReg_PageTable_i::page()
 
 void 
 ccReg_PageTable_i::setPage(CORBA::Short _v) 
-  throw (ccReg::PageTable::INVALID_PAGE)
+  throw (Registry::PageTable::INVALID_PAGE)
 {
   aPage = _v;
+}
+
+void 
+ccReg_PageTable_i::setOffset(CORBA::Long _offset)
+{}
+
+void 
+ccReg_PageTable_i::setLimit(CORBA::Long _limit)
+{}
+
+void
+ccReg_PageTable_i::setTimeout(CORBA::Long _timeout)
+{
+    query_timeout = _timeout;
 }
 
 CORBA::Short 
@@ -57,7 +71,7 @@ ccReg_PageTable_i::numPages()
 
 Registry::TableRow* 
 ccReg_PageTable_i::getPageRow(CORBA::Short pageRow)
-  throw (ccReg::Table::INVALID_ROW)
+  throw (Registry::Table::INVALID_ROW)
 {
   return getRow(pageRow + start());
 }
@@ -74,7 +88,7 @@ ccReg_PageTable_i::numPageRows()
 
 ccReg::TID 
 ccReg_PageTable_i::getPageRowId(CORBA::Short row) 
-  throw (ccReg::Table::INVALID_ROW)
+  throw (Registry::Table::INVALID_ROW)
 {
   return getRowId(row + start());
 }
@@ -115,8 +129,8 @@ ccReg_PageTable_i::loadFilter(ccReg::TID _id) {
   uf.clear();
   it.clearF();
 
-  std::auto_ptr<Register::Filter::Manager>
-      tmp_filter_manager(Register::Filter::Manager::create());
+  std::auto_ptr<Fred::Filter::Manager>
+      tmp_filter_manager(Fred::Filter::Manager::create());
   tmp_filter_manager->load(_id, uf);
 }
 
@@ -138,3 +152,16 @@ CORBA::Boolean ccReg_PageTable_i::numRowsOverLimit() {
   return false; 
 }
 
+void ccReg_PageTable_i::reload() {
+    Logging::Context ctx(base_context_);
+    ConnectionReleaser releaser;
+
+    try {
+        reload_worker();
+    } catch(Database::Exception &ex) {
+          std::string message = ex.what();
+          if(message.find(Database::Connection::getTimeoutString()) != std::string::npos) {
+              throw ccReg::Filters::SqlQueryTimeout();
+          }
+    }
+}

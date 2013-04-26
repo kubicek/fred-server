@@ -121,16 +121,6 @@ BankPaymentImpl::addAccountDate()
     return *tmp;
 }
 
-Value<Database::ID> &
-BankPaymentImpl::addInvoiceId()
-{
-    Value<Database::ID> *tmp = new Value<Database::ID>(
-            Column("invoice_id", joinBankPaymentTable()));
-    add(tmp);
-    tmp->setName("InvoiceId");
-    return *tmp;
-}
-
 Value<std::string> &
 BankPaymentImpl::addAccountName()
 {
@@ -167,6 +157,25 @@ BankPaymentImpl::addBankStatement()
     return *tmp;
 }
 
+Value<std::string> &
+BankPaymentImpl::addAccountMemo()
+{
+    Value<std::string> *tmp = new Value<std::string>(
+            Column("account_memo", joinBankPaymentTable()));
+    add(tmp);
+    tmp->setName("AccountMemo");
+    return *tmp;
+}
+
+Value<Database::ID> &
+BankPaymentImpl::addAccountId()
+{
+    Value<Database::ID> *tmp = new Value<Database::ID>(
+            Column("account_id", joinBankPaymentTable()));
+    add(tmp);
+    tmp->setName("AccountId");
+    return *tmp;
+}
 
 } // namespace Filters
 } // namespace Database

@@ -30,27 +30,9 @@
 #include "corba/epp/action.h"
 
 #include <boost/date_time/posix_time/posix_time.hpp>
+#include <boost/date_time/gregorian/gregorian.hpp>
 using namespace boost::posix_time;
 
-void
-ParsedAction::add(unsigned id, const std::string& value)
-{
-  elements[id] = value;
-}
-
-bool 
-ParsedAction::executeSQL(Register::TID actionid, DB* db)
-{
-  std::map<unsigned, std::string>::const_iterator i;
-  for (i=elements.begin();i!=elements.end();i++) {
-    std::stringstream sql;
-    sql << "INSERT INTO action_elements (actionid,elementid,value) VALUES ("
-        << actionid << "," << i->first << ", LOWER('" << db->Escape2(i->second) << "'))";
-    if (!db->ExecSQL(sql.str().c_str()))
-        return false;
-  }
-  return true;
-}
 
 // for invoice  type 
 #define INVOICE_FA  1 // normal invoice
@@ -62,7 +44,6 @@ DB::DB()
   // set mem buffers 
   svrTRID = NULL;
   memHandle=NULL;
-  actionID = 0;
   enum_action=0;
   loginID = 0;
 }
@@ -82,20 +63,24 @@ DB::~DB()
 
 }
 
-long DB::GetRegistrarCredit(
+std::string DB::GetRegistrarCredit(
   int regID, int zoneID)
 {
-  long price=0;
+  std::string price = "0";
   char sqlString[128];
 
-  sprintf(sqlString,
+  snprintf(sqlString, sizeof(sqlString), 
       "SELECT sum( credit) FROM invoice  WHERE  registrarid=%d and zone=%d; ",
       regID, zoneID);
 
-  if (ExecSelect(sqlString) ) {
+  std::stringstream query;
+  query << "SELECT credit FROM registrar_credit"
+        << " WHERE registrar_id = " << regID
+        << " AND zone_id = " << zoneID;
 
+  if (ExecSelect(query.str().c_str())) {
     if (GetSelectRows() == 1) {
-      price = (long) rint( 100.0 * atof(GetFieldValue( 0, 0) ) );
+      price = std::string(GetFieldValue(0, 0));
     }
 
     FreeSelect();
@@ -108,14 +93,19 @@ long DB::GetRegistrarCredit(
 bool DB::TestRegistrarACL(
   int regID, const char * pass, const char * cert)
 {
-  char sqlString[512];
   bool ret =false;
 
-  sprintf(
-      sqlString,
-      "SELECT  registrarid FROM registraracl WHERE registrarid=%d and cert=\'%s\' and password=\'%s\'; ",
-      regID, cert, pass);
-  if (ExecSelect(sqlString) ) {
+  // snprintf( sqlString, sizeof(sqlString), 
+  //     "SELECT  registrarid FROM registraracl WHERE registrarid=%d and cert=\'%s\' and password=\'%s\'; ",
+  //     regID, cert, pass);
+
+  std::stringstream query;
+  query << "SELECT registrarid FROM registraracl"
+        << " WHERE registrarid = " << regID
+        << " AND cert = '" << Escape2(cert) << "'"
+        << " AND password = '" << Escape2(pass) << "'";
+
+  if (ExecSelect(query.str().c_str()) ) {
 
     if (GetSelectRows() > 0)
       ret = true;
@@ -125,491 +115,50 @@ bool DB::TestRegistrarACL(
 
   return ret;
 }
-// save EPP message about transfered object
-bool DB::SaveEPPTransferMessage(
-  int oldregID, int regID, int objectID, int type)
-{
-  char xmlString[1024];
-  char regHandle[65];
-  char
-      schema_nsset[] =
-          " xmlns:nsset=\"http://www.nic.cz/xml/epp/nsset-1.2\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.nic.cz/xml/epp/nsset-1.2 nsset-1.2.xsd\" ";
-  char
-      schema_domain[] =
-          " xmlns:domain=\"http://www.nic.cz/xml/epp/domain-1.3\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.nic.cz/xml/epp/domain-1.3 domain-1.3.xsd\" ";
-  char
-      schema_contact[] =
-          " xmlns:contact=\"http://www.nic.cz/xml/epp/contact-1.4\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.nic.cz/xml/epp/contact-1.4 contact-1.4.xsd\" ";
-
-  char
-      schema_keyset[] = 
-      " xmlns:keyset=\"http://www.nic.cz/xml/epp/keyset-1.4\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.nic.cz/xml/epp/keyset-1.4 keyset-1.4.xsd\" ";
-
-  LOG( NOTICE_LOG , "EPPTransferMessage to registrar : %d trasfer objectID %d new registar %d" , oldregID , objectID , regID );
-
-  xmlString[0] = 0; // empty string
-
-  // get registrar handle 
-  strncpy(regHandle, GetRegistrarHandle(regID), sizeof(regHandle) - 1);
-
-  switch (type) {
-    case 1: // contact
-      if (SELECTOBJECTID("CONTACT", "handle", objectID) ) {
-
-        snprintf(
-            xmlString,
-            sizeof(xmlString),
-            "<contact:trnData %s ><contact:id>%s</contact:id><contact:trDate>%s</contact:trDate><contact:clID>%s</contact:clID></contact:trnData>",
-            schema_contact, GetFieldValueName("Name", 0),
-            GetFieldDateTimeValueName("TrDate", 0) , regHandle);
-        FreeSelect();
-      }
-      break;
-    case 2: // nsset
-      if (SELECTOBJECTID("NSSET", "handle", objectID)) {
-        snprintf(
-            xmlString,
-            sizeof(xmlString),
-            "<nsset:trnData %s > <nsset:id>%s</nsset:id><nsset:trDate>%s</nsset:trDate><nsset:clID>%s</nsset:clID></nsset:trnData>",
-            schema_nsset, GetFieldValueName("Name", 0),
-            GetFieldDateTimeValueName("TrDate", 0) , regHandle);
-        FreeSelect();
-      }
-
-      break;
-    case 3: // domain
-      if (SELECTOBJECTID("DOMAIN", "fqdn", objectID) ) {
-        snprintf(
-            xmlString,
-            sizeof(xmlString),
-            "<domain:trnData %s ><domain:name>%s</domain:name><domain:trDate>%s</domain:trDate><domain:clID>%s</domain:clID></domain:trnData>",
-            schema_domain, GetFieldValueName("Name", 0) ,
-            GetFieldDateTimeValueName("TrDate", 0) , regHandle);
-        FreeSelect();
-      }
-      break;
-    case 4: // keyset
-      if (SELECTOBJECTID("KEYSET", "handle", objectID)) {
-          snprintf(
-                  xmlString,
-                  sizeof(xmlString),
-                  "<keyset:trnData %s > <keyset:id>%s</keyset:id><keyset:trDate>%s</keyset:trDate><keyset:clID>%s</keyset:clID></keyset:trnData> ",
-                  schema_keyset, GetFieldValueName("Name", 0),
-                  GetFieldDateTimeValueName("TrDate", 0), regHandle);
-          FreeSelect();
-      }
-      break;
-    default:
-      xmlString[0] = 0; // empty string  
-      break;
-  }
-
-  LOG(DEBUG_LOG , "EPPTransferMessage xmlsString: %s" , xmlString );
-  //  insert message into table message default ExDate + 1 month
-
-  INSERT("message");
-  INTO("Clid");
-  INTO("crdate");
-  INTO("exdate");
-  INTO("seen");
-  INTO("message");
-  VALUE(oldregID); // id of the old registrar 
-  VALUENOW();
-  VALUEPERIOD( 1); // actual datetime plus one month 
-  VALUE( false);
-
-  if (strlen(xmlString) ) {
-    VALUE(xmlString);
-    return EXEC();
-  } else
-    return false;
-
-}
-
-// return price per operation depend on the period in months
-long DB::GetPrice(
-  int operation, int zone, int period)
-{
-  char sqlString[256];
-  long p, price=0; // default price=0
-  int per; // price per period
-
-
-  // specialy for renew operation depend on period
-  if (period > 0)
-    snprintf(
-        sqlString,
-        sizeof(sqlString),
-        "SELECT price , period FROM price_list WHERE valid_from < 'now()'  and ( valid_to is NULL or valid_to > 'now()' )  and operation=%d and zone=%d;",
-        operation, zone);
-  // price for operation not depend on the time interval period
-  else
-    snprintf(
-        sqlString,
-        sizeof(sqlString),
-        "SELECT price  FROM price_list WHERE valid_from < 'now()'  and ( valid_to is NULL or valid_to > 'now()' )  AND  operation=%d and zone=%d;",
-        operation, zone);
-
-  if (ExecSelect(sqlString) ) {
-
-    if (GetSelectRows() == 1) {
-      // get price from database convert numeric  1.00 to 100
-      p = get_price(GetFieldValue( 0, 0) );
-
-      if (period > 0) {
-        per = atoi(GetFieldValue( 0, 1) );
-        // count price 
-        price = period * p / per;
-      } else
-        price = p;
-
-      LOG( NOTICE_LOG , "GetPrice operation %d zone %d period %d   -> price %ld (units) " , operation , zone , period , price);
-    } else
-      price=-1;
-
-    FreeSelect();
-    return price;
-  } else
-    return -2; // ERROR
-}
-
-// save credit to invoice
-bool DB::SaveInvoiceCredit(
-  int regID, int objectID, int operation, int zone, int period,
-  const char *ExDate, long price, long price2, int invoiceID, int invoiceID2)
-{
-  int id;
-
-  LOG( DEBUG_LOG , "SaveInvoiceCredit: uctovani creditu objectID %d ExDate [%s] regID %d" , objectID , ExDate , regID );
-
-  id = GetSequenceID("invoice_object_registry");
-
-  // insert record about billing objects 
-  INSERT("invoice_object_registry");
-  INTO("id");
-  INTO("objectid");
-  INTO("registrarid");
-  INTO("operation");
-  INTO("zone");
-  INTO("period");
-  INTOVAL("ExDate", ExDate); // if is set ExDate for renew 
-  VALUE(id);
-  VALUE(objectID);
-  VALUE(regID);
-  VALUE(operation);
-  VALUE(zone);
-  VALUE(period);
-  VAL(ExDate);
-  if (EXEC() ) {
-
-    LOG( DEBUG_LOG , "SaveInvoiceCredit:   price %ld   invoiceID %d" , price , invoiceID );
-
-    INSERT("invoice_object_registry_price_map");
-    INTO("id");
-    INTO("invoiceID");
-    INTO("price");
-    VALUE(id);
-    VALUE(invoiceID);
-    VALPRICE(price);
-    if ( !EXEC() ) {
-      LOG( ERROR_LOG , "ERROR insert invoice_object_registry_price_map" );
-      return false;
-    }
-
-    if (price2) // save next price credit came from next advance invoice
-    {
-      LOG( DEBUG_LOG , "uctovani creditu  price2 %ld   invoiceID2 %d" , price2 , invoiceID2 );
-
-      INSERT("invoice_object_registry_price_map");
-      INTO("id");
-      INTO("invoiceID");
-      INTO("price");
-      VALUE(id);
-      VALUE(invoiceID2);
-      VALPRICE(price2);
-      if ( !EXEC() ) {
-        LOG( ERROR_LOG , "ERROR insert invoice_object_registry_price_map price2" );
-        return false;
-      }
-    }
-
-    return true;
-  } else {
-    LOG( ERROR_LOG , "ERROR SaveInvoiceCredit invoiceID %d objectid %d " , invoiceID , objectID );
-    return false;
-  }
-
-}
-
-bool DB::InvoiceCountCredit(
-  long price, int invoiceID)
-{
-  char sqlString[256];
-
-  // if the zero price not update credit 
-  if (price == 0) {
-    LOG( DEBUG_LOG , "nulova castka nemenim credit u invoiceID %d" , invoiceID );
-    return true;
-  } else {
-    // count credit on the advance invoice
-    sprintf(sqlString,
-        "UPDATE invoice SET  credit=credit-%ld%c%02ld  WHERE id=%d;", price
-            /100, '.', price %100, invoiceID);
-    if (ExecSQL(sqlString) )
-      return true;
-    else {
-      LOG( ERROR_LOG , "error InvoiceCountCredit invoice  %d price %ld" , invoiceID , price );
-      return false;
-    }
-  }
-
-}
-
-// billing operation   CREATE domain
-bool DB::BillingCreateDomain(
-  int regID, int zone, int objectID)
-{
-  return UpdateInvoiceCredit(regID, OPERATION_DomainCreate, zone, 0, "",
-      objectID);
-}
-// billing operation RENEW domain
-bool DB::BillingRenewDomain(
-  int regID, int zone, int objectID, int period, const char *ExDate)
-{
-  return UpdateInvoiceCredit(regID, OPERATION_DomainRenew, zone, period,
-      ExDate, objectID);
-}
-
-// count credit from one or two  advance invoice 
-bool DB::UpdateInvoiceCredit(
-  int regID, int operation, int zone, int period, const char *ExDate,
-  int objectID)
-{
-  char sqlString[256];
-  long price, credit;
-  long price1, price2;
-  int invoiceID;
-  int invID[2];
-  long cr[2];
-  int i;
-  int num = 0;
-
-  LOG( DEBUG_LOG , "UpdateInvoiceCredit operation %d objectID %d ExDate [%s]  period %d regID %d" , operation , objectID , ExDate , period , regID );
-
-  // system registrar work free without invoicing 
-  if (GetRegistrarSystem(regID) == true)
-    return true;
-
-  // get price per operation  for zone and interval period
-  price = GetPrice(operation, zone, period);
-
-  if (price == -2)
-    return false; // SQL error get price
-
-  // if the price not set  the operation is allowed and not billing
-  if (price == -1)
-    return true;
-
-  // query where is a credit on the advance invoice get maximal two 
-  snprintf(
-      sqlString,
-      sizeof(sqlString),
-      "SELECT id, credit FROM invoice WHERE registrarid=%d and zone=%d and credit > 0 order by id limit 2 FOR UPDATE;",
-      regID, zone);
-
-  invoiceID=0;
-
-  if (ExecSelect(sqlString) ) {
-    num = GetSelectRows();
-
-    for (i = 0; i < num; i ++) {
-
-      invID[i] = atoi(GetFieldValue(i, 0) );
-      // credit 
-      cr[i] = (long) rint( 100.0 * atof(GetFieldValue(i, 1) ) );
-    }
-    FreeSelect();
-  }
-
-  // not any advance invoice can not billing credit
-  if (num == 0)
-    return false;
-
-  credit= cr[0];
-  invoiceID=invID[0];
-
-  if (credit - price > 0) {
-
-    if (SaveInvoiceCredit(regID, objectID, operation, zone, period, ExDate,
-        price, 0, invoiceID, 0) ) {
-      return InvoiceCountCredit(price, invoiceID);
-    }
-
-  } else {
-
-    if (num == 2) // if exist next advance invoice 
-    {
-
-      price1= cr[0]; // balance on the first invoice 
-      price2= price - cr[0]; // next credit get from second  invoice
-
-      // biling 
-      if (SaveInvoiceCredit(regID, objectID, operation, zone, period, ExDate,
-          price1, price2, invID[0], invID[1]) ) {
-        if (InvoiceCountCredit(cr[0], invID[0]) ) // count to zero on the first invoice 
-        {
-          invoiceID=invID[1];
-          LOG( DEBUG_LOG , "UpdateInvoiceCredit: price  credit0 %ld credit1 %ld price %ld second price %ld" , cr[0] , cr[1] , price1 , price2 );
-
-          if (cr[1] - price2 >= 0) { 
-            // second invoice 
-            return InvoiceCountCredit(price2, invID[1]);
-
-          } else
-            LOG( WARNING_LOG , "UpdateInvoiceCredit: not enough credit on second invoice id %d: price left after charging previous invoice: %ld, credit on this invoice: %ld", invoiceID, price2, cr[1]);
-
-        }
-
-      }
-
-    } else
-      LOG( WARNING_LOG , "UpdateInvoiceCredit: not next invoice to count ");
-
-  }
-
-  return false;
-}
-
-int DB::SaveXMLout(
-  const char *svTRID, const char *xml)
-{
-  int actionID;
-
-  actionID = GetNumericFromTable("action", "id", "serverTRID", svTRID);
-
-  if (actionID > 0) {
-
-    if (strlen(xml) ) {
-      UPDATE("Action_XML");
-      SET("xml_out", xml);
-      WHERE("actionID", actionID);
-      if (EXEC() )
-        return true;
-    }
-
-  }
-
-  // default
-  return false;
-}
 
 // action 
 bool DB::BeginAction(
-  int clientID, int action, const char *clTRID, const char *xml,
-  ParsedAction* paction
+  unsigned long long clientID, int action, const char *clTRID, const char *xml,
+  unsigned long long requestID
 )
 {
 
-  bool ret = false;
-
   if (!BeginTransaction())
       return false;
-
-  // actionID for loging all action
-  actionID = GetSequenceID("action");
+  
   loginID = clientID; // id of corba client
   historyID = 0; // history ID 
 
-
-  if (actionID) {
-
-    //    make  server ticket  svrTRID
-
-    if (svrTRID==NULL) {
+  if (svrTRID==NULL) {
       svrTRID= new char[MAX_SVTID];
+      strncpy(svrTRID,
+          Util::make_svtrid(requestID).c_str(),
+          MAX_SVTID - 1
+      );
 
-      // create  server ticket
-      sprintf(svrTRID, "ccReg-%010d", actionID);
       LOG( SQL_LOG , "Make svrTRID: %s" , svrTRID );
-    }
-
-    // EPP operation
-    enum_action=action;
-
-    // write to action table
-    INSERT("ACTION");
-    INTO("id");
-    if (clientID > 0)
-      INTO("clientID");
-    INTO("action");
-    INTO("clienttrid");
-
-    VALUE(actionID);
-    if (clientID > 0)
-      VALUE(clientID);
-    VALUE(action);
-    VALUE(clTRID);
-
-    if (EXEC() ) {
-      // write XML from epp-client
-      if (strlen(xml) ) {
-        INSERT("Action_XML");
-        VALUE(actionID);
-        VALUE(xml);
-        if (EXEC() )
-          ret = true;
-      } else
-        ret = true;
-    }
-
-    if (ret == true) {
-      if (paction)
-        ret = paction->executeSQL(actionID,this);
-    }
   }
 
-  QuitTransaction(ret ? CMD_OK : 0);
+  QuitTransaction(CMD_OK);
 
-  return ret;
+  enum_action = action;
+
+  return true;
 }
 
 // end of EPP operation
 const char * DB::EndAction(
   int response)
 {
-  int id;
-
-  if (actionID == 0)
-    return "no action";
-  else {
-
-    UPDATE("ACTION");
-    if (response > 0)
-      SET("response", response);
-    SET("enddate", "now");
-    SSET("servertrid", svrTRID); // without escape
-    WHEREID(actionID);
-
-    // update table
-    id = actionID;
-    actionID = 0;
     LOG( SQL_LOG , "EndAction svrTRID: %s" , svrTRID );
-
-    if (EXEC() )
-      return svrTRID;
-    else {
-      LOG( ERROR_LOG , "End action DATABASE_ERROR" );
-      return "";
-    }
-
-  }
+    return svrTRID;
 
 }
 
 const char * DB::GetObjectCrDateTime(
   int id)
 {
-  convert_rfc3339_timestamp(dtStr, GetValueFromTable("OBJECT_registry",
+  convert_rfc3339_timestamp(dtStr, MAX_DATE+1, GetValueFromTable("OBJECT_registry",
       "CrDate", "id", id) );
   return dtStr;
 }
@@ -636,14 +185,14 @@ const char * DB::GetDomainValExDate(
 char * DB::GetFieldDateTimeValueName(
   const char *fname, int row)
 {
-  convert_rfc3339_timestamp(dtStr, GetFieldValueName( (char * ) fname , row) ) ;
+  convert_rfc3339_timestamp(dtStr, MAX_DATE+1, GetFieldValueName( (char * ) fname , row) ) ;
   return dtStr;
 }
 
 char * DB::GetFieldDateValueName(
   const char *fname, int row)
 {
-  convert_rfc3339_date(dtStr, GetFieldValueName( (char * ) fname , row) ) ;
+  convert_rfc3339_date(dtStr, MAX_DATE+1, GetFieldValueName( (char * ) fname , row) ) ;
   return dtStr;
 }
 
@@ -654,7 +203,7 @@ int DB::GetNSSetHosts(
   char sqlString[128];
   int num=0;
 
-  sprintf(sqlString, "SELECT id FROM host  WHERE nssetID=%d;", nssetID);
+  snprintf(sqlString, sizeof(sqlString), "SELECT id FROM host  WHERE nssetID=%d;", nssetID);
 
   if (ExecSelect(sqlString) ) {
     num = GetSelectRows();
@@ -672,7 +221,7 @@ DB::GetKeySetDSRecords(int keysetID)
     char sqlString[128];
     int num = 0;
 
-    sprintf(sqlString, "SELECT id FROM dsrecord WHERE keysetid=%d;", keysetID);
+    snprintf(sqlString, sizeof(sqlString), "SELECT id FROM dsrecord WHERE keysetid=%d;", keysetID);
 
     if (ExecSelect(sqlString)) {
         num = GetSelectRows();
@@ -830,7 +379,7 @@ bool DB::TestObjectClientID(
   if (GetRegistrarSystem(regID) == true)
     return true; // has rights for all object
   else {
-    sprintf(sqlString, "SELECT id FROM  object WHERE id=%d and clID=%d ", id,
+    snprintf(sqlString, sizeof(sqlString), "SELECT id FROM  object WHERE id=%d and clID=%d ", id,
         regID);
     if (ExecSelect(sqlString) ) {
       if (GetSelectRows() == 1)
@@ -888,8 +437,7 @@ int DB::GetObjectID(
   char sqlString[512];
   int id=0;
 
-  sprintf(
-      sqlString,
+  snprintf( sqlString, sizeof(sqlString), 
       "SELECT object.id FROM object_registry , object WHERE object_registry.type=%d AND object_registry.id=object.id AND object_registry.name=\'%s\';",
       type, name);
   if (ExecSelect(sqlString) ) {
@@ -911,7 +459,7 @@ int DB::GetNSSetContacts(
   char sqlString[128];
   int num=0;
 
-  sprintf(sqlString, "SELECT * FROM nsset_contact_map  WHERE nssetID=%d;",
+  snprintf(sqlString, sizeof(sqlString), "SELECT * FROM nsset_contact_map  WHERE nssetID=%d;",
       nssetID);
 
   if (ExecSelect(sqlString) ) {
@@ -929,7 +477,7 @@ DB::GetKeySetContacts(int keysetid)
 {
     char sqlString[128];
     int num = 0;
-    sprintf(sqlString, "SELECT * FROM keyset_contact_map WHERE keysetid=%d;",
+    snprintf(sqlString, sizeof(sqlString), "SELECT * FROM keyset_contact_map WHERE keysetid=%d;",
             keysetid);
 
     if (ExecSelect(sqlString)) {
@@ -1001,7 +549,7 @@ bool DB::TestObjectHistory(
    if( days > 0 )
    {
    // it doesn't depend if lowercase or uppercase 
-   sprintf( sqlString , "SELECT count( id ) FROM object_delete  WHERE name ILIKE \'%s\' and  deltime  > current_timestamp - interval\'%d days\';"  , name , days );
+   snprintf( sqlString , "SELECT count( id ) FROM object_delete  WHERE name ILIKE \'%s\' and  deltime  > current_timestamp - interval\'%d days\';"  , name , days );
 
    if( ExecSelect( sqlString ) )
    {
@@ -1078,7 +626,7 @@ bool DB::GetRegistrarSystem(
   char sqlString[128];
   bool ret=false;
 
-  sprintf(sqlString, "SELECT system FROM registrar where id=%d;", regID);
+  snprintf(sqlString, sizeof(sqlString), "SELECT system FROM registrar where id=%d;", regID);
   if (ExecSelect(sqlString) ) {
     if (GetSelectRows() == 1) {
       ret = GetFieldBooleanValueName("system", 0);
@@ -1107,10 +655,11 @@ bool DB::TestRegistrarZone(
   if (GetRegistrarSystem(regID) == true)
     return true;
 
-  sprintf(
-      sqlString,
-      "SELECT  id  FROM  registrarinvoice  WHERE registrarid=%d and zone=%d and fromdate <= CURRENT_DATE and (todate >= CURRENT_DATE or todate is null);",
-      regID, zone);
+  std::string today = boost::gregorian::to_iso_extended_string(boost::gregorian::day_clock::local_day());
+
+  snprintf( sqlString, sizeof(sqlString), 
+      "SELECT  id  FROM  registrarinvoice  WHERE registrarid=%d and zone=%d and fromdate <= '%s' and (todate >= '%s' or todate is null);",
+      regID, zone, today.c_str(), today.c_str());
 
   if (ExecSelect(sqlString) ) {
     if (GetSelectRows() > 0) {
@@ -1146,7 +695,7 @@ bool DB::AddContactMap(
 {
   char sqlString[128];
 
-  sprintf(sqlString, "INSERT INTO %s_contact_map VALUES ( %d , %d );", table,
+  snprintf(sqlString, sizeof(sqlString), "INSERT INTO %s_contact_map VALUES ( %d , %d );", table,
       id, contactid);
 
   return ExecSQL(sqlString);
@@ -1163,12 +712,13 @@ bool DB::TestValExDate(
   // std::stringstream sql;
 
   // actual local date based on the timezone
-  get_rfc3339_timestamp(time(NULL) , currentDate, true);
+  get_rfc3339_timestamp(time(NULL) , currentDate, MAX_DATE+1, true);
 
   if (id) // if ValExDate already exist and updated 
   {
     // copy current Exdate during update 
     strncpy(exDate, GetDomainValExDate(id), MAX_DATE) ;
+    exDate[MAX_DATE] = '\0';
 
     // USE SQL for calculate
     // test if the ExDate is lager then actual date and less or equal to protected period (interval days)
@@ -1268,7 +818,7 @@ int DB::GetHostID(
   char sqlString[128];
   int hostID=0;
 
-  sprintf(sqlString, "SELECT id FROM HOST WHERE fqdn=\'%s\' AND nssetid=%d;",
+  snprintf(sqlString, sizeof(sqlString), "SELECT id FROM HOST WHERE fqdn=\'%s\' AND nssetid=%d;",
       fqdn, nssetID);
 
   if (ExecSelect(sqlString) ) {
@@ -1292,7 +842,7 @@ bool DB::TestNSSetRelations(
   bool ret = false;
   char sqlString[128];
 
-  sprintf(sqlString, "SELECT id from DOMAIN WHERE nsset=%d;", id);
+  snprintf(sqlString, sizeof(sqlString), "SELECT id from DOMAIN WHERE nsset=%d;", id);
   if (ExecSelect(sqlString) ) {
     if (GetSelectRows() > 0)
       ret=true;
@@ -1309,7 +859,7 @@ DB::TestKeySetRelations(int id)
     bool ret = false;
     char sqlString[128];
 
-    sprintf(sqlString, "SELECT id FROM DOMAIN WHERE keyset=%d;", id);
+    snprintf(sqlString, sizeof(sqlString), "SELECT id FROM DOMAIN WHERE keyset=%d;", id);
     if (ExecSelect(sqlString)) {
         if (GetSelectRows() > 0)
             ret = true;
@@ -1324,7 +874,7 @@ bool DB::TestContactRelations(
   int count=0;
   char sqlString[128];
 
-  sprintf(sqlString, "SELECT count(id) from DOMAIN WHERE Registrant=%d;", id);
+  snprintf(sqlString, sizeof(sqlString), "SELECT count(id) from DOMAIN WHERE Registrant=%d;", id);
   if (ExecSelect(sqlString) ) {
     count = atoi(GetFieldValue( 0, 0) );
     FreeSelect();
@@ -1333,7 +883,7 @@ bool DB::TestContactRelations(
   if (count > 0)
     return true;
 
-  sprintf(sqlString,
+  snprintf(sqlString, sizeof(sqlString),
       "SELECT count(nssetID ) from NSSET_CONTACT_MAP WHERE contactid=%d;", id);
   if (ExecSelect(sqlString) ) {
     count = atoi(GetFieldValue( 0, 0) );
@@ -1343,7 +893,7 @@ bool DB::TestContactRelations(
   if (count > 0)
     return true;
 
-  sprintf(sqlString,
+  snprintf(sqlString, sizeof(sqlString), 
           "SELECT count(keysetID) from KEYSET_CONTACT_MAP WHERE contactid=%d;", id);
   if (ExecSelect(sqlString)) {
       count = atoi(GetFieldValue(0, 0));
@@ -1353,7 +903,7 @@ bool DB::TestContactRelations(
   if (count > 0)
     return true;
 
-  sprintf(sqlString,
+  snprintf(sqlString, sizeof(sqlString), 
       "SELECT count( domainID)  from DOMAIN_CONTACT_MAP WHERE contactid=%d;",
       id);
   if (ExecSelect(sqlString) ) {
@@ -1376,7 +926,7 @@ bool DB::AuthTable(
   const char *pass;
   char sqlString[128];
 
-  sprintf(sqlString, "SELECT authinfopw from %s WHERE id=%d", table, id);
+  snprintf(sqlString, sizeof(sqlString), "SELECT authinfopw from %s WHERE id=%d", table, id);
 
   if (ExecSelect(sqlString) ) {
     if (GetSelectRows() == 1) {
@@ -1391,796 +941,7 @@ bool DB::AuthTable(
   return ret;
 }
 
-int DB::GetSystemVAT() // return VAT for invoicing depend on the time
-{
-  char sqlString[128] =
-      "select vat from price_vat where valid_to > now() or valid_to is null;";
-  int dph=0;
 
-  if (ExecSelect(sqlString) ) {
-    if (GetSelectRows() == 1) {
-      dph = atoi(GetFieldValue( 0, 0) );
-    }
-    FreeSelect();
-  }
-
-  return dph;
-}
-
-double DB::GetSystemKOEF() // return VAT count parametr for count price without VAT
-{
-  char sqlString[128] =
-      "select koef   from price_vat where valid_to > now() or valid_to is null;";
-  double koef = 0;
-
-  if (ExecSelect(sqlString) ) {
-    if (GetSelectRows() == 1) {
-      koef = atof(GetFieldValue( 0, 0) );
-    }
-    FreeSelect();
-  }
-
-  return koef;
-}
-
-// get ID of back account
-int DB::GetBankAccount(
-  const char *accountStr, const char *codeStr)
-{
-  std::stringstream sqlString;
-  int accountID=0;
-
-  LOG( LOG_DEBUG ,"GetBankAccount account %s , code %s" , accountStr ,codeStr );
-  sqlString
-      << "SELECT id FROM bank_account WHERE trim(leading '0' from account_number)="
-      << "trim(leading '0' from '"
-      << accountStr
-      << "') AND bank_code='"
-      << codeStr
-      << "';";
-  if (ExecSelect(sqlString.str().c_str()) ) {
-    if (GetSelectRows() == 1) {
-      accountID=atoi(GetFieldValue( 0, 0) );
-      LOG( LOG_DEBUG ,"get accountId %d" , accountID );
-    }
-    FreeSelect();
-  }
-  return accountID;
-}
-
-// get zone for bank account
-int DB::GetBankAccountZone(
-  int accountID)
-{
-  char sqlString[128];
-  int zone=0;
-
-  LOG( LOG_DEBUG ,"GetBankAccountZone accountID %d" , accountID );
-  sprintf(sqlString, "SELECT  zone  FROM bank_account WHERE id=%d", accountID);
-
-  if (ExecSelect(sqlString) ) {
-    if (GetSelectRows() == 1) {
-      zone = atoi(GetFieldValue( 0, 0) );
-      LOG( LOG_DEBUG ,"get zone %d" , zone );
-    }
-    FreeSelect();
-  }
-
-  return zone;
-}
-
-// test balance on the account for importing bank statement
-int DB::TestBankAccount(
-  const char *accountStr, int num, long oldBalance, char *bank)
-{
-  int accountID=0;
-  int lastNum=0;
-  long lastBalance=0;
-
-  if (SELECTONE("bank_account", "account_number", accountStr) ) {
-    if (GetSelectRows() == 1) {
-      accountID = atoi(GetFieldValueName("id", 0) );
-      lastNum = atoi(GetFieldValueName("last_num", 0) );
-      lastBalance
-          = (long) rint( 100.0 * atof(GetFieldValueName("balance", 0) ) );
-      strncpy(bank, GetFieldValueName("bank_code", 0), 4);
-    }
-
-    FreeSelect();
-  }
-
-  if (accountID) {
-    LOG( LOG_DEBUG ,"posledni vypis ucetID %d cislo %d zustatek na uctu %ld" , accountID , lastNum , lastBalance);
-
-    // test for numer of statement not for the first statement
-    if (num > 1) {
-      if (lastNum + 1 != num) {
-        LOG( ERROR_LOG , "chyba nesedi cislo  vypisu %d  posledni nacteny je %d" , num , lastNum );
-      }
-    }
-
-    // next test if balance is ok
-    if (oldBalance == lastBalance)
-      return accountID;
-    else {
-      LOG( ERROR_LOG , "chyba nesedi zustatek na uctu poslednu zustatek %ld nacitany stav %ld" , lastBalance , oldBalance );
-    }
-
-  } else {
-    LOG( ERROR_LOG , "nelze najit ucet na vypisu cislo %s" , accountStr );
-  }
-
-  return 0;
-}
-
-// update on the bank account
-bool DB::UpdateBankAccount(
-  int accountID, char *date, int num, long newBalance)
-{
-
-  UPDATE("bank_account");
-  SET("last_date", date);
-  SET("last_num", num);
-  SETPRICE("balance", newBalance);
-  WHEREID(accountID);
-
-  return EXEC();
-}
-
-// save bank statement 
-int DB::SaveBankHead(
-  int accountID, int num, char *date, char *oldDate, long oldBalance,
-  long newBalance, long credit, long debet)
-{
-  int statemetID;
-
-  statemetID = GetSequenceID("bank_statement_head");
-
-  INSERT("bank_statement_head");
-  INTO("id");
-  INTO("account_id");
-  INTO("num");
-  INTO("create_date");
-  INTO("balance_old_date");
-  INTO("balance_old");
-  INTO("balance_new");
-  INTO("balance_credit");
-  INTO("balance_debet");
-  VALUE(statemetID);
-  VALUE(accountID);
-  VALUE(num);
-  VALUE(date);
-  VALUE(oldDate);
-  VALPRICE(oldBalance);
-  VALPRICE(newBalance);
-  VALPRICE(credit);
-  VALPRICE(debet);
-
-  if (EXEC() )
-    return statemetID;
-  else
-    return 0;
-
-}
-//  save items of bank statement
-int DB::SaveBankItem(
-  int statemetID, char *account, char *bank, char *evidNum, char *date,
-  char *memo, int code, char *konstSymb, char *varSymb, char *specsymb,
-  long price)
-{
-  int itemID;
-
-  itemID = GetSequenceID("bank_statement_item");
-  if (itemID <= 0)
-    return 0;
-
-  INSERT("bank_statement_item");
-  INTO("id");
-  INTO("statement_id");
-  INTO("account_number");
-  INTO("bank_code");
-  INTO("account_evid");
-  INTO("account_date");
-  INTO("account_memo");
-  INTO("code");
-  INTO("konstsym");
-  INTO("varsymb");
-  INTO("specsymb");
-  INTO("price");
-  VALUE(itemID);
-  VALUE(statemetID);
-  VALUE(account);
-  VALUE(bank);
-  VALUE(evidNum);
-  VALUE(date);
-  VALUE(memo);
-  VALUE(code);
-  VALUE(konstSymb);
-  VALUE(varSymb);
-  VALUE(specsymb);
-  VALPRICE(price);
-
-  if (!EXEC())
-    return 0;
-  return itemID;
-}
-
-// mark bank statement as imported
-bool DB::UpdateBankStatementItem(
-  int id, int invoiceID)
-{
-  UPDATE("bank_statement_item");
-  SET("invoice_id", invoiceID);
-  WHEREID(id);
-  return EXEC();
-}
-
-// for E-Banka https bank statement
-int DB::TestEBankaList(
-  const char *ident)
-{
-  char sqlString[128];
-  int id=0;
-
-  sprintf(sqlString, "SELECT  id    from BANK_EBANKA_LIST where ident=\'%s\'",
-      ident);
-
-  if (ExecSelect(sqlString) ) {
-    if (GetSelectRows() == 1) {
-      id= atoi(GetFieldValue( 0, 0) );
-
-    }
-    FreeSelect();
-  }
-
-  return id;
-}
-
-int DB::SaveEBankaList(
-  int account_id, const char *ident, long price, const char *datetimeStr,
-  const char *accountStr, const char *codeStr, const char *varsymb,
-  const char *konstsymb, const char *nameStr, const char *memoStr)
-{
-  int ID;
-
-  // if not readed
-  if (TestEBankaList(ident) == false) {
-
-    ID = GetSequenceID("bank_ebanka_list");
-
-    INSERT("BANK_EBANKA_LIST");
-    INTO("id");
-    INTO("account_id");
-    INTO("account_number");
-    INTO("bank_code");
-    INTO("konstsym");
-    INTO("varsymb");
-    INTO("memo");
-    INTO("name");
-    INTO("ident");
-    INTO("crdate");
-    INTO("price");
-    VALUE(ID);
-    VALUE(account_id);
-    VALUE(accountStr);
-    VALUE(codeStr);
-    VALUE(konstsymb);
-    VALUE(varsymb);
-    VALUE(memoStr);
-    VALUE(nameStr);
-    VALUE(ident);
-    VALUE(datetimeStr);
-    VALPRICE(price);
-
-    if (EXEC() )
-      return ID;
-    else
-      return -1; // error
-  } else
-    return 0;
-}
-
-// mark e-banka statement as imported on advance invoice
-bool DB::UpdateEBankaListInvoice(
-  int id, int invoiceID)
-{
-  UPDATE("BANK_EBANKA_LIST");
-  SET("invoice_id", invoiceID);
-  WHEREID(id);
-  return EXEC();
-
-}
-
-// count new balance on advance invoice from total and all usages of that invoice 
-long DB::GetInvoiceBalance(
-  int aID, long credit)
-{
-  char sqlString[512];
-  long total, suma;
-  long price=-1; // err value
-
-
-  LOG( NOTICE_LOG , "GetInvoiceBalance: zalohova FA %d" , aID );
-
-  sprintf(sqlString, "select total from invoice where id=%d", aID);
-
-  if (ExecSelect(sqlString) ) {
-    total = (long) rint( 100.0 * atof(GetFieldValue( 0, 0) ) );
-    LOG( NOTICE_LOG , "celkovy zaklad faktury %ld" , total );
-    FreeSelect();
-
-    sprintf(
-        sqlString,
-        "SELECT sum( credit ) FROM invoice_credit_payment_map where ainvoiceid=%d;",
-        aID);
-    if (ExecSelect(sqlString) ) {
-      suma = (long) rint( 100.0 * atof(GetFieldValue( 0, 0) ) );
-      LOG( NOTICE_LOG , "sectweny credit %ld  pro zal FA" , suma );
-      FreeSelect();
-    } else
-      return -2; // err
-
-    price = total - suma - credit;
-    LOG( NOTICE_LOG , "celkovy zustatek pri  uzavreni Fa %ld" , price );
-
-  } else
-    return -1; // err
-
-  return price;
-}
-// return accounted price for invoice  iID from advance invoice  FA aID
-long DB::GetInvoiceSumaPrice(
-  int iID, int aID)
-{
-  char sqlString[512];
-  long price=-1; // err value
-  LOG( NOTICE_LOG , "GetInvoiceSumaPrice invoiceID %d zalohova FA %d" , iID , aID );
-
-  sprintf(
-      sqlString,
-      "SELECT  sum( invoice_object_registry_price_map.price ) FROM invoice_object_registry ,  invoice_object_registry_price_map\
-                 WHERE invoice_object_registry.id=invoice_object_registry_price_map.id AND invoice_object_registry.invoiceid=%d AND \
-                   invoice_object_registry_price_map.invoiceid=%d; ",
-      iID, aID);
-
-  if (ExecSelect(sqlString) ) {
-    if (IsNotNull( 0, 0) ) {
-      price = (long) rint( 100.0 * atof(GetFieldValue( 0, 0) ) );
-      LOG( NOTICE_LOG , "celkovy strezeny credit z dane zal  Fa %ld" , price );
-    }
-
-    FreeSelect();
-  } else
-    return -1; // error
-
-  return price;
-}
-
-// invoicing make new invoice
-int DB::MakeFactoring(
-  int regID, int zone, const char *timestampStr, const char *taxDateStr)
-{
-  char sqlString[512];
-  int invoiceID=-1;
-  int *aID;
-  int i, num;
-  char fromdateStr[MAX_DATE+1];
-  char todateStr[MAX_DATE+1];
-  int count=-1;
-  long price = 0, credit, balance;
-
-  LOG( NOTICE_LOG , "MakeFactoring regID %d zone %d" , regID , zone );
-
-  // First step look into table invoice_generation till when invoicing was realised and this value 
-  // todate take as from date
-  fromdateStr[0]=0;
-
-  // last record todate plus one day
-  snprintf(
-      sqlString,
-      sizeof(sqlString),
-      "SELECT date( todate + interval'1 day')  from invoice_generation  WHERE zone=%d  AND registrarid =%d  order by id desc limit 1;",
-      zone, regID);
-  if (ExecSelect(sqlString) ) {
-    if (GetSelectRows() == 1) {
-      strncpy(fromdateStr, GetFieldValue( 0, 0), MAX_DATE);
-    }
-    FreeSelect();
-  } else
-    return -1; // error
-
-
-  // else STEP 2 
-
-  if (fromdateStr[0]== 0) {
-    // find out fromdate from tabel registrarinvoice from when invoicing 
-    sprintf(
-        sqlString,
-        "SELECT  fromdate  from registrarinvoice  WHERE zone=%d and registrarid=%d;",
-        zone, regID);
-    if (ExecSelect(sqlString) ) {
-
-      if (IsNotNull( 0, 0) ) {
-        strncpy(fromdateStr, GetFieldValue( 0, 0), MAX_DATE);
-      }
-
-      FreeSelect();
-    } else
-      return -1; // error
-
-  }
-
-  // 
-  strncpy(todateStr, timestampStr, 10);
-  todateStr[10] = 0;
-  LOG( NOTICE_LOG , "Fakturace od %s do %s timestamp [%s] " , fromdateStr , todateStr , timestampStr );
-
-  // find out amount of item for invoicing
-  sprintf(
-      sqlString,
-      "SELECT count( id)  from invoice_object_registry  where crdate < \'%s\' AND  zone=%d AND registrarid=%d AND invoiceid IS NULL;",
-      timestampStr, zone, regID);
-  if (ExecSelect(sqlString) ) {
-    count = atoi(GetFieldValue( 0, 0) ) ;
-    FreeSelect();
-  } else
-    return -2; // error
-
-
-  // find out total invoiced price if it exists al least one record
-  if (count > 0) {
-    sprintf(
-        sqlString,
-        "SELECT sum( price ) FROM invoice_object_registry , invoice_object_registry_price_map  WHERE   invoice_object_registry_price_map.id=invoice_object_registry.id AND  crdate < \'%s\' AND zone=%d and registrarid=%d AND  invoice_object_registry.invoiceid is null ;",
-        timestampStr, zone, regID);
-    if (ExecSelect(sqlString) ) {
-      price = (long) rint( 100.0 * atof(GetFieldValue( 0, 0) ) );
-      LOG( NOTICE_LOG , "Celkova castka na fakture %ld" , price );
-      FreeSelect();
-    }
-  } else
-    price = 0; // else null price
-
-
-  // empty invoice invoicing record
-  // returns invoiceID or null if nothings was invoiced, on error returns negative number of error
-  if ( (invoiceID = MakeNewInvoice(taxDateStr, fromdateStr, todateStr, zone,
-      regID, price, count) ) >= 0) {
-
-    if (count > 0) // mark item of invoice
-    {
-      sprintf(
-          sqlString,
-          "UPDATE invoice_object_registry set invoiceid=%d  WHERE crdate < \'%s\' AND zone=%d and registrarid=%d AND invoiceid IS NULL;",
-          invoiceID, timestampStr, zone, regID);
-      if (ExecSQL(sqlString) == false)
-        return -3; // error
-
-    }
-
-    // set last date into tabel registrarinvoice
-    sprintf(
-        sqlString,
-        "UPDATE registrarinvoice SET lastdate=\'%s\' WHERE zone=%d and registrarid=%d;",
-        todateStr, zone, regID);
-    if (ExecSQL(sqlString) == false)
-      return -4; // error
-    // if invoice was created  
-    if (invoiceID > 0) {
-
-      // query for all advance invoices, from which were gathered for taxes FA 
-      snprintf(
-          sqlString,
-          sizeof(sqlString),
-          "select invoice_object_registry_price_map.invoiceid from  invoice_object_registry ,  invoice_object_registry_price_map  where invoice_object_registry.id=invoice_object_registry_price_map.id and invoice_object_registry.invoiceid=%d  GROUP BY invoice_object_registry_price_map.invoiceid ; ",
-          invoiceID);
-      // EXEC SQL a insert  invoice_credit_payment_map
-
-      if (ExecSelect(sqlString) ) {
-        num = GetSelectRows();
-        aID = new int[num];
-
-        // OS: to je stejně čuňárna, proč se to nedělá v jedné smyčce?
-
-        for (i = 0; i < num; i ++) {
-          aID[i] = atoi(GetFieldValue(i, 0) );
-          LOG( LOG_DEBUG ,"zalohova FA -> %d" , aID[i]);
-        }
-        FreeSelect();
-
-        // insert into table invoice_credit_payment_map;
-        for (i = 0; i < num; i ++) {
-          credit = GetInvoiceSumaPrice(invoiceID, aID[i]);
-          balance = GetInvoiceBalance(aID[i], credit); // actual available balance
-          if (balance >=0) {
-            LOG( LOG_DEBUG ,"zalohova FA  %d credit %ld balance %ld" , aID[i] , credit , balance );
-            INSERT("invoice_credit_payment_map");
-            INTO("invoiceid");
-            INTO("ainvoiceid");
-            INTO("credit");
-            INTO("balance");
-            VALUE(invoiceID);
-            VALUE(aID[i]);
-            VALPRICE(credit);
-            VALPRICE(balance);
-            if ( !EXEC() ) {
-              delete[] aID;
-              return -7;
-            } // error
-          } else {
-            delete[] aID;
-            return -8;
-          } // error
-
-        }
-
-        delete[] aID;
-      } else
-        return -6; // error
-    }
-  } else
-    return -5; // invoice creation wasn't successful
-
-  return invoiceID;
-}
-
-int DB::MakeNewInvoice(
-  const char *taxDateStr, const char *fromdateStr, const char *todateStr,
-  int zone, int regID, long price, unsigned int count)
-{
-  int invoiceID;
-  long prefix;
-  int type;
-  int dph;
-
-  LOG( LOG_DEBUG ,"MakeNewInvoice taxdate[%s]  fromdateStr [%s] todateStr[%s]  zone %d regID %d , price %ld  count %d" ,
-      taxDateStr , fromdateStr , todateStr , zone , regID , price , count);
-  if ( (type = GetPrefixType(taxDateStr, INVOICE_FA, zone) )) // usable prefix id of invoice  
-  {
-
-    if (count) // create invoice 
-    {
-      if ( (prefix = GetInvoicePrefix(taxDateStr, INVOICE_FA, zone) )) // number of invoice accord to taxable period
-      {
-        // find out VAT height 
-        dph =GetSystemVAT();
-        LOG( LOG_DEBUG ,"Make Invoice prefix %ld type %d DPH=%d\n" , prefix , type , dph);
-
-        invoiceID = GetSequenceID("invoice");
-
-        INSERT("invoice");
-        INTO("id");
-        INTO("prefix");
-        INTO("zone");
-        INTO("prefix_type");
-        INTO("registrarid");
-        INTO("taxDate");
-        INTO("price");
-        INTO("vat");
-        INTO("total");
-        INTO("totalVAT");
-        INTO("credit");
-        VALUE(invoiceID);
-        VALUE(prefix);
-        VALUE(zone);
-        VALUE(type); // link into prefix
-        VALUE(regID);
-        VALUE(taxDateStr);
-        VALPRICE(price); // total price
-        VALUE(dph); // VAT is not null 
-        VALUE( 0); // base without is zero amount  
-        VALUE( 0);
-        VALUENULL(); // only credit is NULL
-
-
-        if ( !EXEC() )
-          return -1; // SQL insert error 
-      } else
-        return -4;
-
-    } else
-      invoiceID=0; // empty invoicing
-
-
-    // record of invoicing
-    INSERT("invoice_generation");
-
-    INTO("fromdate");
-    INTO("todate");
-    INTO("registrarid");
-    INTO("zone");
-
-    INTO("invoiceID");
-    VALUE(fromdateStr);
-    VALUE(todateStr);
-    VALUE(regID);
-    VALUE(zone);
-    if (invoiceID)
-      VALUE(invoiceID);
-    else
-      VALUENULL();
-
-    if (EXEC() )
-      return invoiceID; // insert error
-    else
-      return -3; // error 
-
-
-  } else
-    return -2; // prefix creation error  
-
-
-}
-// description in english
-// creation of advance invoice for registrar for price amount with height VAT vatNum paid VAT tax and amount without VAT credit
-// taxDateStr date of taxable fulfilment date when value came into our account
-int DB::MakeNewInvoiceAdvance(
-  const char *taxDateStr, int zone, int regID, long price)
-{
-  int invoiceID;
-  long prefix;
-  int dph;
-  long total; // amount without VAT == credit
-  long credit;
-  long totalVAT; // paid VAT
-  double koef; // conversion coefficient for VAT
-  int type; // type of advance invoice (ZAL FA) from front 
-
-  // patch by JT
-  // making VAT parametr useless and taking it from DB
-  std::stringstream sql;
-  sql << "SELECT vat FROM registrar WHERE id=" << regID;
-  if (!ExecSelect(sql.str().c_str()))
-    return -3;
-  if (GetSelectRows() != 1)
-    return -4;
-  bool VAT = *GetFieldValue(0, 0) == 't';
-  FreeSelect();
-  // end of patch by JT
-
-
-  if (VAT) {
-    // find out VAT height
-    dph =GetSystemVAT(); // VAT height 19 %
-    koef =GetSystemKOEF();// coefficient height
-    // count paid VAT math rounded off at dimes 
-
-    totalVAT = count_dph(price, koef);
-    total = price - totalVAT;
-    credit = total;
-
-  } else // create advance invoice without paid VAT 
-  {
-    dph=0;
-    totalVAT=0;
-    total = price;
-    credit = price;
-  }
-
-  type = GetPrefixType(taxDateStr, INVOICE_ZAL, zone);
-
-  prefix = GetInvoicePrefix(taxDateStr, INVOICE_ZAL, zone);
-
-  LOG( LOG_DEBUG ,"MakeNewInvoiceAdvance taxdate[%s]   zone %d regID %d , price %ld dph %d credit %ld" , taxDateStr , zone , regID , price , dph , credit );
-
-  if (prefix > 0) {
-    invoiceID = GetSequenceID("invoice");
-
-    INSERT("invoice");
-    INTO("id");
-    INTO("prefix");
-    INTO("zone");
-    INTO("prefix_type");
-    INTO("registrarid");
-    INTO("taxDate");
-    INTO("price");
-    INTO("vat");
-    INTO("total");
-    INTO("totalVAT");
-    INTO("credit");
-    VALUE(invoiceID);
-    VALUE(prefix);
-    VALUE(zone);
-    VALUE(type); // number of line from tabel invoice_prefix
-    VALUE(regID);
-    VALUE(taxDateStr);
-    VALPRICE(price); // total price
-    VALUE(dph); // VAT height 19 %
-    VALPRICE(total); // price without VAT
-    VALPRICE(totalVAT); // price without VAT
-    VALPRICE(credit); // added credit
-
-    if (EXEC() )
-      return invoiceID;
-    else
-      return -1; // SQL insert error
-  } else
-    return -2; // prefix error 
-
-}
-
-int DB::GetPrefixType(
-  const char *dateStr, int typ, int zone)
-{
-  char sqlString[512];
-  int year;
-  char yearStr[5];
-  int id=0;
-
-  // year
-  strncpy(yearStr, dateStr, 4);
-  yearStr[4] = 0;
-  year= atoi(yearStr);
-  LOG( LOG_DEBUG ,"GetPrefixType  date[%s]  year %d typ %d zone %d\n" , dateStr , year , typ , zone );
-
-  sprintf(
-      sqlString,
-      "SELECT id  FROM invoice_prefix WHERE zone=%d AND  typ=%d AND year=\'%s\';",
-      zone, typ, yearStr);
-  if (ExecSelect(sqlString) ) {
-    if (GetSelectRows() == 1) {
-      id = atoi(GetFieldValue( 0, 0) );
-      LOG( LOG_DEBUG ,"invoice_id type-> %d" , id );
-    } else if (GetSelectRows() > 1) {
-      LOG( ERROR_LOG , "Multiple rows selected from invoice_prefix. Using ID of the first record." );
-      id = atoi(GetFieldValue( 0, 0));
-    } else {
-      LOG( ERROR_LOG , "Correct invoice prefix not found.");
-      FreeSelect();
-      return -3;
-    }
-
-    FreeSelect();
-  }
-
-  return id;
-}
-
-long DB::GetInvoicePrefix(
-  const char *dateStr, int typ, int zone)
-{
-  char sqlString[512];
-  int year;
-  char yearStr[5];
-  long prefix=0, id=0;
-
-  // year
-  strncpy(yearStr, dateStr, 4);
-  yearStr[4] = 0;
-  year= atoi(yearStr);
-
-  LOG( LOG_DEBUG ,"GetInvoicePrefix date[%s]  year %d typ %d zone %d\n" , dateStr , year , typ , zone );
-
-  sprintf(
-      sqlString,
-      "SELECT id , prefix   FROM invoice_prefix WHERE zone=%d AND  typ=%d AND year=\'%s\';",
-      zone, typ, yearStr);
-
-  if (ExecSelect(sqlString) ) {
-    if (GetSelectRows() == 1) {
-      id = atol(GetFieldValueName("id", 0) );
-      prefix = atol(GetFieldValueName("prefix", 0) );
-      LOG( LOG_DEBUG ,"invoice_prefix id %d -> %ld" , id , prefix );
-    } else {
-      LOG( ERROR_LOG ,"Requested invoice_prefix not found " );
-      return -3; // error
-    }
-
-    FreeSelect();
-
-    UPDATE("invoice_prefix");
-    SET("prefix", prefix +1);
-    WHEREID(id);
-    if (EXEC() )
-      return prefix;
-    else
-      return -2; // error
-
-
-  } else
-    return -1;
-
-}
 
 // vreturn id of the owner of domain
 int DB::GetClientDomainRegistrant(
@@ -2189,7 +950,7 @@ int DB::GetClientDomainRegistrant(
   int regID=0;
   char sqlString[128];
 
-  sprintf(sqlString,
+  snprintf(sqlString, sizeof(sqlString), 
       "SELECT  clID FROM DOMAIN WHERE Registrant=%d AND clID=%d", contactID,
       clID);
   if (ExecSelect(sqlString) ) {
@@ -2206,13 +967,16 @@ int DB::GetClientDomainRegistrant(
 const char * DB::GetValueFromTable(
   const char *table, const char *vname, const char *fname, const char *value)
 {
-  char sqlString[512];
   int size;
 
-  sprintf(sqlString, "SELECT  %s FROM %s WHERE %s=\'%s\';", vname, table,
-      fname, value);
+  // snprintf(sqlString, sizeof(sqlString), "SELECT  %s FROM %s WHERE %s=\'%s\';", vname, table,
+  //     fname, value);
 
-  if (ExecSelect(sqlString) ) {
+  std::stringstream query;
+  query << "SELECT " << vname << " FROM " << table
+        << " WHERE " << fname << " = '" << Escape2(value) << "'";
+
+  if (ExecSelect(query.str().c_str()) ) {
     if (GetSelectRows() == 1) // if selected only one record 
     {
       size = GetValueLength( 0, 0);
@@ -2227,6 +991,7 @@ const char * DB::GetValueFromTable(
       }
 
       strncpy(memHandle, GetFieldValue( 0, 0), size + 1);
+      memHandle[size] = '\0';
       LOG( SQL_LOG , "GetValueFromTable \'%s\' field %s  value  %s ->  %s" , table , fname , value , memHandle );
       FreeSelect();
       return memHandle;
@@ -2244,7 +1009,7 @@ const char * DB::GetValueFromTable(
 {
   char value[16];
 
-  sprintf(value, "%d", numeric);
+  snprintf(value, sizeof(value), "%d", numeric);
 
   return GetValueFromTable(table, vname, fname, value);
 }
@@ -2260,7 +1025,7 @@ int DB::GetNumericFromTable(
 {
   char value[16];
 
-  sprintf(value, "%d", numeric);
+  snprintf(value, sizeof(value), "%d", numeric);
 
   return GetNumericFromTable(table, vname, fname, value);
 }
@@ -2273,7 +1038,7 @@ bool DB::DeleteFromTable(
 
   LOG( SQL_LOG , "DeleteFromTable %s fname %s id -> %d" , table , fname , id );
 
-  sprintf(sqlString, "DELETE FROM %s  WHERE %s=%d;", table, fname, id);
+  snprintf(sqlString, sizeof(sqlString), "DELETE FROM %s  WHERE %s=%d;", table, fname, id);
   return ExecSQL(sqlString);
 }
 
@@ -2285,7 +1050,7 @@ bool DB::DeleteFromTableMap(
 
   LOG( SQL_LOG , "DeleteFrom  %s_contact_map  id  %d contactID %d" , map ,id , contactid );
 
-  sprintf(sqlString,
+  snprintf(sqlString, sizeof(sqlString), 
       "DELETE FROM %s_contact_map WHERE  %sid=%d AND contactid=%d;", map, map,
       id, contactid);
 
@@ -2298,7 +1063,7 @@ int DB::GetSequenceID(
   char sqlString[128];
   int id=0;
 
-  sprintf(sqlString, "SELECT  NEXTVAL( \'%s_id_seq\'  );", sequence);
+  snprintf(sqlString, sizeof(sqlString), "SELECT  NEXTVAL( \'%s_id_seq\'  );", sequence);
 
   if (ExecSelect(sqlString) ) {
     id = atoi(GetFieldValue( 0, 0) );
@@ -2310,11 +1075,11 @@ int DB::GetSequenceID(
 }
 
 bool DB::SaveNSSetHistory(
-  int id)
+  int id, unsigned long long request_id)
 {
 
   //  save to history 
-  if (MakeHistory(id) ) {
+  if (MakeHistory(id, request_id) ) {
 
     if (SaveHistory("NSSET", "id", id) )
       if (SaveHistory("HOST", "nssetid", id) )
@@ -2327,10 +1092,10 @@ bool DB::SaveNSSetHistory(
 }
 
 bool
-DB::SaveKeySetHistory(int id)
+DB::SaveKeySetHistory(int id, unsigned long long request_id)
 {
     // save to history
-    if (MakeHistory(id))
+    if (MakeHistory(id, request_id))
         if (SaveHistory("KEYSET", "id", id))
             if (SaveHistory("DSRECORD", "keysetid", id))
                 if (SaveHistory("dnskey", "keysetid", id))
@@ -2369,10 +1134,10 @@ DB::DeleteKeySetObject(int id)
 }
 
 bool DB::SaveDomainHistory(
-  int id)
+  int id, unsigned long long request_id)
 {
 
-  if (MakeHistory(id) ) {
+  if (MakeHistory(id, request_id) ) {
     if (SaveHistory("DOMAIN", "id", id) )
       if (SaveHistory("domain_contact_map", "domainID", id) ) // save admin-c
         if (SaveHistory("enumval", "domainID", id) ) // save enum extension
@@ -2395,10 +1160,10 @@ bool DB::DeleteDomainObject(
 }
 
 bool DB::SaveContactHistory(
-  int id)
+  int id, unsigned long long request_id)
 {
 
-  if (MakeHistory(id) ) {
+  if (MakeHistory(id, request_id) ) {
     if (SaveHistory("Contact", "id", id) )
       return true;
   }
@@ -2419,23 +1184,23 @@ bool DB::DeleteContactObject(
 }
 
 int DB::MakeHistory(
-  int objectID) // write records of object to the history
+  int objectID, unsigned long long requestID) // write records of object to the history
 {
   char sqlString[128];
 
-  if (actionID) {
-    LOG( SQL_LOG , "MakeHistory actionID -> %d " , actionID);
+    LOG( SQL_LOG , "MakeHistory requestID -> %llu " ,
+            requestID);
     historyID = GetSequenceID("HISTORY");
     if (historyID) {
-      LOG( SQL_LOG , "MakeHistory actionID -> %d " , actionID);
-      sprintf(sqlString,
-          "INSERT INTO HISTORY ( id , action ) VALUES ( %d  , %d );",
-          historyID, actionID);
+      LOG( SQL_LOG , "MakeHistory requestID -> %llu " , requestID);
+      snprintf(sqlString, sizeof(sqlString),
+          "INSERT INTO HISTORY ( id , request_id ) VALUES ( %d  , %llu );",
+          historyID, requestID);
       if (ExecSQL(sqlString) ) {
         if (SaveHistory("OBJECT", "id", objectID) ) // save object table to history 
         {
           LOG( SQL_LOG , "Update objectID  %d -> historyID %d " , objectID , historyID );
-          sprintf(sqlString,
+          snprintf(sqlString, sizeof(sqlString), 
               "UPDATE OBJECT_registry set historyID=%d WHERE id=%d;",
               historyID, objectID);
           if (ExecSQL(sqlString) )
@@ -2443,7 +1208,6 @@ int DB::MakeHistory(
         }
       }
     }
-  }
 
   // default
   return 0;
@@ -2551,11 +1315,11 @@ void DB::SQLCat(
 
   //  test for length buffer
   if (len + length < MAX_SQLBUFFER)
-    strcat(sqlBuffer, str);
+    strncat(sqlBuffer, str, MAX_SQLBUFFER - len - 1);
   else
     // if sql buffer would be valid sql query at this place
     // and something fail to append it could have very bad consequences
-    throw;
+    throw std::runtime_error("DB::SQLCat: string too long.");
 }
 
 void DB::SQLCatLower(
@@ -2622,7 +1386,7 @@ void DB::SETPRICE(
 {
   char priceStr[16];
 
-  sprintf(priceStr, "%ld.%02ld", price /100, price %100);
+  snprintf(priceStr, sizeof(priceStr), "%ld.%02ld", price /100, price %100);
   SETS(fname, priceStr, false); //without ESC
 }
 
@@ -2678,7 +1442,7 @@ void DB::SET(
   SQLCat("  ");
   SQLCat(fname);
   SQLCat("=");
-  sprintf(numStr, "%ld", value);
+  snprintf(numStr, sizeof(numStr), "%ld", value);
   SQLCat(numStr);
   SQLCat(" ,");
 }
@@ -2691,7 +1455,7 @@ void DB::SET(
   SQLCat("  ");
   SQLCat(fname);
   SQLCat("=");
-  sprintf(numStr, "%d", value);
+  snprintf(numStr, sizeof(numStr), "%d", value);
   SQLCat(numStr);
   SQLCat(" ,");
 }
@@ -2790,7 +1554,7 @@ void DB::WHERE(
   const char *fname, int value)
 {
   char numStr[16];
-  sprintf(numStr, "%d", value);
+  snprintf(numStr, sizeof(numStr), "%d", value);
   WHERE(fname, numStr);
 }
 
@@ -2901,7 +1665,7 @@ void DB::VALUES(
 
   if (amp)
     SQLCat("'");
-  strcat(sqlBuffer, " );"); // vmake on the end
+  strncat(sqlBuffer, " );", MAX_SQLBUFFER - len - 1); // vmake on the end
 
 }
 
@@ -2922,7 +1686,7 @@ void DB::VALUEPERIOD(
 {
   char str[80];
 
-  sprintf(str, "current_timestamp + interval\'%d month\' ", period);
+  snprintf(str, sizeof(str), "current_timestamp + interval\'%d month\' ", period);
   VALUES(str, false, false, 0);
 }
 
@@ -2944,7 +1708,7 @@ void DB::VALUE(
   int value)
 {
   char numStr[16];
-  sprintf(numStr, "%d", value);
+  snprintf(numStr, sizeof(numStr), "%d", value);
   VALUES(numStr, false, false, 0); // without ESC
 }
 
@@ -2952,7 +1716,7 @@ void DB::VALUE(
   long value)
 {
   char numStr[100];
-  sprintf(numStr, "%ld", value);
+  snprintf(numStr, sizeof(numStr), "%ld", value);
   VALUES(numStr, false, false, 0); // without ESC
 }
 
@@ -2960,7 +1724,7 @@ void DB::VALUE(
   unsigned long long value)
 {
   char numStr[100];
-  sprintf(numStr, "%llu", value);
+  snprintf(numStr, sizeof(numStr), "%llu", value);
   VALUES(numStr, false, false, 0); // without ESC
 }
 
@@ -2979,7 +1743,7 @@ void DB::VALPRICE(
 {
   char priceStr[16];
   // currency in penny 
-  sprintf(priceStr, "%ld.%02ld", price /100, price %100);
+  snprintf(priceStr, sizeof(priceStr), "%ld.%02ld", price /100, price %100);
   VALUES(priceStr, false, false, 0); // without ESC
 }
 bool DB::EXEC()
@@ -3056,7 +1820,7 @@ bool DB::SELECTOBJECTID(
   SQLCat(" WHERE Object.id= object_registry.id");
   SQLCat(" AND Object.id");
   SQLCat("=");
-  sprintf(numStr, "%d", id);
+  snprintf(numStr, sizeof(numStr), "%d", id);
   SQLCat(numStr);
   SQLCat(" AND ");
   SQLCat("Object.id=");

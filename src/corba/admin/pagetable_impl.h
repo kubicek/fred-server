@@ -14,16 +14,15 @@
 #include "filter_impl.h"
 #include "corba/mailer_manager.h"
 
-#include "register/register.h"
-#include "register/invoice.h"
-#include "register/notify.h"
-#include "register/mail.h"
-#include "register/filter.h"
-#include "register/request.h"
+#include "fredlib/registry.h"
+#include "fredlib/invoicing/invoice.h"
+#include "fredlib/notify.h"
+#include "fredlib/mail.h"
+#include "fredlib/filter.h"
+#include "fredlib/requests/request_list.h"
 
 #include "old_utils/log.h"
 #include "old_utils/dbsql.h"
-#include "old_utils/conf.h"
 
 #include "log/logger.h"
 #include "log/context.h"
@@ -60,12 +59,12 @@ using namespace Database;
 
 #define DECL_PAGETABLE_I \
   Registry::Table::ColumnHeaders* getColumnHeaders(); \
-  Registry::TableRow* getRow(CORBA::UShort row) throw (ccReg::Table::INVALID_ROW);\
-  ccReg::TID getRowId(CORBA::UShort row) throw (ccReg::Table::INVALID_ROW);\
+  Registry::TableRow* getRow(CORBA::UShort row) throw (Registry::Table::INVALID_ROW);\
+  ccReg::TID getRowId(CORBA::UShort row) throw (Registry::Table::INVALID_ROW);\
   char* outputCSV();\
   CORBA::Short numRows();\
   CORBA::Short numColumns();\
-  void reload();\
+  void reload_worker();\
   void clear();\
   CORBA::ULongLong resultSize();\
   void loadFilter(ccReg::TID _id);\
@@ -77,12 +76,15 @@ class ccReg_PageTable_i : virtual public POA_Registry::PageTable {
   unsigned int aPageSize;
   unsigned int aPage;
 
+enum { DEFAULT_QUERY_TIMEOUT = 15000 };
+
 protected:
   Database::Filters::Union uf;
   FilterIteratorImpl it;
   ccReg::FilterType filterType;
   int sorted_by_;
   bool sorted_dir_;
+  long query_timeout;
 
   /**
    * context with session object was created - need for futher call on object
@@ -97,13 +99,18 @@ public:
   CORBA::Short pageSize();
   void pageSize(CORBA::Short _v);
   CORBA::Short page();
-  void setPage(CORBA::Short page) throw (ccReg::PageTable::INVALID_PAGE);
+  void setPage(CORBA::Short page) throw (Registry::PageTable::INVALID_PAGE);
+  virtual void setOffset(CORBA::Long _offset);
+  virtual void setLimit(CORBA::Long _limit);
+  void setTimeout(CORBA::Long _timeout);
   CORBA::Short start();
   CORBA::Short numPages();
-  Registry::TableRow* getPageRow(CORBA::Short pageRow) throw (ccReg::Table::INVALID_ROW);
+  Registry::TableRow* getPageRow(CORBA::Short pageRow) throw (Registry::Table::INVALID_ROW);
   CORBA::Short numPageRows();
-  ccReg::TID getPageRowId(CORBA::Short row) throw (ccReg::Table::INVALID_ROW);
+  ccReg::TID getPageRowId(CORBA::Short row) throw (Registry::Table::INVALID_ROW);
   void reloadF();
+  void reload();
+  virtual void reload_worker() = 0;
   ccReg::Filters::Compound_ptr add();
   ccReg::FilterType filter() {
     return filterType;

@@ -17,12 +17,6 @@ Query::Query(const char* _str_query) {
   m_initialized = true;
 }
 
-
-Query::Query(const Query& _q) {
-  sql_buffer << _q.sql_buffer;
-}
-
-
 std::ostream& operator<<(std::ostream &_os, const Query& _q) {
   return _os << _q.sql_buffer.str();
 }
@@ -36,6 +30,7 @@ SelectQuery::SelectQuery(const std::string& _cols, const std::string& _table) :
   Query() {
   select_s << _cols;
   from_s << _table;
+  offset_r = 0;
   limit_r = 0;
 }
 
@@ -49,6 +44,11 @@ void SelectQuery::finalize() {
   if (!order_by_s.str().empty()) {
     sql_buffer << " ORDER BY " << order_by_s.str();
   }
+
+  if (offset_r > 0) {
+      sql_buffer << " OFFSET " << offset_r;
+  }
+
   if (limit_r> 0) {
     sql_buffer << " LIMIT " << limit_r;
   }
@@ -137,6 +137,7 @@ void SelectQuery::clear() {
   group_by_s.str("");
   order_by_s.clear();
   order_by_s.str("");
+  offset_r = 0;
   limit_r = 0;
   std::for_each(select_v.begin(),select_v.end(),boost::checked_deleter<Column>());
   select_v.clear();

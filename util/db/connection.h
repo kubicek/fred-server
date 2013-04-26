@@ -31,6 +31,7 @@
 #include "result.h"
 #include "statement.h"
 #include "connection_factory.h"
+#include "query_param.h"
 
 #include "config.h"
 
@@ -51,7 +52,6 @@ public:
   typedef typename manager_type::transaction_type  transaction_type;
   typedef typename manager_type::result_type       result_type;
 
-
   /**
    * Constructor and destructor
    */
@@ -61,6 +61,10 @@ public:
 
 
   virtual ~ConnectionBase_() {
+  }
+
+  static const std::string getTimeoutString() {
+      return connection_driver::getTimeoutString();
   }
 
 
@@ -78,12 +82,25 @@ public:
     return this->exec(_stmt.toSql(boost::bind(&ConnectionBase_<connection_driver, manager_type>::escape, this, _1)));
   }
 
+  /**      
+   * @param _query boost::format representing query statement
+   * @return       result
+   */
+  virtual inline result_type exec(const boost::format &_fmt) /*throw (ResultFailed)*/ {
+      try {
+        return exec(_fmt.str());
+      } catch (ResultFailed &rf) {
+          throw;
+      } catch (...) {
+          throw ResultFailed(">>Conversion error<<");
+      }
+  }
 
   /**
    * @param _query string representation of query statement
    * @return       result
    */
-  virtual inline result_type exec(const std::string &_stmt) throw (ResultFailed) {
+  virtual inline result_type exec(const std::string &_stmt) /*throw (ResultFailed)*/ {
     try {
 #ifdef HAVE_LOGGER
       LOGGER(PACKAGE).debug(boost::format("exec query [%1%]") % _stmt);
@@ -97,6 +114,77 @@ public:
       throw ResultFailed(_stmt);
     }
   }
+  /**
+   * @param _stmt string representation of query statement with params
+   * @param params vector of param data strings
+   * @return result
+   */
+
+  virtual inline result_type exec_params(const std::string& _stmt,//one command query
+          const std::vector<std::string>& params //parameters data
+		  )
+  {
+      try {
+  #ifdef HAVE_LOGGER
+        LOGGER(PACKAGE).debug(boost::format("exec query [%1%]") % _stmt);
+  #endif
+        return result_type(conn_->exec_params(_stmt//one command query
+                          , params //parameters data
+                          ));
+      }
+      catch (ResultFailed &rf) {
+        throw;
+      }
+      catch (...) {
+        throw ResultFailed(_stmt);
+      }
+    }
+
+  /**
+   * @param _stmt string representation of query statement with params
+   * @param params vector of query param data strings or binary
+   * @return result
+   */
+
+  virtual inline result_type exec_params(const std::string& _stmt,//one command query
+          const QueryParams& params //parameters data
+          )
+  {
+      try {
+  #ifdef HAVE_LOGGER
+
+          if(LOGGER(PACKAGE).getLevel() >= Logging::Log::LL_DEBUG)
+          {
+              std::string value;
+              std::string params_dump;
+              std::size_t params_counter =0;
+              for (QueryParams::const_iterator i = params.begin()
+                      ; i != params.end() ; ++i)
+              {
+                  ++params_counter;
+                  value = i->is_null() ? "[null]" : "'" + i->print_buffer() + "'";
+                  params_dump += std::string(" $")
+                      + boost::lexical_cast<std::string>(params_counter) + ": "
+                      + value;
+              }//for params
+
+              LOGGER(PACKAGE).debug(
+                      boost::format("exec query [%1%] params %2%")
+                  % _stmt % params_dump);
+          }//if debug
+
+  #endif
+        return result_type(conn_->exec_params(_stmt//one command query
+                          , params //parameters data
+                          ));
+      }
+      catch (ResultFailed &rf) {
+        throw;
+      }
+      catch (...) {
+        throw ResultFailed(_stmt);
+      }
+    }
 
   
   /**
@@ -123,6 +211,16 @@ public:
     return conn_->inTransaction();
   }
 
+  virtual inline void setConstraintExclusion(bool on = true) {
+    conn_->setConstraintExclusion(on);
+  }
+
+  virtual inline void setQueryTimeout(unsigned t) {
+    conn_->setQueryTimeout(t);
+#ifdef HAVE_LOGGER
+      LOGGER(PACKAGE).debug(boost::format("sql statement timout set to %1%ms") % t);
+#endif
+  }
 
   /* HACK! HACK! HACK! (use with construct with old DB connection) */
   typename driver_type::__conn_type__ __getConn__() const {
@@ -133,7 +231,6 @@ public:
 protected:
   connection_driver       *conn_;    /**< connection_driver instance */
 };
-
 
 
 /**
@@ -157,7 +254,7 @@ public:
 
 
   Connection_(const std::string &_conn_info,
-              bool _lazy_connect = true) throw (ConnectionFailed)
+              bool _lazy_connect = true) //throw (ConnectionFailed)
             : super(0),
               trans_(0),
               conn_info_(_conn_info) {
@@ -186,7 +283,7 @@ public:
   /**
    * Open connection with specific connection string
    */
-  virtual void open(const std::string &_conn_info) throw (ConnectionFailed) {
+  virtual void open(const std::string &_conn_info) /* throw (ConnectionFailed) */{
     close();
     this->conn_info_ = _conn_info;
     /* TODO: this should be done by manager_type! */
@@ -205,7 +302,9 @@ public:
       delete this->conn_;
       this->conn_ = 0;
 #ifdef HAVE_LOGGER
-      LOGGER(PACKAGE).info(boost::format("connection closed; (%1%)") % conn_info_);
+      try{
+          LOGGER(PACKAGE).info(boost::format("connection closed; (%1%)") % conn_info_);
+      }catch(...){}
 #endif
     }
   }
@@ -216,7 +315,7 @@ public:
    * 
    * Need to check if connection was opened - support for lazy connection opening
    */
-  virtual inline result_type exec(Statement &_stmt) throw (ResultFailed) {
+  virtual inline result_type exec(Statement &_stmt) /*throw (ResultFailed)*/ {
     if (!this->conn_) {
       open(conn_info_);
     }
@@ -224,7 +323,7 @@ public:
   }
 
 
-  virtual inline result_type exec(const std::string &_stmt) throw (ResultFailed) {
+  virtual inline result_type exec(const std::string &_stmt) /*throw (ResultFailed)*/ {
     if (!this->conn_) {
       open(conn_info_);
     }
@@ -287,7 +386,6 @@ class TSSConnection_ : public ConnectionBase_<connection_driver, manager_type> {
 public:
   typedef ConnectionBase_<connection_driver, manager_type>   super;
   typedef typename super::transaction_type                   transaction_type;
-
 
   /**
    * Constructor and destructor

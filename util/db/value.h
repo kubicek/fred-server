@@ -35,6 +35,7 @@
 #include "types/convert_sql_boost_datetime.h"
 #include "types/convert_sql_db_types.h"
 #include "types/sqlize.h"
+#include <boost/function.hpp>
 
 
 namespace Database {
@@ -251,8 +252,9 @@ public:
   HANDLE_TYPE(unsigned,           0,          false, false)
   HANDLE_TYPE(unsigned long,      0,          false, false)
   HANDLE_TYPE(unsigned long long, 0,          false, false)
+  HANDLE_TYPE(float,              0,          false, false)
   HANDLE_TYPE(bool,               0,          true,  false)
-  HANDLE_TYPE(Money,              Money(),    true,  false)
+
 //  HANDLE_TYPE(DateTime,           DateTime(), true,  false)
 //  HANDLE_TYPE(Date,               Date(),     true,  false)
 
@@ -344,6 +346,10 @@ protected:
 inline std::ostream& operator<<(std::ostream& _os, const Value& _value) {
   return (_value.is_null_ ? _os << "NULL" : _os << _value.toSql(&Util::escape2));
 }
+
+
+
+std::vector<std::string> array_to_vector(std::string _dbarr);
 
 
 }

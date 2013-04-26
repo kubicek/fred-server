@@ -141,7 +141,7 @@ Value<std::string>& RegistrarImpl::addZoneFqdn() {
     joinRegistrarTable();
     this->active = true;
 
-    const char* subselect_reginzone = "(select ri.registrarid as rid, z.id as zid "
+    const char* subselect_reginzone = "(select distinct ri.registrarid as rid, z.id as zid "
             "from registrarinvoice ri join zone z on ri.zone = z.id "
             "where fromdate <= CURRENT_DATE "
             "and (todate >= CURRENT_DATE or todate is null) )";
@@ -162,6 +162,27 @@ Value<std::string>& RegistrarImpl::addZoneFqdn() {
 
     Value<std::string> *tmp = new Value<std::string>(Column("fqdn", joinTable(subselect_zone)));
     tmp->setName("ZoneFqdn");
+    add(tmp);
+    return *tmp;
+}
+
+Value<Database::ID>& RegistrarImpl::addGroupId() {
+    joinRegistrarTable();
+    this->active = true;
+
+    const char* subselect_regingroup = "(select distinct rgm.registrar_id as rid, rg.id as gid "
+            "from registrar_group_map rgm join registrar_group rg on rgm.registrar_group_id = rg.id "
+            "where member_from <= CURRENT_DATE "
+            "and (member_until >= CURRENT_DATE or member_until is null) )";
+
+    addJoin(new Join(
+      Column("id", joinTable("registrar")),
+      SQL_OP_EQ,
+      Column("rid", joinTable(subselect_regingroup))
+    ));
+
+    Value<Database::ID> *tmp = new Value<Database::ID>(Column("gid", joinTable(subselect_regingroup)));
+    tmp->setName("GroupId");
     add(tmp);
     return *tmp;
 }

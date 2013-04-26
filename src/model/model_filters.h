@@ -9,8 +9,6 @@
 #include "nsset_filter.h"
 #include "registrar_filter.h"
 #include "object_state_filter.h"
-#include "epp_action_filter.h"
-#include "epp_session_filter.h"
 #include "filter_filter.h"
 #include "invoice_filter.h"
 #include "public_request_filter.h"
@@ -20,9 +18,10 @@
 // #include "statement_head_filter.h"
 #include "online_statement_filter.h"
 #include "log_filter.h"
-#include "union_filter.h"
 #include "zone_soa_filter.h"
 #include "zone_ns_filter.h"
 #include "zone_filter.h"
+#include "message_filter.h"
+#include "union_filter.h"
 
 #endif /*MODEL_FILTERS_H_*/

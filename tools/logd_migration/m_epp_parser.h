@@ -351,7 +351,7 @@ typedef struct {
 	 *
 	 * For schema validity errors it is filled by mod_eppd (by message from
 	 * libxml) which is prefixed by localized message retrieved from
-	 * central register. In all other cases it is left empty and filled
+	 * central registry. In all other cases it is left empty and filled
 	 * by CR.
 	 */
 	char	*reason;
@@ -1081,7 +1081,7 @@ void
 epp_parser_request_cleanup(void *cdata_arg);
 */
 
-std::auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *cdata, epp_red_command_type cmdtype, int sessionid, epp_action_type *action_type);
+std::auto_ptr<Fred::Logger::RequestProperties> log_epp_command(epp_command_data *cdata, epp_red_command_type cmdtype, int sessionid, epp_action_type *request_type_id);
 
 
 typedef	std::list<void*> pool_subst;

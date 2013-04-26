@@ -19,41 +19,6 @@
 #ifndef _POLLCLIENT_H_
 #define _POLLCLIENT_H_
 
-#define POLL_SHOW_OPTS_NAME         "poll_show_opts"
-#define POLL_SHOW_OPTS_NAME_DESC    "show all poll command line options"
-#define POLL_LIST_ALL_NAME          "poll_list_all"
-#define POLL_LIST_ALL_NAME_DESC     "list all poll messages"
-#define POLL_LIST_NEXT_NAME         "poll_list_next"
-#define POLL_LIST_NEXT_NAME_DESC    "list next message for given registrar id"
-#define POLL_LIST_NEXT_HANDLE_NAME  "poll_list_next_handle"
-#define POLL_LIST_NEXT_HANDLE_NAME_DESC "list next message for given registrar handle"
-#define POLL_SET_SEEN_NAME          "poll_set_seen"
-#define POLL_SET_SEEN_NAME_DESC     "set given message as seen"
-
-#define POLL_CREATE_STATE_CHANGES_NAME          "poll_create_statechanges"
-#define POLL_CREATE_STATE_CHANGES_NAME_DESC     "create messages for state changes"
-#define POLL_CREATE_STATE_CHANGES_2_NAME        "poll_create_state_changes"
-#define POLL_CREATE_STATE_CHANGES_2_NAME_DESC   "create messages for state changes"
-#define POLL_CREATE_LOW_CREDIT_NAME             "poll_create_lowcredit"
-#define POLL_CREATE_LOW_CREDIT_NAME_DESC        "create messages for low credit"
-#define POLL_CREATE_LOW_CREDIT_2_NAME           "poll_create_low_credit"
-#define POLL_CREATE_LOW_CREDIT_2_NAME_DESC      "create messages for low credit"
-
-#define POLL_TYPE_NAME              "poll_type"
-#define POLL_TYPE_NAME_DESC         "set filter for poll type"
-#define POLL_REGID_NAME             "poll_regid"
-#define POLL_REGID_NAME_DESC        "set filter for registrar id"
-#define POLL_NONSEEN_NAME           "poll_nonseen"
-#define POLL_NONSEEN_NAME_DESC      "set filter for non seen messages"
-#define POLL_NONEX_NAME             "poll_nonex"
-#define POLL_NONEX_NAME_DESC        "set filter for non expired messages"
-#define POLL_DEBUG_NAME             "poll_debug"
-#define POLL_DEBUG_NAME_DESC        "don't do actually anything, just list xml with values"
-#define POLL_EXCEPT_TYPES_NAME      "poll_except_types"
-#define POLL_EXCEPT_TYPES_NAME_DESC "list of poll messages types ignored in creation (only states now)"
-#define POLL_LIMIT_NAME             "poll_limit"
-#define POLL_LIMIT_NAME_DESC        "limit for number of messages generated in one pass (0=no limit)"
-
 #include <boost/program_options.hpp>
 #include <iostream>
 
@@ -61,27 +26,51 @@
 #include "old_utils/dbsql.h"
 #include "baseclient.h"
 
+#include "poll_params.h"
+
 namespace Admin {
 
 class PollClient : public BaseClient {
 private:
-    CORBA::Long m_clientId;
-    DB m_db;
+    DBSharedPtr m_db;
     ccReg::EPP_var m_epp;
-    Config::Conf m_conf;
+
+    std::string nameservice_context;
+    bool poll_list_all;//POLL_LIST_ALL_NAME
+    PollListAllArgs poll_list_all_params;
+    bool poll_create_statechanges;//POLL_CREATE_STATE_CHANGES_NAME
+    PollCreateStatechangesArgs poll_create_statechanges_params;
+    bool poll_create_request_fee_messages;
+    PollCreateRequestFeeMessagesArgs poll_create_request_fee_messages_params;
 
     static const struct options m_opts[];
 public:
     PollClient()
+    : poll_list_all(false)
+    , poll_create_statechanges(false)
     { }
     PollClient(
-            const std::string &connstring,
-            const std::string &nsAddr,
-            const Config::Conf &conf):
-        BaseClient(connstring, nsAddr),
-        m_conf(conf)
+        const std::string &connstring
+        , const std::string &nsAddr
+        , const std::string& _nameservice_context
+        , bool _poll_list_all
+        , const PollListAllArgs& _poll_list_all_params
+        , bool _poll_create_statechanges
+        , const PollCreateStatechangesArgs& _poll_create_statechanges_params
+        , bool _poll_create_request_fee_messages
+        , const PollCreateRequestFeeMessagesArgs& _poll_create_request_fee_messages_params
+        )
+    : BaseClient(connstring, nsAddr)
+    , nameservice_context(_nameservice_context)
+    , poll_list_all(_poll_list_all)
+    , poll_list_all_params(_poll_list_all_params)
+    , poll_create_statechanges(_poll_create_statechanges)
+    , poll_create_statechanges_params(_poll_create_statechanges_params)
+    , poll_create_request_fee_messages(_poll_create_request_fee_messages)
+    , poll_create_request_fee_messages_params(_poll_create_request_fee_messages_params)
     {
-        m_db.OpenDatabase(connstring.c_str());
+        m_db = connect_DB(connstring
+                , std::runtime_error("PollClient db connection failed"));
     }
     ~PollClient()
     { }
@@ -96,6 +85,7 @@ public:
     void set_seen();
     void create_state_changes();
     void create_low_credit();
+    void create_request_fee_messages();
 }; // class PollClient
 
 } // namespace Admin;

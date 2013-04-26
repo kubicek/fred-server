@@ -16,68 +16,52 @@
  *  along with FRED.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "simple.h"
 #include "commonclient.h"
 #include "pollclient.h"
-#include "register/poll.h"
+#include "fredlib/poll.h"
+#include "src/corba/logger_client_impl.h"
+
+#include "util/cfg/faked_args.h"
+#include "util/cfg/handle_corbanameservice_args.h"
+#include "util/cfg/config_handler_decl.h"
+
 
 namespace Admin {
 
-const struct options *
-PollClient::getOpts()
-{
-    return m_opts;
-}
 
 void
 PollClient::runMethod()
 {
-    if (m_conf.hasOpt(POLL_LIST_ALL_NAME)) {
+    if (poll_list_all) {//POLL_LIST_ALL_NAME
         list_all();
-    } else if (m_conf.hasOpt(POLL_LIST_NEXT_NAME)) {
-        list_next();
-    } else if (m_conf.hasOpt(POLL_LIST_NEXT_HANDLE_NAME)) {
-        list_next();
-    } else if (m_conf.hasOpt(POLL_CREATE_STATE_CHANGES_NAME) ||
-            m_conf.hasOpt(POLL_CREATE_STATE_CHANGES_2_NAME)) {
+    } else if (poll_create_statechanges //POLL_CREATE_STATE_CHANGES_NAME
+             ) {
         create_state_changes();
-    } else if (m_conf.hasOpt(POLL_CREATE_LOW_CREDIT_NAME) ||
-            m_conf.hasOpt(POLL_CREATE_LOW_CREDIT_2_NAME)) {
-        create_low_credit();
-    } else if (m_conf.hasOpt(POLL_SET_SEEN_NAME)) {
-        set_seen();
-    } else if (m_conf.hasOpt(POLL_SHOW_OPTS_NAME)) {
-        show_opts();
+    } else if (poll_create_request_fee_messages) {
+        create_request_fee_messages();
     }
-}
-
-void
-PollClient::show_opts()
-{
-    callHelp(m_conf, no_help);
-    print_options("Poll", getOpts(), getOptsCount());
 }
 
 void
 PollClient::list_all()
 {
-    callHelp(m_conf, no_help);
-    std::auto_ptr<Register::Poll::Manager> pollMan(
-            Register::Poll::Manager::create(
-                &m_db)
+
+    std::auto_ptr<Fred::Poll::Manager> pollMan(
+            Fred::Poll::Manager::create(
+                m_db)
             );
-    std::auto_ptr<Register::Poll::List> pmList(pollMan->createList());
-    if (m_conf.hasOpt(POLL_TYPE_NAME))
-        pmList->setTypeFilter(m_conf.get<unsigned int>(POLL_TYPE_NAME));
-    if (m_conf.hasOpt(REGISTRAR_ID_NAME))
-        pmList->setRegistrarFilter(m_conf.get<unsigned int>(REGISTRAR_ID_NAME));
-    if (m_conf.hasOpt(POLL_NONSEEN_NAME))
+    std::auto_ptr<Fred::Poll::List> pmList(pollMan->createList());
+    if (poll_list_all_params.poll_type.is_value_set())//POLL_TYPE_NAME
+        pmList->setTypeFilter(poll_list_all_params.poll_type.get_value());
+    if (poll_list_all_params.registrar_id.is_value_set())//REGISTRAR_ID_NAME
+        pmList->setRegistrarFilter(poll_list_all_params.registrar_id.get_value());
+    if (poll_list_all_params.poll_nonseen)//POLL_NONSEEN_NAME
         pmList->setNonSeenFilter(true);
-    if (m_conf.hasOpt(POLL_NONEX_NAME))
+    if (poll_list_all_params.poll_nonex)//POLL_NONEX_NAME
         pmList->setNonExpiredFilter(true);
     pmList->reload();
     for (unsigned int i = 0; i < pmList->getCount(); i++) {
-        Register::Poll::Message *msg = pmList->getMessage(i);
+        Fred::Poll::Message *msg = pmList->getMessage(i);
         if (msg) {
             msg->textDump(std::cout);
             std::cout << std::endl;
@@ -85,133 +69,64 @@ PollClient::list_all()
     }
     return;
 }
-void
-PollClient::list_next()
-{
-    callHelp(m_conf, no_help);
-    std::auto_ptr<Register::Poll::Manager> pollMan(
-            Register::Poll::Manager::create(
-                &m_db)
-            );
-    if (m_conf.hasOpt(POLL_LIST_NEXT_NAME)) {
-        Register::TID reg = m_conf.get<unsigned int>(POLL_LIST_NEXT_NAME);
-        unsigned int count = pollMan->getMessageCount(reg);
-        if (!count) {
-            std::cout << "No message" << std::endl;
-        } else {
-            std::auto_ptr<Register::Poll::Message> msg(pollMan->getNextMessage(reg));
-            std::cout << "Messages:" << count << std::endl;
-            msg->textDump(std::cout);
-            std::cout << std::endl;
-        }
-    } else if (m_conf.hasOpt(POLL_LIST_NEXT_HANDLE_NAME)) {
-        std::string reg = m_conf.get<std::string>(POLL_LIST_NEXT_HANDLE_NAME);
-        unsigned int count = pollMan->getMessageCount(reg);
-        if (!count) {
-            std::cout << "No message" << std::endl;
-        } else {
-            std::auto_ptr<Register::Poll::Message> msg(pollMan->getNextMessage(reg));
-            std::cout << "Messages:" << count << std::endl;
-            msg->textDump(std::cout);
-            std::cout << std::endl;
-        }
-    } else {
-        std::cerr << "Registrar is not set, use ``--" << REGISTRAR_ID_NAME
-            << "'' or ``--" << REGISTRAR_HANDLE_NAME << "''" << std::endl;
-        return;
-    }
-}
-void
-PollClient::set_seen()
-{
-    callHelp(m_conf, no_help);
-    std::auto_ptr<Register::Poll::Manager> pollMan(
-            Register::Poll::Manager::create(
-                &m_db)
-            );
-    try {
-        Register::TID messageId = m_conf.get<unsigned int>(POLL_SET_SEEN_NAME); 
-        if (m_conf.hasOpt(REGISTRAR_ID_NAME)) {
-            Register::TID reg = m_conf.get<unsigned int>(REGISTRAR_ID_NAME);
-            pollMan->setMessageSeen(messageId, reg);
-            std::cout << "NextId:" << pollMan->getNextMessageId(reg) << std::endl;
-        } else if (m_conf.hasOpt(REGISTRAR_HANDLE_NAME)) {
-            std::string reg = m_conf.get<std::string>(REGISTRAR_ID_NAME);
-            pollMan->setMessageSeen(messageId, reg);
-            std::cout << "NextId:" << pollMan->getNextMessageId(reg) << std::endl;
-        } else {
-            std::cerr << "Registrar is not set, use ``--" << REGISTRAR_ID_NAME
-                << "'' or ``--" << REGISTRAR_HANDLE_NAME << "''" << std::endl;
-            return;
-        }
-    } catch (...) {
-        std::cout << "No message" << std::endl;
-    }
-}
+
 void
 PollClient::create_state_changes()
 {
-    callHelp(m_conf, no_help);
-    std::auto_ptr<Register::Poll::Manager> pollMan(
-            Register::Poll::Manager::create(
-                &m_db)
+
+    std::auto_ptr<Fred::Poll::Manager> pollMan(
+            Fred::Poll::Manager::create(
+                m_db)
             );
     std::string exceptTypes("");
-    if (m_conf.hasOpt(POLL_EXCEPT_TYPES_NAME)) {
-        exceptTypes = m_conf.get<std::string>(POLL_EXCEPT_TYPES_NAME);
+    if (poll_create_statechanges_params.poll_except_types.is_value_set()) {//POLL_EXCEPT_TYPES_NAME
+        exceptTypes = poll_create_statechanges_params.poll_except_types.get_value();
     }
     int limit = 0;
-    if (m_conf.hasOpt(POLL_LIMIT_NAME)) {
-        limit = m_conf.get<unsigned int>(POLL_LIMIT_NAME);
+    if (poll_create_statechanges_params.poll_limit.is_value_set()) {//POLL_LIMIT_NAME
+        limit = poll_create_statechanges_params.poll_limit.get_value();
     }
     pollMan->createStateMessages(
             exceptTypes, limit,
-            m_conf.hasOpt(POLL_DEBUG_NAME) ? &std::cout : NULL
+            poll_create_statechanges_params.poll_debug ? &std::cout : NULL //POLL_DEBUG_NAME
     );
     return;
 }
+
 void
-PollClient::create_low_credit()
+PollClient::create_request_fee_messages()
 {
-    callHelp(m_conf, no_help);
-    std::auto_ptr<Register::Poll::Manager> pollMan(
-            Register::Poll::Manager::create(
-                &m_db)
+    boost::gregorian::date period_to;
+    if(poll_create_request_fee_messages_params.poll_period_to.is_value_set()) {
+        period_to = from_simple_string(
+            poll_create_request_fee_messages_params.poll_period_to.get_value()
+        );
+
+        if(period_to.is_special()) {
+            throw std::runtime_error("charge: Invalid poll_msg_period_to.");
+        }
+    }
+
+    // ORB init
+    FakedArgs orb_fa = CfgArgGroups::instance()->fa;
+
+    HandleCorbaNameServiceArgsGrp* ns_args_ptr=CfgArgGroups::instance()->
+               get_handler_ptr_by_type<HandleCorbaNameServiceArgsGrp>();
+
+    CorbaContainer::set_instance(orb_fa.get_argc(), orb_fa.get_argv()
+           , ns_args_ptr->get_nameservice_host()
+           , ns_args_ptr->get_nameservice_port()
+           , ns_args_ptr->get_nameservice_context());
+
+    std::auto_ptr<Fred::Logger::LoggerClient> cl(new Fred::Logger::LoggerCorbaClientImpl());
+
+    std::auto_ptr<Fred::Poll::Manager> pollMan(
+            Fred::Poll::Manager::create(
+                m_db)
             );
-    pollMan->createLowCreditMessages();
-    return;
-}
-#define ADDOPT(name, type, callable, visible) \
-    {CLIENT_POLL, name, name##_DESC, type, callable, visible}
 
-const struct options
-PollClient::m_opts[] = {
-    add_REGISTRAR_ID,
-    add_REGISTRAR_HANDLE,
-    ADDOPT(POLL_LIST_ALL_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(POLL_LIST_NEXT_NAME, TYPE_UINT, true, true),
-    ADDOPT(POLL_LIST_NEXT_HANDLE_NAME, TYPE_STRING, true, true),
-    ADDOPT(POLL_SET_SEEN_NAME, TYPE_UINT, true, true),
-    ADDOPT(POLL_CREATE_STATE_CHANGES_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(POLL_CREATE_STATE_CHANGES_2_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(POLL_CREATE_LOW_CREDIT_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(POLL_CREATE_LOW_CREDIT_2_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(POLL_SHOW_OPTS_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(POLL_TYPE_NAME, TYPE_UINT, false, false),
-    ADDOPT(POLL_REGID_NAME, TYPE_UINT, false, false),
-    ADDOPT(POLL_NONSEEN_NAME, TYPE_NOTYPE, false, false),
-    ADDOPT(POLL_NONEX_NAME, TYPE_NOTYPE, false, false),
-    ADDOPT(POLL_DEBUG_NAME, TYPE_NOTYPE, false, false),
-    ADDOPT(POLL_EXCEPT_TYPES_NAME, TYPE_STRING, false, false),
-    ADDOPT(POLL_LIMIT_NAME, TYPE_UINT, false, false),
-};
+    pollMan->createRequestFeeMessages(cl.get(), period_to);
 
-#undef ADDOPT
-
-int 
-PollClient::getOptsCount()
-{
-    return sizeof(m_opts) / sizeof(options);
 }
 
 } // namespace Admin;

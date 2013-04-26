@@ -1,7 +1,7 @@
 #include <math.h>
 #include <memory>
 #include <iomanip>
-#include <corba/ccReg.hh>
+#include <corba/Filters.hh>
 #include <algorithm>
 #include <boost/utility.hpp>
 
@@ -9,8 +9,8 @@
 #include "filter_impl.h"
 #include "old_utils/log.h"
 #include "old_utils/dbsql.h"
-#include "register/notify.h"
-#include "register/filter.h"
+#include "fredlib/notify.h"
+#include "fredlib/filter.h"
 #include "corba/mailer_manager.h"
 
 #include "log/logger.h"
@@ -120,13 +120,13 @@ public:
   }
 };
 
-class FilterRequestServiceTypeImpl : virtual public POA_ccReg::Filters::RequestServiceType, public FilterSimpleImpl {
-  Database::Filters::RequestServiceType* get() {
-    return dynamic_cast<Database::Filters::RequestServiceType*>(f);
+class FilterServiceTypeImpl : virtual public POA_ccReg::Filters::ServiceType, public FilterSimpleImpl {
+  Database::Filters::ServiceType* get() {
+    return dynamic_cast<Database::Filters::ServiceType*>(f);
   }
 
 public:
-  FilterRequestServiceTypeImpl(Database::Filters::RequestServiceType* f) :
+  FilterServiceTypeImpl(Database::Filters::ServiceType* f) :
     FilterSimpleImpl(f) {
   }
 
@@ -141,23 +141,23 @@ public:
   }
 };
 
-class FilterRequestActionTypeImpl : virtual public POA_ccReg::Filters::RequestActionType, public FilterSimpleImpl {
-  Database::Filters::RequestActionType* get() {
-    return dynamic_cast<Database::Filters::RequestActionType*>(f);
+class FilterRequestTypeImpl : virtual public POA_ccReg::Filters::RequestType, public FilterSimpleImpl {
+  Database::Filters::RequestType* get() {
+    return dynamic_cast<Database::Filters::RequestType*>(f);
   }
 
 public:
-  FilterRequestActionTypeImpl(Database::Filters::RequestActionType* f) :
+  FilterRequestTypeImpl(Database::Filters::RequestType* f) :
     FilterSimpleImpl(f) {
   }
 
-  ccReg::RequestActionType value() {
+  ccReg::RequestType value() {
     long int val;
     val = (long int)get()->getValue().getValue();
-    return ccReg::RequestActionType(val);
+    return ccReg::RequestType(val);
   }
 
-  void value(ccReg::RequestActionType v) {
+  void value(ccReg::RequestType v) {
     get()->setValue(Database::Null<long int>(v));
   }
 };
@@ -358,6 +358,7 @@ COMPOUND_CLASS(Registrar, Registrar, Compound,
     FILTER_ADD(Str, addEmail);
     FILTER_ADD(Str, addUrl);
     FILTER_ADD(Str, addZoneFqdn);
+    FILTER_ADD(Id, addGroupId);
 );
 
 
@@ -389,6 +390,7 @@ COMPOUND_CLASS(Contact, Contact, Obj,
     FILTER_ADD(Str, addNotifyEmail);
     FILTER_ADD(Str, addVat);
     FILTER_ADD(Str, addSsn);
+    FILTER_ADD(Str, addPhoneNumber);
 );
 
 COMPOUND_CLASS(Domain, Domain, Obj,
@@ -414,18 +416,6 @@ COMPOUND_CLASS(NSSet, NSSet, Obj,
 COMPOUND_CLASS(KeySet, KeySet, Obj,
     FILTER_ADD(Id, addId);
     FILTER_ADD(Contact, addTechContact);
-);
-
-COMPOUND_CLASS(Action, EppAction, Compound,
-    FILTER_ADD(Registrar, addRegistrar);
-    FILTER_ADD(Obj, addObject);
-    FILTER_ADD(Int, addType);
-    FILTER_ADD(Int, addResponse);
-    FILTER_ADD(DateTime, addTime);
-    FILTER_ADD(Str, addClTRID);
-    FILTER_ADD(Str, addSvTRID);
-    FILTER_ADD(Str, addRequestHandle);
-    FILTER_ADD(Int, addEppCodeResponse);
 );
 
 COMPOUND_CLASS(Filter, FilterFilter, Compound,
@@ -479,6 +469,17 @@ COMPOUND_CLASS(Mail, Mail, Compound,
     FILTER_ADD(File, addAttachment);
 );
 
+COMPOUND_CLASS(ResultCode, ResultCode, Compound,
+    FILTER_ADD(Id, addServiceId);
+    FILTER_ADD(Int, addResultCode);
+    FILTER_ADD(Str, addName);
+);
+
+COMPOUND_CLASS(RequestObjectRef, RequestObjectRef, Compound, 
+    FILTER_ADD(Str, addObjectType);
+    FILTER_ADD(Id, addObjectId);
+);
+
 COMPOUND_CLASS(RequestPropertyValue, RequestPropertyValue, Compound,
     FILTER_ADD(Str, addName);
     FILTER_ADD(Str, addValue);
@@ -491,11 +492,14 @@ COMPOUND_CLASS(Request, Request, Compound,
     FILTER_ADD(DateTime, addTimeEnd);
     FILTER_ADD(Str, addSourceIp);
     FILTER_ADD(Str, addUserName);
+    FILTER_ADD(Id, addUserId);
     FILTER_ADD(Bool, addIsMonitoring);
-    FILTER_ADD(RequestServiceType, addService);
-    FILTER_ADD(RequestActionType, addActionType);
+    FILTER_ADD(ServiceType, addServiceType);
+    FILTER_ADD(RequestType, addRequestType);
     FILTER_ADD(RequestData, addRequestData);
     FILTER_ADD(RequestPropertyValue, addRequestPropertyValue);
+    FILTER_ADD(ResultCode, addResultCode);
+    FILTER_ADD(RequestObjectRef, addRequestObjectRef);
 );
 
 COMPOUND_CLASS(RequestData, RequestData, Compound,
@@ -505,10 +509,10 @@ COMPOUND_CLASS(RequestData, RequestData, Compound,
 
 COMPOUND_CLASS(Session, Session, Compound,
     FILTER_ADD(Id, addId);
-    FILTER_ADD(Str, addName);
+    FILTER_ADD(Str, addUserName);
+    FILTER_ADD(Id, addUserId);
     FILTER_ADD(DateTime, addLoginDate);
     FILTER_ADD(DateTime, addLogoutDate);
-    FILTER_ADD(Str, addLang);
 );
 
 COMPOUND_CLASS(StatementItem, BankPayment, Compound,
@@ -522,10 +526,10 @@ COMPOUND_CLASS(StatementItem, BankPayment, Compound,
     FILTER_ADD(Str, addSpecSymb);
     FILTER_ADD(Str, addAccountEvid);
     FILTER_ADD(Date, addAccountDate);
-    FILTER_ADD(Id, addInvoiceId);
     FILTER_ADD(Str, addAccountName);
     FILTER_ADD(DateTime, addCrTime);
-
+    FILTER_ADD(Str, addAccountMemo);
+    FILTER_ADD(Id, addAccountId);
 );
 
 
@@ -539,7 +543,6 @@ COMPOUND_CLASS(StatementHead, BankStatement, Compound,
     FILTER_ADD(Str, addConstSymbol);
     FILTER_ADD(Str, addVarSymbol);
     FILTER_ADD(Str, addSpecSymbol);
-    FILTER_ADD(Id, addInvoiceId);
 );
 
 
@@ -573,6 +576,18 @@ COMPOUND_CLASS(ZoneSoa, ZoneSoa , Zone,
     FILTER_ADD(Str, addNsFqdn);
 );
 
+COMPOUND_CLASS(Message, Message , Compound,
+    FILTER_ADD(Id, addId);
+    FILTER_ADD(DateTime, addCrDate);
+    FILTER_ADD(DateTime, addModDate);
+    FILTER_ADD(Int, addAttempt);
+    FILTER_ADD(Int, addStatus);
+    FILTER_ADD(Int, addCommType);
+    FILTER_ADD(Int, addMessageType);
+    FILTER_ADD(Str, addSmsPhoneNumber);
+    FILTER_ADD(Str, addLetterAddrName);
+    FILTER_ADD(Contact, addMessageContact);
+);
 
 FilterIteratorImpl::FilterIteratorImpl() :
   i(flist.end()) {
@@ -631,11 +646,10 @@ ITERATOR_ADD_E_METHOD_IMPL(Int,Value<int>);
 ITERATOR_ADD_E_METHOD_IMPL(IntInterval,Interval<int>);
 ITERATOR_ADD_E_METHOD_IMPL(Bool,Value<bool>);
 ITERATOR_ADD_E_METHOD_IMPL(Id,Value<Database::ID>);
-ITERATOR_ADD_E_METHOD_IMPL(Action,EppAction);
 ITERATOR_ADD_E_METHOD_IMPL(Date,Interval<Database::DateInterval>);
 ITERATOR_ADD_E_METHOD_IMPL(DateTime,Interval<Database::DateTimeInterval>);
-ITERATOR_ADD_E_METHOD_IMPL(RequestServiceType,RequestServiceType);
-ITERATOR_ADD_E_METHOD_IMPL(RequestActionType,RequestActionType);
+ITERATOR_ADD_E_METHOD_IMPL(ServiceType,ServiceType);
+ITERATOR_ADD_E_METHOD_IMPL(RequestType,RequestType);
 ITERATOR_ADD_E_METHOD_IMPL(Obj,Object);
 ITERATOR_ADD_E_METHOD_IMPL(Registrar,Registrar);
 ITERATOR_ADD_E_METHOD_IMPL(Filter,FilterFilter);
@@ -648,6 +662,8 @@ ITERATOR_ADD_E_METHOD_IMPL(File,File);
 ITERATOR_ADD_E_METHOD_IMPL(Invoice,Invoice);
 ITERATOR_ADD_E_METHOD_IMPL(Mail,Mail);
 ITERATOR_ADD_E_METHOD_IMPL(ObjectState,ObjectState);
+ITERATOR_ADD_E_METHOD_IMPL(ResultCode,ResultCode);
+ITERATOR_ADD_E_METHOD_IMPL(RequestObjectRef,RequestObjectRef);
 ITERATOR_ADD_E_METHOD_IMPL(RequestPropertyValue,RequestPropertyValue);
 ITERATOR_ADD_E_METHOD_IMPL(RequestData,RequestData);
 ITERATOR_ADD_E_METHOD_IMPL(Request,Request);
@@ -658,6 +674,8 @@ ITERATOR_ADD_E_METHOD_IMPL(StatementHead, BankStatement);
 ITERATOR_ADD_E_METHOD_IMPL(ZoneSoa, ZoneSoa);
 ITERATOR_ADD_E_METHOD_IMPL(ZoneNs, ZoneNs);
 ITERATOR_ADD_E_METHOD_IMPL(Zone, Zone);
+
+ITERATOR_ADD_E_METHOD_IMPL(Message, Message);
 
 
 #define ITERATOR_ADD_FILTER_METHOD_IMPL(ct,dt) \
@@ -671,7 +689,6 @@ void FilterIteratorImpl::addFilter(Database::Filters::Filter *f) {
   ITERATOR_ADD_FILTER_METHOD_IMPL(Int,Value<int>);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Id,Value<Database::ID>);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Bool,Value<bool>);
-  ITERATOR_ADD_FILTER_METHOD_IMPL(Action,EppAction);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Date,Interval<Database::DateInterval>);
   ITERATOR_ADD_FILTER_METHOD_IMPL(DateTime,Interval<Database::DateTimeInterval>);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Obj,Object);
@@ -686,26 +703,26 @@ void FilterIteratorImpl::addFilter(Database::Filters::Filter *f) {
   ITERATOR_ADD_FILTER_METHOD_IMPL(Invoice,Invoice);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Mail,Mail);
   ITERATOR_ADD_FILTER_METHOD_IMPL(ObjectState,ObjectState);
-  ITERATOR_ADD_FILTER_METHOD_IMPL(ObjectState,ObjectState);
+  ITERATOR_ADD_FILTER_METHOD_IMPL(ResultCode,ResultCode);
+  ITERATOR_ADD_FILTER_METHOD_IMPL(RequestObjectRef,RequestObjectRef);
   ITERATOR_ADD_FILTER_METHOD_IMPL(RequestPropertyValue,RequestPropertyValue);
   ITERATOR_ADD_FILTER_METHOD_IMPL(RequestData,RequestData);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Request,Request);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Session,Session);
   ITERATOR_ADD_FILTER_METHOD_IMPL(IntInterval,Interval<int>);
 /*
-  ITERATOR_ADD_FILTER_METHOD_IMPL(RequestServiceType,Value<Database::Filters::RequestServiceType>);
-  ITERATOR_ADD_FILTER_METHOD_IMPL(RequestActionType,Value<Database::Filters::RequestActionType>);
+  ITERATOR_ADD_FILTER_METHOD_IMPL(ServiceType,Value<Database::Filters::ServiceType>);
+  ITERATOR_ADD_FILTER_METHOD_IMPL(RequestType,Value<Database::Filters::RequestType>);
 */
-  ITERATOR_ADD_FILTER_METHOD_IMPL(RequestServiceType,RequestServiceType);
-  ITERATOR_ADD_FILTER_METHOD_IMPL(RequestActionType,RequestActionType);
+  ITERATOR_ADD_FILTER_METHOD_IMPL(ServiceType,ServiceType);
+  ITERATOR_ADD_FILTER_METHOD_IMPL(RequestType,RequestType);
   ITERATOR_ADD_FILTER_METHOD_IMPL(StatementItem, BankPayment);
   ITERATOR_ADD_FILTER_METHOD_IMPL(StatementHead, BankStatement);
 
   ITERATOR_ADD_FILTER_METHOD_IMPL(ZoneSoa, ZoneSoa);
   ITERATOR_ADD_FILTER_METHOD_IMPL(ZoneNs, ZoneNs);
   ITERATOR_ADD_FILTER_METHOD_IMPL(Zone, Zone);
-
-
+  ITERATOR_ADD_FILTER_METHOD_IMPL(Message, Message);
 
 }
 

@@ -7,9 +7,8 @@
 #include <vector>
 
 #include "corba/mailer_manager.h"
-#include "register/register.h"
+#include "fredlib/registry.h"
 #include "old_utils/dbsql.h"
-#include "old_utils/conf.h"
 #include "model/model_filters.h"
 
 class FilterBaseImpl;
@@ -36,7 +35,6 @@ public:
   ccReg::Filters::NSSet_ptr addE(Database::Filters::NSSet* f);
   ccReg::Filters::KeySet_ptr addE(Database::Filters::KeySet* f);
   ccReg::Filters::Registrar_ptr addE(Database::Filters::Registrar* f);
-  ccReg::Filters::Action_ptr addE(Database::Filters::EppAction* f);
   ccReg::Filters::PublicRequest_ptr addE(Database::Filters::PublicRequest* f);
   ccReg::Filters::Invoice_ptr addE(Database::Filters::Invoice* f);
   ccReg::Filters::Mail_ptr addE(Database::Filters::Mail* f);
@@ -46,12 +44,14 @@ public:
   ccReg::Filters::RequestPropertyValue_ptr addE(Database::Filters::RequestPropertyValue *f);
   ccReg::Filters::RequestData_ptr addE(Database::Filters::RequestData* f);
   ccReg::Filters::Session_ptr addE(Database::Filters::Session* f);
+  ccReg::Filters::ResultCode_ptr addE(Database::Filters::ResultCode* f);
+  ccReg::Filters::RequestObjectRef_ptr addE(Database::Filters::RequestObjectRef* f);
    
 
-  // ccReg::Filters::RequestServiceType_ptr addE(Database::Filters::Value<Database::Filters::RequestServiceType> *f);
-  // ccReg::Filters::RequestActionType_ptr addE(Database::Filters::Value<Database::Filters::RequestActionType> *f);
-  ccReg::Filters::RequestServiceType_ptr addE(Database::Filters::RequestServiceType *f);
-  ccReg::Filters::RequestActionType_ptr addE(Database::Filters::RequestActionType *f);
+  // ccReg::Filters::ServiceType_ptr addE(Database::Filters::Value<Database::Filters::ServiceType> *f);
+  // ccReg::Filters::RequestType_ptr addE(Database::Filters::Value<Database::Filters::RequestType> *f);
+  ccReg::Filters::ServiceType_ptr addE(Database::Filters::ServiceType *f);
+  ccReg::Filters::RequestType_ptr addE(Database::Filters::RequestType *f);
   ccReg::Filters::StatementItem_ptr addE(Database::Filters::BankPayment *f);
   ccReg::Filters::StatementHead_ptr addE(Database::Filters::BankStatement *f);
 
@@ -59,6 +59,9 @@ public:
   ccReg::Filters::ZoneSoa_ptr addE(Database::Filters::ZoneSoa *f);
   ccReg::Filters::ZoneNs_ptr addE(Database::Filters::ZoneNs *f);
   ccReg::Filters::Zone_ptr addE(Database::Filters::Zone *f);
+
+  ccReg::Filters::Message_ptr addE(Database::Filters::Message *f);
+
 
 
   void addFilter(Database::Filters::Filter* f);

@@ -24,7 +24,7 @@ char * wrap_str(const char *str)
 	if (ret == NULL) return NULL;
 
 	mem_pool->push_back(ret);
-	strcpy(ret, str);
+	strncpy(ret, str, len);
 	return ret;
 }
 
@@ -44,14 +44,14 @@ char * wrap_str(const char *str)
  *
  * @returns			NULL in case of an allocation error, modified c_props otherwise
  */
-Register::Logger::RequestProperties *epp_property_push(Register::Logger::RequestProperties *c_props, const  char *name, const char *value, bool output, bool child)
+Fred::Logger::RequestProperties *epp_property_push(Fred::Logger::RequestProperties *c_props, const  char *name, const char *value, bool output, bool child)
 {
 	if(c_props == NULL) {
-		c_props = new Register::Logger::RequestProperties();
+		c_props = new Fred::Logger::RequestProperties();
 	}
 
 	if (value != NULL) {
-		Register::Logger::RequestProperty p;
+		Fred::Logger::RequestProperty p;
 
 		p.name =  name;
 		p.value = value;
@@ -79,9 +79,9 @@ Register::Logger::RequestProperties *epp_property_push(Register::Logger::Request
  *
  */
 
-Register::Logger::RequestProperties *epp_property_push_qhead(Register::Logger::RequestProperties *c_props, qhead *list, const char *list_name, bool output, bool child)
+Fred::Logger::RequestProperties *epp_property_push_qhead(Fred::Logger::RequestProperties *c_props, qhead *list, const char *list_name, bool output, bool child)
 {
-	Register::Logger::RequestProperties *ret;
+	Fred::Logger::RequestProperties *ret;
 
 	if (list->count == 0) {
 		return c_props;
@@ -109,13 +109,13 @@ Register::Logger::RequestProperties *epp_property_push_qhead(Register::Logger::R
  * @returns			NULL in case of an allocation error, modified c_props otherwise
  */
 
-Register::Logger::RequestProperties *epp_property_push_int(Register::Logger::RequestProperties *c_props, const char *name, int value, bool output)
+Fred::Logger::RequestProperties *epp_property_push_int(Fred::Logger::RequestProperties *c_props, const char *name, int value, bool output)
 {
-	Register::Logger::RequestProperty p;
+	Fred::Logger::RequestProperty p;
 	char str[12];
 
 	if(c_props == NULL) {
-		c_props = new Register::Logger::RequestProperties;
+		c_props = new Fred::Logger::RequestProperties;
 	}
 
 	snprintf(str, 12, "%i", value);
@@ -138,7 +138,7 @@ Register::Logger::RequestProperties *epp_property_push_int(Register::Logger::Req
  *      *
  *       *  @returns 	log entry properties or NULL in case of an allocation error
  *        */
-Register::Logger::RequestProperties *epp_log_postal_info(Register::Logger::RequestProperties *p, epp_postalInfo *pi)
+Fred::Logger::RequestProperties *epp_log_postal_info(Fred::Logger::RequestProperties *p, epp_postalInfo *pi)
 {
 	if(pi == NULL) return p;
 
@@ -168,7 +168,7 @@ Register::Logger::RequestProperties *epp_log_postal_info(Register::Logger::Reque
  *      *
  *       *  @returns 	log entry properties or NULL in case of an allocation error
  *        */
-Register::Logger::RequestProperties *epp_log_disclose_info(Register::Logger::RequestProperties *p, epp_discl *ed)
+Fred::Logger::RequestProperties *epp_log_disclose_info(Fred::Logger::RequestProperties *p, epp_discl *ed)
 {
 	if(ed->flag == 1) {
 		p = epp_property_push(p, "discl.policy", "private", false, false);
@@ -214,12 +214,11 @@ Register::Logger::RequestProperties *epp_log_disclose_info(Register::Logger::Req
  * @returns 		log entry properties or NULL in case of an allocation error
  *
  */
-Register::Logger::RequestProperties *epp_property_push_ds(Register::Logger::RequestProperties *c_props, qhead *list, const char *list_name)
+Fred::Logger::RequestProperties *epp_property_push_ds(Fred::Logger::RequestProperties *c_props, qhead *list, const char *list_name)
 {
 	char str[LOG_PROP_NAME_LENGTH]; /* property name */
 
 	epp_ds *value;				/* ds record data structure */
-	Register::Logger::RequestProperties *ret;	/* return value in case the list is not empty	*/
 
 	if (q_length(*list) > 0) {
 
@@ -228,38 +227,36 @@ Register::Logger::RequestProperties *epp_property_push_ds(Register::Logger::Requ
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "keytag");
-			if ((ret = epp_property_push_int(c_props, str, value->keytag, false)) == NULL) {
+			if ((c_props = epp_property_push_int(c_props, str, value->keytag, false)) == NULL) {
 				return NULL;
 			}
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "alg");
-			if ((ret = epp_property_push_int(c_props, str, value->alg, false)) == NULL) {
+			if ((c_props = epp_property_push_int(c_props, str, value->alg, false)) == NULL) {
 				return NULL;
 			}
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "digestType");
-			if ((ret = epp_property_push_int(c_props, str, value->digestType, false)) == NULL) {
+			if ((c_props = epp_property_push_int(c_props, str, value->digestType, false)) == NULL) {
 				return NULL;
 			}
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "digest");
-			if ((ret = epp_property_push(c_props, str, value->digest, false, false)) == NULL) {
+			if ((c_props = epp_property_push(c_props, str, value->digest, false, false)) == NULL) {
 				return NULL;
 			}
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "maxSigLife");
-			if ((ret = epp_property_push_int(c_props, str, value->maxSigLife, false)) == NULL) {
+			if ((c_props = epp_property_push_int(c_props, str, value->maxSigLife, false)) == NULL) {
 				return NULL;
 			}
 		}
-		return ret;
-	} else {
-		return c_props;
-	}
+        }
+        return c_props;
 
 }
 
@@ -275,12 +272,11 @@ Register::Logger::RequestProperties *epp_property_push_ds(Register::Logger::Requ
  * @returns 		log entry properties or NULL in case of an allocation error
  *
  */
-Register::Logger::RequestProperties *epp_property_push_valerr(Register::Logger::RequestProperties *c_props, qhead *list, char *list_name)
+Fred::Logger::RequestProperties *epp_property_push_valerr(Fred::Logger::RequestProperties *c_props, qhead *list, char *list_name)
 {
 	char str[LOG_PROP_NAME_LENGTH]; /* property name */
 
 	epp_error *value;			/* ds record data structure */
-	Register::Logger::RequestProperties *ret;	/* return value in case the list is not empty	*/
 
 	if (q_length(*list) > 0) {
 
@@ -289,21 +285,19 @@ Register::Logger::RequestProperties *epp_property_push_valerr(Register::Logger::
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "element");
-			if ((ret = epp_property_push(c_props, str, value->value, true, false)) == NULL) {
+			if ((c_props = epp_property_push(c_props, str, value->value, true, false)) == NULL) {
 				return NULL;
 			}
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "reason");
-			if ((ret = epp_property_push(c_props, str, value->reason, true, false)) == NULL) {
+			if ((c_props = epp_property_push(c_props, str, value->reason, true, false)) == NULL) {
 				return NULL;
 			}
 
 		}
-		return ret;
-	} else {
-		return c_props;
-	}
+        }
+        return c_props;
 
 }
 
@@ -318,12 +312,11 @@ Register::Logger::RequestProperties *epp_property_push_valerr(Register::Logger::
  * @returns 		log entry properties or NULL in case of an allocation error
  *
  */
-Register::Logger::RequestProperties *epp_property_push_nsset(Register::Logger::RequestProperties *c_props, qhead *list, const char *list_name)
+Fred::Logger::RequestProperties *epp_property_push_nsset(Fred::Logger::RequestProperties *c_props, qhead *list, const char *list_name)
 {
 	char str[LOG_PROP_NAME_LENGTH]; /* property name */
 
 	epp_ns *value;				/* ds record data structure */
-	Register::Logger::RequestProperties *ret;	/* return value in case the list is not empty	*/
 
 	if (q_length(*list) > 0) {
 
@@ -332,20 +325,18 @@ Register::Logger::RequestProperties *epp_property_push_nsset(Register::Logger::R
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "name");
-			if ((ret = epp_property_push(c_props, str, value->name, false, false)) == NULL) {
+			if ((c_props = epp_property_push(c_props, str, value->name, false, false)) == NULL) {
 				return NULL;
 			}
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "addr");
-			if ((ret = epp_property_push_qhead(c_props, &value->addr, str, false, true)) == NULL) {
+			if ((c_props = epp_property_push_qhead(c_props, &value->addr, str, false, true)) == NULL) {
 				return NULL;
 			}
 		}
-		return ret;
-	} else {
-		return c_props;
-	}
+        }
+        return c_props;
 
 }
 
@@ -360,11 +351,10 @@ Register::Logger::RequestProperties *epp_property_push_nsset(Register::Logger::R
  * @returns 		log entry properties or NULL in case of an allocation error
  *
  */
-Register::Logger::RequestProperties *epp_property_push_dnskey(Register::Logger::RequestProperties *c_props, qhead *list, const char *list_name)
+Fred::Logger::RequestProperties *epp_property_push_dnskey(Fred::Logger::RequestProperties *c_props, qhead *list, const char *list_name)
 {
 	char str[LOG_PROP_NAME_LENGTH];
 	epp_dnskey *value;
-	Register::Logger::RequestProperties *ret;
 
 	if (q_length(*list) > 0) {
 		q_foreach(list) {
@@ -372,34 +362,31 @@ Register::Logger::RequestProperties *epp_property_push_dnskey(Register::Logger::
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "flags");
-			if ((ret = epp_property_push_int(c_props, str, value->flags, false)) == NULL) {
+			if ((c_props = epp_property_push_int(c_props, str, value->flags, false)) == NULL) {
 				return NULL;
 			}
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "protocol");
-			if ((ret = epp_property_push_int(c_props, str, value->protocol, false)) == NULL) {
+			if ((c_props = epp_property_push_int(c_props, str, value->protocol, false)) == NULL) {
 				return NULL;
 			}
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "alg");
-			if ((ret = epp_property_push_int(c_props, str, value->alg, false)) == NULL) {
+			if ((c_props = epp_property_push_int(c_props, str, value->alg, false)) == NULL) {
 				return NULL;
 			}
 
 			str[0] = '\0';
 			snprintf(str, LOG_PROP_NAME_LENGTH, "%s.%s", list_name, "publicKey");
-			if ((ret = epp_property_push(c_props, str, value->public_key, false, false)) == NULL) {
+			if ((c_props = epp_property_push(c_props, str, value->public_key, false, false)) == NULL) {
 				return NULL;
 			}
 
 		}
-		return ret;
-
-	} else {
-		return c_props;
-	}
+        }
+        return c_props;
 
 }
 
@@ -407,17 +394,14 @@ Register::Logger::RequestProperties *epp_property_push_dnskey(Register::Logger::
  * Log an epp command using fred-logd service. Raw content as well as
  * parsed values inserted as properties are sent to the logging facility
  *
- * @param	service 	a reference to the logging service CORBA object
- * @param	c			connection record
- * @param	request		raw content of the request
  * @param 	cdata		command data, parsed content
  * @param   	cmdtype 	command type returned by parse_command function
  * @param 	sessionid   login id for the session
- * @param	action_type	to be removed - already in request table
+ * @param	request_type_id	to be removed - already in request table
  *
  * @return  status
  */
-auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *cdata, epp_red_command_type cmdtype, int sessionid, epp_action_type *action_type)
+auto_ptr<Fred::Logger::RequestProperties> log_epp_command(epp_command_data *cdata, epp_red_command_type cmdtype, int sessionid, epp_action_type *request_type_id)
 {
 #define PUSH_PROPERTY(seq, name, value)								\
 	seq = epp_property_push(seq, name, value, false, false);	\
@@ -440,7 +424,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 	//int res;								/* response from corba call wrapper */
 												
 	char errmsg[MAX_ERROR_MSG_LEN];			/* error message returned from corba call */
-	Register::Logger::RequestProperties *c_props = NULL;	/* properties to be sent to the log */
+	Fred::Logger::RequestProperties *c_props = NULL;	/* properties to be sent to the log */
 	/* data structures for every command */
 	epps_sendAuthInfo *ai;
 	epps_create_contact *cc;
@@ -457,23 +441,23 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 	epps_login *el;
 	epps_check *ec;
 
-	c_props = new Register::Logger::RequestProperties;
+	c_props = new Fred::Logger::RequestProperties;
 	
 	errmsg[0] = '\0';
 	if(cdata->type == EPP_DUMMY) {
-		*action_type = (epp_action_type)999900;
+		*request_type_id = (epp_action_type)999900;
 		PUSH_PROPERTY (c_props, "command", "dummy");
 		PUSH_PROPERTY (c_props, "clTRID", cdata->clTRID);
 		PUSH_PROPERTY (c_props, "svTRID", cdata->svTRID);
 
 		// res = epp_log_new_message(request, c_props, &errmsg);
-		return auto_ptr<Register::Logger::RequestProperties>(c_props);
+		return auto_ptr<Fred::Logger::RequestProperties>(c_props);
 	}
 
 	switch(cmdtype) {
 		case EPP_RED_LOGIN:
 			if (cdata->type == EPP_LOGIN){
-				*action_type = ClientLogin;
+				*request_type_id = ClientLogin;
 
 				el = static_cast<epps_login*>(cdata->data);
 
@@ -493,19 +477,19 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 
 				switch(cdata->type) {
 					case EPP_SENDAUTHINFO_CONTACT:
-						*action_type = ContactSendAuthInfo;
+						*request_type_id = ContactSendAuthInfo;
 
 						break;
 					case EPP_SENDAUTHINFO_DOMAIN:
-						*action_type = DomainSendAuthInfo;
+						*request_type_id = DomainSendAuthInfo;
 
 						break;
 					case EPP_SENDAUTHINFO_NSSET:
-						*action_type = NSSetSendAuthInfo;
+						*request_type_id = NSSetSendAuthInfo;
 
 						break;
 					case EPP_SENDAUTHINFO_KEYSET:
-						*action_type = KeySetSendAuthInfo;
+						*request_type_id = KeySetSendAuthInfo;
 
 						break;
 					default:
@@ -514,28 +498,28 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 
 				PUSH_PROPERTY(c_props, "id", ai->id);
 
-				return auto_ptr<Register::Logger::RequestProperties>(c_props);
+				return auto_ptr<Fred::Logger::RequestProperties>(c_props);
 			}
 			break;
 
 		case EPP_RED_LOGOUT:
-			*action_type = ClientLogout;
+			*request_type_id = ClientLogout;
 
 			break;
 
 		case EPP_RED_CHECK:
 			switch(cdata->type) {
 				case EPP_CHECK_CONTACT:
-					*action_type = ContactCheck;
+					*request_type_id = ContactCheck;
 					break;
 				case EPP_CHECK_DOMAIN:
-					*action_type = DomainCheck;
+					*request_type_id = DomainCheck;
 					break;
 				case EPP_CHECK_NSSET:
-					*action_type = NSsetCheck;
+					*request_type_id = NSsetCheck;
 					break;
 				case EPP_CHECK_KEYSET:
-					*action_type = KeysetCheck;
+					*request_type_id = KeysetCheck;
 					break;
                 default:
                     break;
@@ -549,26 +533,26 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 
 			switch(cdata->type) {
 				case EPP_LIST_CONTACT:
-					*action_type = ListContact;
+					*request_type_id = ListContact;
 
 					break;
 				case EPP_LIST_KEYSET:
-					*action_type = ListKeySet;
+					*request_type_id = ListKeySet;
 
 					break;
 				case EPP_LIST_NSSET:
-					*action_type = ListNSset;
+					*request_type_id = ListNSset;
 
 					break;
 				case EPP_LIST_DOMAIN:
-					*action_type = ListDomain;
+					*request_type_id = ListDomain;
 
 					break;
 				case EPP_INFO_CONTACT: {
 					epps_info_contact *i = static_cast<epps_info_contact*>(cdata->data);
 
 					PUSH_PROPERTY(c_props, "id", i->id)
-					*action_type = ContactInfo;
+					*request_type_id = ContactInfo;
 
 					break;
 				}
@@ -576,7 +560,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 					epps_info_keyset *i = static_cast<epps_info_keyset*>(cdata->data);
 
 					PUSH_PROPERTY(c_props, "id", i->id)
-					*action_type = KeysetInfo;
+					*request_type_id = KeysetInfo;
 
 					break;
 				}
@@ -584,7 +568,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 					epps_info_nsset *i = static_cast<epps_info_nsset*>(cdata->data);
 
 					PUSH_PROPERTY(c_props, "id", i->id)
-					*action_type = NSsetInfo;
+					*request_type_id = NSsetInfo;
 
 					break;
 				}
@@ -592,7 +576,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 					epps_info_domain *i = static_cast<epps_info_domain*>(cdata->data);
 
 					PUSH_PROPERTY(c_props, "name", i->name)
-					*action_type = DomainInfo;
+					*request_type_id = DomainInfo;
 
 					break;
 				}
@@ -604,18 +588,18 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 		case EPP_RED_POLL:
 
 			if(cdata->type == EPP_POLL_ACK) {
-				*action_type = PollAcknowledgement;
+				*request_type_id = PollAcknowledgement;
 				epps_poll_ack *pa = static_cast<epps_poll_ack*>(cdata->data);
 				PUSH_PROPERTY(c_props, "msgId", pa->msgid);
 			} else {
-				*action_type = PollResponse;
+				*request_type_id = PollResponse;
 			}
 			break;
 
 		case EPP_RED_CREATE:
 			switch(cdata->type) {
 				case EPP_CREATE_CONTACT:
-					*action_type = ContactCreate;
+					*request_type_id = ContactCreate;
 
 					cc = static_cast<epps_create_contact*>(cdata->data);
 
@@ -652,7 +636,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 					break;
 
 				case EPP_CREATE_DOMAIN:
-					*action_type = DomainCreate;
+					*request_type_id = DomainCreate;
 
 					cd = static_cast<epps_create_domain*>(cdata->data);
 
@@ -675,7 +659,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 					break;
 
 				case EPP_CREATE_NSSET:
-					*action_type = NSsetCreate;
+					*request_type_id = NSsetCreate;
 
 					cn = static_cast<epps_create_nsset*>(cdata->data);
 
@@ -691,7 +675,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 
 					break;
 				case EPP_CREATE_KEYSET:
-					*action_type = KeysetCreate;
+					*request_type_id = KeysetCreate;
 
 					ck = static_cast<epps_create_keyset*>(cdata->data);
 
@@ -710,7 +694,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 					PUSH_QHEAD(c_props, &ck->tech, "techContact");
 					break;
 				default:
-					*action_type = (epp_action_type)999901;
+					*request_type_id = (epp_action_type)999901;
 					break;
 			}
 
@@ -718,19 +702,19 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 		case EPP_RED_DELETE:
 			switch(cdata->type) {
 				case EPP_DELETE_CONTACT:
-					*action_type = ContactDelete;
+					*request_type_id = ContactDelete;
 					break;
 				case EPP_DELETE_DOMAIN:
-					*action_type = DomainDelete;
+					*request_type_id = DomainDelete;
 					break;
 				case EPP_DELETE_NSSET:
-					*action_type = NSsetDelete;
+					*request_type_id = NSsetDelete;
 					break;
 				case EPP_DELETE_KEYSET:
-					*action_type = KeysetDelete;
+					*request_type_id = KeysetDelete;
 					break;
 				default:
-					*action_type = (epp_action_type)999902;
+					*request_type_id = (epp_action_type)999902;
 					break;
 			}
 
@@ -740,7 +724,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 			break;
 
 		case EPP_RED_RENEW:
-			*action_type = DomainRenew;
+			*request_type_id = DomainRenew;
 
 			er = static_cast<epps_renew*>(cdata->data);
 
@@ -760,7 +744,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 
 			switch(cdata->type) {
 				case EPP_UPDATE_CONTACT:
-					*action_type = ContactUpdate;
+					*request_type_id = ContactUpdate;
 
 
 					uc = static_cast<epps_update_contact*>(cdata->data);
@@ -797,7 +781,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 					break;
 
 				case EPP_UPDATE_DOMAIN:
-					*action_type = DomainUpdate;
+					*request_type_id = DomainUpdate;
 
 
 					ud = static_cast<epps_update_domain*>(cdata->data);
@@ -817,7 +801,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 					break;
 
 				case EPP_UPDATE_NSSET:
-					*action_type = NSsetUpdate;
+					*request_type_id = NSsetUpdate;
 
 					un = static_cast<epps_update_nsset*>(cdata->data);
 
@@ -836,7 +820,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 					break;
 
 				case EPP_UPDATE_KEYSET:
-					*action_type = KeysetUpdate;
+					*request_type_id = KeysetUpdate;
 
 					uk = static_cast<epps_update_keyset*>(cdata->data);
 
@@ -863,7 +847,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 					break;
 				default:
 					// TODO remove these things  ...
-					*action_type = (epp_action_type)999903;
+					*request_type_id = (epp_action_type)999903;
 					break;
 			}
 			break;
@@ -871,19 +855,19 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 		case EPP_RED_TRANSFER:
 			switch(cdata->type) {
 				case EPP_TRANSFER_CONTACT:
-					*action_type = ContactTransfer;
+					*request_type_id = ContactTransfer;
 					break;
 				case EPP_TRANSFER_DOMAIN:
-					*action_type = DomainTransfer;
+					*request_type_id = DomainTransfer;
 					break;
 				case EPP_TRANSFER_NSSET:
-					*action_type = NSsetTransfer;
+					*request_type_id = NSsetTransfer;
 					break;
 				case EPP_TRANSFER_KEYSET:
-					*action_type = KeysetTransfer;
+					*request_type_id = KeysetTransfer;
 					break;
 				default:
-					*action_type = (epp_action_type)999904;
+					*request_type_id = (epp_action_type)999904;
 			}
 
 
@@ -896,55 +880,55 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
                 default:
                     switch (cdata->type) {
                         case EPP_TEST_NSSET:
-                            *action_type = nssetTest;
+                            *request_type_id = nssetTest;
                             break;
                         case EPP_SENDAUTHINFO_CONTACT:
-                            *action_type = ContactSendAuthInfo;
+                            *request_type_id = ContactSendAuthInfo;
                             break;
                         case EPP_SENDAUTHINFO_DOMAIN:
-                            *action_type = DomainSendAuthInfo;
+                            *request_type_id = DomainSendAuthInfo;
                             break;
                         case EPP_SENDAUTHINFO_NSSET:
-                            *action_type = NSSetSendAuthInfo;
+                            *request_type_id = NSSetSendAuthInfo;
                             break;
                         case EPP_SENDAUTHINFO_KEYSET:
-                            *action_type = KeySetSendAuthInfo;
+                            *request_type_id = KeySetSendAuthInfo;
                             break;
                         case EPP_CREDITINFO:
-                            *action_type = ClientCredit;
+                            *request_type_id = ClientCredit;
                             break;
                         case EPP_INFO_LIST_DOMAINS:
-                            *action_type = InfoListDomains;
+                            *request_type_id = InfoListDomains;
                             break;
                         case EPP_INFO_LIST_CONTACTS:
-                            *action_type = InfoListContacts;
+                            *request_type_id = InfoListContacts;
                             break;
                         case EPP_INFO_LIST_KEYSETS:
-                            *action_type = InfoListKeysets;
+                            *request_type_id = InfoListKeysets;
                             break;
                         case EPP_INFO_LIST_NSSETS:
-                            *action_type = InfoListNssets;
+                            *request_type_id = InfoListNssets;
                             break;
                         case EPP_INFO_DOMAINS_BY_NSSET:
-                            *action_type = InfoDomainsByNsset;
+                            *request_type_id = InfoDomainsByNsset;
                             break;
                         case EPP_INFO_DOMAINS_BY_KEYSET:
-                            *action_type = InfoDomainsByKeyset;
+                            *request_type_id = InfoDomainsByKeyset;
                             break;
                         case EPP_INFO_DOMAINS_BY_CONTACT:
-                            *action_type = InfoDomainsByContact;
+                            *request_type_id = InfoDomainsByContact;
                             break;
                         case EPP_INFO_NSSETS_BY_NS:
-                            *action_type = InfoNssetsByNs;
+                            *request_type_id = InfoNssetsByNs;
                             break;
                         case EPP_INFO_NSSETS_BY_CONTACT:
-                            *action_type = InfoNssetsByContact;
+                            *request_type_id = InfoNssetsByContact;
                             break;
                         case EPP_INFO_GET_RESULTS:
-                            *action_type = InfoGetResults;
+                            *request_type_id = InfoGetResults;
                             break;
                         case EPP_INFO_KEYSETS_BY_CONTACT:
-                            *action_type = InfoKeysetsByContact;
+                            *request_type_id = InfoKeysetsByContact;
                             break;
                         default:
                             break;
@@ -958,7 +942,7 @@ auto_ptr<Register::Logger::RequestProperties> log_epp_command(epp_command_data *
 	PUSH_PROPERTY (c_props, "svTRID", cdata->svTRID);
 
 
-	return auto_ptr<Register::Logger::RequestProperties>(c_props);
+	return auto_ptr<Fred::Logger::RequestProperties>(c_props);
 	// res = epp_log_new_message(  request, c_props, &errmsg);
 
 #undef PUSH_PROPERTY

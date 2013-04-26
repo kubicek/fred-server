@@ -13,10 +13,12 @@ void Union::serialize(Database::SelectQuery& _q) {
   if (_q.initialized()) {
     return;
   }
+
   if (filter_list.size() > query_list.size()) {
-    LOGGER(PACKAGE).error(boost::format("assert(filter_list.size() > query_list.size());  %1% <! %2%")
-        % filter_list.size() % query_list.size());
-    throw; // TODO: throw something more meaningfull
+      boost::format msg = boost::format("assert(filter_list.size() > query_list.size());  %1% <! %2%")
+        % filter_list.size() % query_list.size();
+    LOGGER(PACKAGE).error(msg);
+    throw std::runtime_error(msg.str());
   }
 
   bool at_least_one = false;

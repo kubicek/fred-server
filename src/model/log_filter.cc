@@ -3,6 +3,88 @@ namespace Database {
 
 namespace Filters {
 
+ResultCode *ResultCode::create() {
+        return new ResultCodeImpl(true);
+}
+
+ResultCodeImpl::ResultCodeImpl(bool set_active) : Compound() {
+        setName("ResultCode");
+        active = set_active;
+}
+
+Table &ResultCodeImpl::joinResultCodeTable()
+{
+    return joinTable("result_code");
+}
+
+Value<Database::ID>& ResultCodeImpl::addServiceId() 
+{
+    Value<Database::ID> *tmp = new Value<Database::ID>(Column("service_id", joinResultCodeTable()));
+    tmp->setName("ServiceId");
+    add(tmp);
+    return *tmp;
+}
+
+Value<int>& ResultCodeImpl::addResultCode() 
+{
+    Value<int> *tmp = new Value<int>(Column("result_code", joinResultCodeTable()));
+    tmp->setName("ResultCode");
+    add(tmp);
+    return *tmp;
+}
+
+Value<std::string>& ResultCodeImpl::addName()
+{
+    Value<std::string> *tmp = new Value<std::string>(Column("name", joinResultCodeTable()));
+    tmp->setName("Name");
+    add(tmp);
+    return *tmp;
+}
+
+RequestObjectRef* RequestObjectRef::create() {
+        return new RequestObjectRefImpl(true);
+}
+
+RequestObjectRefImpl::RequestObjectRefImpl(bool set_active) : Compound() {
+        setName("RequestObjectRef");
+        active = set_active;
+}
+
+Table& RequestObjectRefImpl::joinRequestObjectRefTable()
+{
+    return joinTable("request_object_ref");
+}
+
+Table& RequestObjectRefImpl::joinRequestObjectTypeTable()
+{
+    return joinTable("request_object_type");
+}
+
+Value<std::string>& RequestObjectRefImpl::addObjectType()
+{
+  addJoin(new Join(
+        Column("object_type_id", joinRequestObjectRefTable()),
+        SQL_OP_EQ,
+        Column("id", joinRequestObjectTypeTable())
+    ));
+  Value<std::string> *tmp = new Value<std::string>(Column("name", joinRequestObjectTypeTable()));
+  tmp->setName("ObjectType");
+  add(tmp);
+  return *tmp;
+}
+
+Value<Database::ID>& RequestObjectRefImpl::addObjectId()
+{
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("object_id", joinRequestObjectRefTable()));
+  tmp->setName("ObjectId");
+  add(tmp);
+  return *tmp;
+}
+
+
+
+
+
 Request* Request::create() {
 	return new RequestImpl(true);
 }
@@ -57,6 +139,14 @@ Value<std::string>& RequestImpl::addUserName()
   return *tmp;
 }
 
+Value<Database::ID>& RequestImpl::addUserId()
+{
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("user_id", joinRequestTable()));
+  tmp->setName("UserId");
+  add(tmp);
+  return *tmp;
+}
+
 Value<bool>& RequestImpl::addIsMonitoring()
 {
   Value<bool> *tmp = new Value<bool>(Column("is_monitoring", joinRequestTable()));
@@ -65,19 +155,19 @@ Value<bool>& RequestImpl::addIsMonitoring()
   return *tmp;
 }
 
-RequestServiceType& RequestImpl::addService()
+ServiceType& RequestImpl::addServiceType()
 {
-  RequestServiceType *tmp = new RequestServiceType(Column("service", joinRequestTable()));
-  tmp->setName("Service");
+  ServiceType *tmp = new ServiceType(Column("service_id", joinRequestTable()));
+  tmp->setName("ServiceType");
   add(tmp);
   return *tmp;
 }
 
 
-RequestActionType& RequestImpl::addActionType()
+RequestType& RequestImpl::addRequestType()
 {
-  RequestActionType *tmp = new RequestActionType (Column("action_type", joinRequestTable()));
-  tmp->setName("ActionType");
+  RequestType *tmp = new RequestType (Column("request_type_id", joinRequestTable()));
+  tmp->setName("RequestType");
   add(tmp);
   return *tmp;
 }
@@ -87,7 +177,7 @@ RequestPropertyValue& RequestImpl::addRequestPropertyValue()
   RequestPropertyValue *tmp = new RequestPropertyValueImpl(true);
   tmp->setName("RequestPropertyValue");
 
-  tmp->joinOn(new Join(Column("id", joinRequestTable()), SQL_OP_EQ,  Column("entry_id", tmp->joinRequestPropertyValueTable())));
+  tmp->joinOn(new Join(Column("id", joinRequestTable()), SQL_OP_EQ,  Column("request_id", tmp->joinRequestPropertyValueTable())));
   add(tmp);
   return *tmp;
 }
@@ -97,10 +187,37 @@ RequestData& RequestImpl::addRequestData()
 	RequestData *tmp = new RequestDataImpl(true);
 	tmp->setName("RequestData");
 
-	tmp->joinOn(new Join(Column("id", joinRequestTable()), SQL_OP_EQ, Column("entry_id", tmp->joinRequestDataTable())));
+	tmp->joinOn(new Join(Column("id", joinRequestTable()), SQL_OP_EQ, Column("request_id", tmp->joinRequestDataTable())));
 	add(tmp);
 	return *tmp;
 }
+
+ResultCode& RequestImpl::addResultCode()
+{
+  ResultCode *tmp = new ResultCodeImpl(true);
+  tmp->setName("ResultCode");
+  
+  tmp->joinOn(new Join(Column("result_code_id", joinRequestTable()), SQL_OP_EQ,
+        Column("id", tmp->joinResultCodeTable())));              
+
+  // tmp->joinOn(new Join(Column("id", tmp->joinResultCodeTable()), SQL_OP_EQ, 
+  //        Column("result_code_id", joinRequestTable())));
+  add(tmp);
+  return *tmp;
+}
+
+RequestObjectRef& RequestImpl::addRequestObjectRef()
+{
+  RequestObjectRef *tmp = new RequestObjectRefImpl(true);
+  tmp->setName("RequestObjectRef");
+  
+  tmp->joinOn(new Join(Column("request_id", tmp->joinRequestObjectRefTable()), SQL_OP_EQ, Column("id", joinRequestTable())));  
+  add(tmp);
+  return *tmp;
+}
+
+
+
 
 RequestPropertyValueImpl::RequestPropertyValueImpl(bool set_active) {
   setName("RequestPropertyValue");
@@ -135,13 +252,13 @@ Value<bool>& RequestPropertyValueImpl::addOutputFlag()
 
 Table &RequestPropertyValueImpl::joinRequestPropertyTable()
 {
-	return joinTable("request_property");
+	return joinTable("request_property_name");
 }
 
 Value<std::string>& RequestPropertyValueImpl::addName()
 {
   addJoin(new Join(
-	Column("name_id", joinRequestPropertyValueTable()),
+	Column("property_name_id", joinRequestPropertyValueTable()),
 	SQL_OP_EQ,
 	Column("id", joinRequestPropertyTable())
   ));
@@ -200,10 +317,18 @@ Value<Database::ID>& SessionImpl::addId()
   return *tmp;
 }
 
-Value<std::string>& SessionImpl::addName()
+Value<std::string>& SessionImpl::addUserName()
 {
-  Value<std::string>* tmp  = new Value<std::string>(Column("name", joinSessionTable())); 
-  tmp->setName("Name");
+  Value<std::string>* tmp  = new Value<std::string>(Column("user_name", joinSessionTable())); 
+  tmp->setName("UserName");
+  add(tmp);
+  return *tmp;
+}
+
+Value<Database::ID>& SessionImpl::addUserId()
+{
+  Value<Database::ID> *tmp = new Value<Database::ID>(Column("user_id", joinSessionTable()));
+  tmp->setName("UserId");
   add(tmp);
   return *tmp;
 }
@@ -224,30 +349,22 @@ Interval<Database::DateTimeInterval>& SessionImpl::addLogoutDate()
   return *tmp;
 }
 
-Value<std::string>& SessionImpl::addLang()
-{
-  Value<std::string>* tmp  = new Value<std::string>(Column("lang", joinSessionTable())); 
-  tmp->setName("Lang");
-  add(tmp);
-  return *tmp;
-}
-
-std::ostream& operator<<(std::ostream &_os, const RequestServiceType& _v) {
+std::ostream& operator<<(std::ostream &_os, const ServiceType& _v) {
   return _os << _v.getValue().getValue();
 }
 
-std::istream& operator>>(std::istream &_is, RequestServiceType& _v) {
+std::istream& operator>>(std::istream &_is, ServiceType& _v) {
   long int tmp;
   _is >> tmp;
   _v.setValue(Database::Null<long>(tmp));
   return _is;
 }
 
-std::ostream& operator<<(std::ostream &_os, const RequestActionType& _v) {
+std::ostream& operator<<(std::ostream &_os, const RequestType& _v) {
   return _os << _v.getValue().getValue();
 }
 
-std::istream& operator>>(std::istream &_is, RequestActionType& _v) {
+std::istream& operator>>(std::istream &_is, RequestType& _v) {
   long int tmp;
   _is >> tmp;
   _v.setValue(Database::Null<long>(tmp));
@@ -255,22 +372,22 @@ std::istream& operator>>(std::istream &_is, RequestActionType& _v) {
 
 }
 
-bool operator<(const RequestServiceType &_left, const RequestServiceType &_right) 
+bool operator<(const ServiceType &_left, const ServiceType &_right) 
 {
 	return _left.getValue().getValue() < _right.getValue().getValue();
 }
 
-bool operator>(const RequestServiceType &_left, const RequestServiceType &_right)
+bool operator>(const ServiceType &_left, const ServiceType &_right)
 {
 	return _left.getValue().getValue() > _right.getValue().getValue();
 }
 
-bool operator<(const RequestActionType &_left, const RequestActionType &_right) 
+bool operator<(const RequestType &_left, const RequestType &_right) 
 {
 	return _left.getValue().getValue() < _right.getValue().getValue();
 }
 
-bool operator>(const RequestActionType &_left, const RequestActionType &_right)
+bool operator>(const RequestType &_left, const RequestType &_right)
 {
 	return _left.getValue().getValue() > _right.getValue().getValue();
 }

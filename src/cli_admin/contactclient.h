@@ -26,52 +26,44 @@
 #include "old_utils/dbsql.h"
 #include "baseclient.h"
 
-#define CONTACT_SHOW_OPTS_NAME          "contact_show_opts"
-#define CONTACT_SHOW_OPTS_NAME_DESC     "show all contact command line options"
-#define CONTACT_INFO_NAME               "contact_info"
-#define CONTACT_INFO_NAME_DESC          "contact info"
-#define CONTACT_LIST_NAME               "contact_list"
-#define CONTACT_LIST_NAME_DESC          "list of all contacts (via filters)"
-#define CONTACT_LIST_PLAIN_NAME         "contact_list_plain"
-#define CONTACT_LIST_PLAIN_NAME_DESC    "list of all contacts (via epp_impl)"
-#define CONTACT_LIST_HELP_NAME          "contact_list_help"
-#define CONTACT_LIST_HELP_NAME_DESC     "help for contact list"
+#include "contact_params.h"
 
 namespace Admin {
 
 class ContactClient : public BaseClient {
 private:
-    Config::Conf m_conf;
-    CORBA::Long m_clientId;
-    DB m_db;
+    DBSharedPtr m_db;
     ccReg::EPP_var m_epp;
+    std::string nameservice_context;
+    bool contact_list;
+    ContactListArgs params;
 
     static const struct options m_opts[];
 public:
     ContactClient()
+    : contact_list(false)
     { }
     ContactClient(
-            const std::string &connstring,
-            const std::string &nsAddr,
-            const Config::Conf &conf):
-        BaseClient(connstring, nsAddr),
-        m_conf(conf)
+            const std::string &connstring
+            , const std::string &nsAddr
+            , const std::string& _nameservice_context
+            , bool _contact_list
+            , const ContactListArgs& _params
+            )
+    : BaseClient(connstring, nsAddr)
+    , nameservice_context(_nameservice_context)
+    , contact_list(_contact_list)
+    , params(_params)
     {
-        m_db.OpenDatabase(connstring.c_str());
+        m_db = connect_DB(connstring
+                , std::runtime_error("ContactClient db connection failed"));
     }
-    ~ContactClient()
-    { }
 
     static const struct options *getOpts();
     static int getOptsCount();
 
     void runMethod();
-
-    void show_opts();
     void list();
-    void info();
-
-    void list_help();
 }; // class ContactClient
 
 } // namespace Admin;

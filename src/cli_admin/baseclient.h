@@ -24,7 +24,9 @@
 #ifndef BASE_CLIENT_H_
 #define BASE_CLIENT_H_
 
-#include "simple.h"
+#include <corba/EPP.hh>
+#include <map>
+#include <string>
 
 namespace Admin {
 
@@ -53,45 +55,7 @@ public:
     m_connstring = _conn_string;
     m_nsAddr     = _nsaddr;
   }
-  void no_help()
-  {
-    std::cout << "There is no help for this topic" << std::endl;
-  }
 
-  void print_options(const std::string &clientName, 
-          const struct options *opts, int count)
-  {
-      if (count == 0) {
-          std::cout << "No parameters" << std::endl;
-          return;
-      }
-      std::string omg;
-      std::cout << clientName << std::endl << "Callable parameters:" << std::endl;
-      for (int i = 0; i < count; i++) {
-          if (opts[i].callable) {
-              if (opts[i].type != TYPE_NOTYPE) {
-                  omg = opts[i].name + std::string(" arg");
-              } else {
-                  omg = opts[i].name;
-              }
-              std::cout.width(24);
-              std::cout << std::left << omg << " - " << opts[i].description << std::endl;
-          }
-      }
-      std::cout << std::endl << "Other parametrs:" << std::endl;
-      for (int i = 0; i < count; i++) {
-          if (!opts[i].callable) {
-              if (opts[i].type != TYPE_NOTYPE) {
-                  omg = opts[i].name + std::string(" arg");
-              } else {
-                  omg = opts[i].name;
-              }
-              std::cout.width(24);
-              std::cout << std::left << omg;
-              std::cout << " - " << opts[i].description << std::endl;
-          }
-      }
-  }
 }; // class BaseClient
 
 } // namespace Admin

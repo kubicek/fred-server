@@ -17,9 +17,6 @@ http://www.itp.uzh.ch/~dpotter/howto/daemonize
 static void daemonize(void)
 {
     pid_t pid, sid;
-    FILE * sfin;
-    FILE* sfout;
-    FILE* sferr;
 
     /* already a daemon */
     if ( getppid() == 1 ) return;
@@ -53,9 +50,9 @@ static void daemonize(void)
 
 
     /* Redirect standard files to /dev/null */
-    sfin=freopen( "/dev/null", "r", stdin);
-    sfout=freopen( "/dev/null", "w", stdout);
-    sferr=freopen( "/dev/null", "w", stderr);
+    if(freopen( "/dev/null", "r", stdin) == NULL) exit(DAE_FAIL);
+    if(freopen( "/dev/null", "w", stdout) == NULL) exit(DAE_FAIL);
+    if(freopen( "/dev/null", "w", stderr) == NULL) exit(DAE_FAIL);
 }
 
 #endif //DAEMONIZE_H

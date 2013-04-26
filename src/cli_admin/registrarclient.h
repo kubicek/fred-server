@@ -19,147 +19,114 @@
 #ifndef _REGISTRARCLIENT_H_
 #define _REGISTRARCLIENT_H_
 
-#define REGISTRAR_SHOW_OPTS_NAME            "registrar_show_opts"
-#define REGISTRAR_SHOW_OPTS_NAME_DESC       "show all registrar command line options"
-#define REGISTRAR_LIST_NAME                 "registrar_list"
-#define REGISTRAR_LIST_NAME_DESC            "list all registrars (via filters)"
-#define REGISTRAR_ZONE_ADD_NAME             "zone_add"
-#define REGISTRAR_ZONE_ADD_NAME_DESC        "add new zone"
-#define REGISTRAR_ZONE_NS_ADD_NAME          "zone_ns_add"
-#define REGISTRAR_ZONE_NS_ADD_NAME_DESC     "add new nameserver to the zone"
-#define REGISTRAR_REGISTRAR_ADD_NAME        "registrar_add"
-#define REGISTRAR_REGISTRAR_ADD_NAME_DESC   "add new registrar (make a copy of REG-FRED_A)"
-#define REGISTRAR_REGISTRAR_ACL_ADD_NAME        "registrar_acl_add"
-#define REGISTRAR_REGISTRAR_ACL_ADD_NAME_DESC   "add new certificate for registrar"
-#define REGISTRAR_REGISTRAR_ADD_ZONE_NAME       "registrar_add_zone"
-#define REGISTRAR_REGISTRAR_ADD_ZONE_NAME_DESC  "add access right for registrar to zone"
-#define REGISTRAR_PRICE_ADD_NAME            "price_add"
-#define REGISTRAR_PRICE_ADD_NAME_DESC       "add price"
-
-#define REGISTRAR_ZONE_ADD_HELP_NAME                "zone_add_help"
-#define REGISTRAR_ZONE_ADD_HELP_NAME_DESC           "help for zone_add"
-#define REGISTRAR_REGISTRAR_ADD_HELP_NAME           "registrar_add_help"
-#define REGISTRAR_REGISTRAR_ADD_HELP_NAME_DESC      "help for registrar_add"
-#define REGISTRAR_REGISTRAR_ADD_ZONE_HELP_NAME      "registrar_add_zone_help"
-#define REGISTRAR_REGISTRAR_ADD_ZONE_HELP_NAME_DESC "help for registrar_add_zone"
-
-#define REGISTRAR_ZONE_FQDN_NAME        "zone_fqdn"
-#define REGISTRAR_ZONE_FQDN_NAME_DESC   "fqdn of new zone"
-
-#define REGISTRAR_ZONE_ID_NAME          "zone_id"
-#define REGISTRAR_ZONE_ID_NAME_DESC     "zone id"
-
-#define REGISTRAR_ICO_NAME              "ico"
-#define REGISTRAR_ICO_NAME_DESC         "organization identifier number"
-#define REGISTRAR_DIC_NAME              "dic"
-#define REGISTRAR_DIC_NAME_DESC         "tax identifier number"
-#define REGISTRAR_VAR_SYMB_NAME         "varsymb"
-#define REGISTRAR_VAR_SYMB_NAME_DESC    "registrar variable symbol"
-#define REGISTRAR_NO_VAT_NAME           "no_vat"
-#define REGISTRAR_NO_VAT_NAME_DESC      "no vat"
-#define REGISTRAR_ADD_HANDLE_NAME           "handle"
-#define REGISTRAR_ADD_HANDLE_NAME_DESC      "registrar handle"
-#define REGISTRAR_ADD_NAME_NAME             "reg_name"
-#define REGISTRAR_ADD_NAME_NAME_DESC        "registrar name"
-#define REGISTRAR_ORGANIZATION_NAME     "organization"
-#define REGISTRAR_ORGANIZATION_NAME_DESC "registrar organization"
-#define REGISTRAR_STREET1_NAME          "street1"
-#define REGISTRAR_STREET1_NAME_DESC     "registrar street #1"
-#define REGISTRAR_STREET2_NAME          "street2"
-#define REGISTRAR_STREET2_NAME_DESC     "registrar street #2"
-#define REGISTRAR_STREET3_NAME          "street3"
-#define REGISTRAR_STREET3_NAME_DESC     "registrar street #3"
-#define REGISTRAR_CITY_NAME             "city"
-#define REGISTRAR_CITY_NAME_DESC        "registrar city"
-#define REGISTRAR_STATEORPROVINCE_NAME  "stateorprovince"
-#define REGISTRAR_STATEORPROVINCE_NAME_DESC "registrar state or province"
-#define REGISTRAR_POSTALCODE_NAME       "postalcode"
-#define REGISTRAR_POSTALCODE_NAME_DESC  "registrar postal code"
-#define REGISTRAR_COUNTRY_NAME          "country"
-#define REGISTRAR_COUNTRY_NAME_DESC     "registrar two letter country code"
-#define REGISTRAR_TELEPHONE_NAME        "telephone"
-#define REGISTRAR_TELEPHONE_NAME_DESC   "registrar telephone"
-#define REGISTRAR_FAX_NAME              "fax"
-#define REGISTRAR_FAX_NAME_DESC         "registrar fax"
-#define REGISTRAR_EMAIL_NAME            "email"
-#define REGISTRAR_EMAIL_NAME_DESC       "registrar email"
-#define REGISTRAR_URL_NAME              "url"
-#define REGISTRAR_URL_NAME_DESC         "registrar url"
-#define REGISTRAR_SYSTEM_NAME           "system"
-#define REGISTRAR_SYSTEM_NAME_DESC      "if registrar is system"
-#define REGISTRAR_CERT_NAME             "certificate"
-#define REGISTRAR_CERT_NAME_DESC        "list of registrar MD5 certificate (splitted with ``;'')"
-#define REGISTRAR_PASSWORD_NAME         "password"
-#define REGISTRAR_PASSWORD_NAME_DESC    "list of registrar password"
-#define REGISTRAR_FROM_DATE_NAME        "from_date"
-#define REGISTRAR_FROM_DATE_NAME_DESC   "from date (default today)"
-#define REGISTRAR_TO_DATE_NAME          "to_date"
-#define REGISTRAR_TO_DATE_NAME_DESC     "to date (default not filled)"
-
-#define REGISTRAR_EX_PERIOD_MIN_NAME       "ex_period_min"
-#define REGISTRAR_EX_PERIOD_MIN_NAME_DESC  "ex_period_min"
-#define REGISTRAR_EX_PERIOD_MAX_NAME       "ex_period_max"
-#define REGISTRAR_EX_PERIOD_MAX_NAME_DESC  "ex_period_max"
-#define REGISTRAR_TTL_NAME                      "ttl"
-#define REGISTRAR_TTL_NAME_DESC                 "time to live"
-#define REGISTRAR_HOSTMASTER_NAME               "hostmaster"
-#define REGISTRAR_HOSTMASTER_NAME_DESC          "hostmaster"
-#define REGISTRAR_UPDATE_RETR_NAME              "update_retr"
-#define REGISTRAR_UPDATE_RETR_NAME_DESC         "update_retr"
-#define REGISTRAR_REFRESH_NAME                  "refresh"
-#define REGISTRAR_REFRESH_NAME_DESC             "refresh"
-#define REGISTRAR_EXPIRY_NAME                   "expiry"
-#define REGISTRAR_EXPIRY_NAME_DESC              "expiry"
-#define REGISTRAR_MINIMUM_NAME                  "minimum"
-#define REGISTRAR_MINIMUM_NAME_DESC             "minimum"
-#define REGISTRAR_NS_FQDN_NAME                  "ns_fqdn"
-#define REGISTRAR_NS_FQDN_NAME_DESC             "ns_fqdn"
-#define REGISTRAR_ADDR_NAME                     "addr"
-#define REGISTRAR_ADDR_NAME_DESC                "address"
-#define REGISTRAR_CREATE_OPERATION_NAME         "create"
-#define REGISTRAR_CREATE_OPERATION_NAME_DESC    "domain create operation"
-#define REGISTRAR_RENEW_OPERATION_NAME          "renew"
-#define REGISTRAR_RENEW_OPERATION_NAME_DESC     "domain renew operation"
-#define REGISTRAR_VALID_FROM_NAME               "valid_from"
-#define REGISTRAR_VALID_FROM_NAME_DESC          "price valid from datetime"
-#define REGISTRAR_VALID_TO_NAME                 "valid_to"
-#define REGISTRAR_VALID_TO_NAME_DESC            "price valid to datetime"
-#define REGISTRAR_PRICE_NAME                    "operation_price"
-#define REGISTRAR_PRICE_NAME_DESC               "operation price"
-#define REGISTRAR_PERIOD_NAME                   "period"
-#define REGISTRAR_PERIOD_NAME_DESC              "period"
-
 #include <boost/program_options.hpp>
 #include <iostream>
 
 #include "old_utils/dbsql.h"
-#include "register/register.h"
+#include "fredlib/registry.h"
 
 #include "corba/admin/admin_impl.h"
 #include "baseclient.h"
 
+#include "registrar_params.h"
 
 namespace Admin {
 
 class RegistrarClient : public BaseClient {
 private:
-    CORBA::Long m_clientId;
-    DB m_db;
+    DBSharedPtr m_db;
     ccReg::EPP_var m_epp;
-    Config::Conf m_conf;
-
     static const struct options m_opts[];
+
+    std::string nameservice_context;
+
+    bool zone_add_;
+    ZoneAddArgs zone_add_params_;
+    bool registrar_add_;
+    RegistrarAddArgs registrar_add_params_;
+    bool registrar_add_zone_;
+    RegistrarAddZoneArgs registrar_add_zone_params_;
+    bool registrar_create_certification_;
+    RegistrarCreateCertificationArgs registrar_create_certification_params_;
+    bool registrar_create_group_;
+    RegistrarCreateGroupArgs registrar_create_group_params_;
+    bool registrar_into_group_;
+    RegistrarIntoGroupArgs registrar_into_group_params_;
+    bool registrar_list_;
+    RegistrarListArgs registrar_list_params_;
+    bool registrar_show_opts_;
+    bool zone_ns_add_;
+    ZoneNsAddArgs zone_ns_add_params_;
+    bool registrar_acl_add_;
+    RegistrarAclAddArgs registrar_acl_add_params_;
+    bool price_add_;
+    PriceAddArgs price_add_params_;
+
 public:
     RegistrarClient()
+    :  zone_add_(false)
+    ,  registrar_add_(false)
+    ,  registrar_add_zone_(false)
+    ,  registrar_create_certification_(false)
+    ,  registrar_create_group_(false)
+    ,  registrar_into_group_(false)
+    ,  registrar_list_(false)
+    ,  registrar_show_opts_(false)
+    ,  zone_ns_add_(false)
+    ,  registrar_acl_add_(false)
+    ,  price_add_(false)
     { }
     RegistrarClient(
-            const std::string &connstring,
-            const std::string &nsAddr,
-            const Config::Conf &conf):
-        BaseClient(connstring, nsAddr),
-        m_conf(conf)
+            const std::string &connstring, const std::string &nsAddr
+            , const std::string& _nameservice_context
+            , bool _zone_add
+            , const ZoneAddArgs& _zone_add_params
+            , bool _registrar_add
+            , const RegistrarAddArgs& _registrar_add_params
+            , bool _registrar_add_zone
+            , const RegistrarAddZoneArgs& _registrar_add_zone_params
+            , bool _registrar_create_certification
+            , const RegistrarCreateCertificationArgs& _registrar_create_certification_params
+            , bool _registrar_create_group
+            , const RegistrarCreateGroupArgs& _registrar_create_group_params
+            , bool _registrar_into_group
+            , const RegistrarIntoGroupArgs& _registrar_into_group_params
+            , bool _registrar_list
+            , const RegistrarListArgs& _registrar_list_params
+            , bool _registrar_show_opts
+            , bool _zone_ns_add
+            , const ZoneNsAddArgs& _zone_ns_add_params
+            , bool _registrar_acl_add
+            , const RegistrarAclAddArgs& _registrar_acl_add_params
+            , bool _price_add
+            , const PriceAddArgs& _price_add_params
+            )
+    : BaseClient(connstring, nsAddr)
+    , nameservice_context(_nameservice_context)
+    , zone_add_(_zone_add)
+    , zone_add_params_(_zone_add_params)
+    , registrar_add_(_registrar_add)
+    , registrar_add_params_(_registrar_add_params)
+    , registrar_add_zone_(_registrar_add_zone)
+    , registrar_add_zone_params_(_registrar_add_zone_params)
+    , registrar_create_certification_(_registrar_create_certification)
+    , registrar_create_certification_params_(_registrar_create_certification_params)
+    , registrar_create_group_(_registrar_create_group)
+    , registrar_create_group_params_(_registrar_create_group_params)
+    , registrar_into_group_(_registrar_into_group)
+    , registrar_into_group_params_(_registrar_into_group_params)
+    , registrar_list_(_registrar_list)
+    , registrar_list_params_(_registrar_list_params)
+    , registrar_show_opts_(_registrar_show_opts)
+    , zone_ns_add_(_zone_ns_add)
+    , zone_ns_add_params_(_zone_ns_add_params)
+    , registrar_acl_add_(_registrar_acl_add)
+    , registrar_acl_add_params_(_registrar_acl_add_params)
+    , price_add_(_price_add)
+    , price_add_params_(_price_add_params)
     {
-        m_db.OpenDatabase(connstring.c_str());
+        m_db = connect_DB(connstring
+                , std::runtime_error("RegistrarClient db connection failed"));
     }
     ~RegistrarClient()
     { }
@@ -175,6 +142,9 @@ public:
     void registrar_add();
     void registrar_acl_add();
     void registrar_add_zone();
+    void registrar_create_certification();
+    void registrar_create_group();
+    void registrar_into_group();
     void price_add();
 
     void zone_add_help();
@@ -182,6 +152,9 @@ public:
     void registrar_add_help();
     void registrar_acl_add_help();
     void registrar_add_zone_help();
+    void registrar_create_certification_help();
+    void registrar_create_group_help();
+    void registrar_into_group_help();
     void price_add_help();
 }; // class RegistrarClient
 

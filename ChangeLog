@@ -1,3 +1,438 @@
+2012-06-11 Juraj Vicenik (2.11.2)
+
+  * mojeid - fixed validated contact update checks (birthday change bug)
+
+2012-06-07 Jan Zima (2.11.1)
+
+  * mojeid/epp - fixed request notifications
+
+  * mojeid - fixed checks for discloseaddress flag change
+
+2012-05-14 Jiri Sadek, Juraj Vicenik, Jan Zima (2.11.0)
+
+  * mojeid
+      - allow to change discloseaddress flag
+      - constant pins in demo mode
+      - as-you-type check backend method returning unregistrable handles
+      - add check to don't allow data update for conditionally identified contact
+      - add contact authinfo getter
+
+  * request fee
+      - count requests for commands with object handle list as parameter
+      - poll commands are excluded from request fee
+
+  * disable update request notification if there are no changes
+
+  * refuse to change object in deleteCandidate status
+
+  * invoicing - fred-admin interface for adding new prefixes
+
+  * epp code fixes - throw spec removed
+
+2012-04-27 Jiri Sadek, Juraj Vicenik, Jan Zima (2.10.0)
+
+  * epp action removed from fred
+
+2012-03-22 Jiri Sadek (2.9.11)
+
+  * epp - do not notify command with specific cltrid (system registrar only)
+
+2012-03-19 Jiri Sadek (2.9.10)
+
+  * fix zone selection for domain registration
+
+2012-03-13 Jiri Sadek, Juraj Vicenik, Jan Zima (2.9.9)
+
+  * memory leaks fixes - objects changes notifier, documents
+
+  * whois reminder fix - interval change for contact selection (duplicate
+    email sending)
+
+  * epp - removed temp-c domain notification
+
+  * banking - payment import/processing fix (negative credit balance)
+            - daphne bank payment list fix (duplicate payment)
+
+  * invoicing - invoice total price in page table fix
+
+  * build fix - Makefile.am
+
+2011-12-23 Jiri Sadek (2.9.8)
+
+  * adifd - history record switched from action_id to logger request_id
+
+2011-11-14 Juraj Vicenik, Jan Zima (2.9.7)
+
+  * request fee charging fixes (registrar in zone sql, time period, defaults)
+
+  * invoice xml export fix (check for valid date period - -inf,+inf problem)
+
+2011-11-07 Juraj Vicenik, Jan Zima (2.9.6)
+
+  * custom date for creating request fee poll messages
+
+  * custom date (poll message) for request fee charging
+
+  * request fee charging fixess (invoice operation crdate, transaction added)
+
+  * several log message corrected
+
+2011-10-31 Jiri Sadek, Juraj Vicenik, Jan Zima (2.9.5)
+
+  * whois reminder fix for linked status (must be valid)
+
+  * bank payment import fix (statement/payment list check)
+
+2011-10-31 Jiri Sadek (2.9.4)
+
+  * chargeRequestFee fix (all registrars)
+
+2011-10-28 Juraj Vicenik, Jan Zima (2.9.3)
+
+  * fred-admin help description fixes
+
+  * chargeDomainCreate/Renew(...) now checks object_id for 0 value
+
+  * chargeRequestFee(...) return value corrected
+
+2011-10-24 Juraj Vicenik, Jan Zima (2.9.2)
+
+  * billing fix - annual partitioning (unrepeated operations)
+
+  * fix registrar blocking (limit 0)
+
+2011-10-21 Jiri Sadek, Juraj Vicenik, Jan Zima (2.9.1)
+
+  * billing fixes
+      - interval for operations selection
+      - annual partitioning
+      - default taxdate
+
+  * rpm dependencies
+
+2011-10-18 Jiri Sadek, Juraj Vicenik, Jan Zima (2.9.0)
+
+  * invoicing
+      - database schema rework
+      - post paid operations (allowed negative credit)
+      - registrar credit separation from invoices
+      - distribution of charged operation (price) to deposit invoices moved
+      to billing
+      - invoice_factoring command renamed to invoice_billing (fred-admin)
+      - request fee charging impl - charge_request_fee command (fred-admin)
+
+  * banking - check of registrar zone access in payment import
+
+  * registrar request fee limits and blocking feature
+
+  * whois reminder - now reminds only contact with linked status
+
+  * Decimal wrapper for mpdecimal library (by Stefan Krah
+    <skrah@bytereef.org>) - use for money operations
+
+  * mojeid - invalid date format unhadled exception fix
+           - authinfo save fix
+
+2011-10-17 Jiri Sadek (2.8.10)
+
+  * fixed whois handling of deleteCandidate state (new registered domain in
+    actual day)
+
+2011-10-11 Jiri Sadek (2.8.9)
+
+  * fixed fred-admin object_delete_canadidates command (debug output)
+
+2011-09-27 Jiri Sadek, Juraj Vicenik, Jan Zima (2.8.8)
+
+  * domain deletion is now batched in daily procedure
+
+  * during delete day, domains to be deleted or already deleted
+    are shown in whois with special state deleteCandidate (which is now external)
+
+2011-09-27 Jiri Sadek, Juraj Vicenik, Jan Zima (2.8.7)
+
+  * fixed creating request fee poll messages - logger call date/time
+    conversions
+
+2011-09-26 Jiri Sadek, Juraj Vicenik, Jan Zima (2.8.6)
+
+  * fred-adifd - interface for getting last request fee info data
+
+  * epp - interface for deleting all sessions for given registrar
+
+  * fixed creating request fee poll messagess on first day of month
+
+  * object state changes notifications now uses correctly enum
+    parameters config
+
+2011-09-02 Jiri Sadek (2.8.5)
+
+  * epp - fix sql input data escape in client login
+
+2011-08-11 Jiri Sadek, Juraj Vicenik (2.8.4)
+
+  * logger - request count interface has now proper data types for dates
+           - added method counting request for all usernames
+
+  * mojeid - fixed fax format checker
+
+  * whois reminder - sql optimization
+
+2011-07-08 Jiri Sadek, Juraj Vicenik (2.8.3)
+
+  * poll request fee - sql timestamp conversion fix
+                     - performance issues fix (proper partition by service)
+                     - message create duplicity check added
+
+2011-07-06 Jiri Sadek (2.8.2)
+
+  * poll request fee - internal interfaces data type changes
+                     - code cleanup
+
+  * fixed function for object state set
+
+  * invoicing tests fix
+
+2011-07-04 Jiri Sadek, Juraj Vicenik (2.8.1)
+
+  * fixed return type for corba method
+
+2011-07-04 Jiri Sadek, Juraj Vicenik (2.8.0)
+
+  * poll message for requests charging impl.
+
+2011-06-29 Jan Zima (2.7.6)
+
+  * fred-admin - invoice_archive fix (no registrar organization name in pdf)
+
+2011-06-20 Jan Zima (2.7.5)
+
+  * createAccountInvoice(s) functions fix (date conversion)
+     - interface string dates was replaced with boost::gregorian::date type
+
+  * fred-admin - sending registered letters fix
+               - broken commands commented out
+
+  * invoicing tests fixes
+
+2011-06-17 Jan Zima, Juraj Vicenik (2.7.4)
+
+  * epp create domain operation fix (division by zero - period)
+
+  * insufficient credit log message severity adjusted
+
+  * fred-admin - memory invalid read fix
+               - corba client fix (BAD_INV_ORDER exception)
+
+  * invoicing tests enhancements and fixes
+
+2011-06-14 Jiri Sadek, Jan Zima, Juraj Vicenik (2.7.3)
+
+  * invoice archive fix (invoice list reload fix)
+
+  * whois contact reminder fix (call with specified date in past
+  should not select objects created in future from that date)
+
+  * invoicing tests fixes
+
+2011-06-07 Jiri Sadek, Jan Zima, Juraj Vicenik (2.7.2)
+
+  * new invoicing tests
+
+  * invoicing fix - price values overflow problem
+                  - money/price conversions
+                  - fred-admin --invoice_credit
+
+  * fredlib/getCreditByZone returns string now
+
+  * fredlib/getBankAccounts don't thow on empty list
+
+2011-05-26 Jiri Sadek, Jan Zima (2.7.1)
+
+  * mojeid - interface changes for methods for 2PC
+
+  * invoicing fix - vat computation + test
+                  - error handling, logging
+                  - money conversions
+
+2011-05-20 Jiri Sadek, Juraj Vicenik, Jan Zima (2.7.0)
+
+  * fred-admin - configuration redesigned and rewritten
+               - command for manual creating/sending of registered letters
+
+  * whois contact reminder implemented
+
+  * invoicing refactoring - removed from old_utils
+
+  * mojeid - data validation fixes (fax, notify_email)
+           - notification error handling fixes
+           - create notification added
+
+  * logger - exception handling in corba wrapper
+
+2011-05-16 Jiri Sadek (2.6.5)
+
+  * fix domain create charging
+
+2011-04-20 Juraj Vicenik, Jaromir Talir (2.6.4)
+
+  * spec file changes (omniorb package name)
+
+  * logger filter optimization for one record (id filter)
+
+2011-04-07 Jiri Sadek, Juraj Vicenik (2.6.3)
+
+  * fix logger filters - performance
+
+2011-03-28 Juraj Vicenik, Jan Zima, Jiri Sadek (2.6.2)
+
+  * fix date filter
+
+  * fix bank payment sort by memo
+
+  * fix logger - username and userid was not logged for requests
+
+2011-03-17 Jan Zima, Jiri Sadek (2.6.1)
+
+  * request cache fix - exception specification removed, cache double search
+    fixed
+
+2011-02-24 Jiri Sadek, Juraj Vicenik, Jan Zima (2.6.0)
+
+  * servers build enhancements
+
+  * servers sources splitted, initialization rewritten
+
+  * new tests added
+
+  * fred-mifd - request notification (same as in epp)
+              - authinfo attribut added
+              - message content fixes
+
+  * fred-log - queries performace fixes
+             - session cache
+
+  * fred-adifd - pagetable query limit
+               - new filters (banking, messages)
+
+  * messages - message templates fixes (countrycode)
+
+  * fred-pifd (whois) and fred-adifd (admin) implementation changes due to idl
+    interface split
+
+  * epp - update enum domain - enumdir attribute is not mandatory (fixed) -
+          schema deps
+
+2010-12-20 Juraj Vicenik, Jiri Sadek (2.5.13)
+
+  * fix invalid throw usage
+
+  * fix bad query in commitPreparedTransaction(...)
+
+2010-12-14 Juraj Vicenik, Jiri Sadek (2.5.12)
+
+  * fred-mifd - SK support, epp action clienttrid removed from
+    queries, public request locking (select for update fix)
+
+2010-12-03 Juraj Vicenik, Jiri Sadek (2.5.11)
+
+  * fred-mifd contact unidentification implemented
+
+2010-11-24 Jiri Sadek, Jan Zima, Jaromir Talir, Juraj Vicenik (2.5.10)
+
+  * fred-pifd whois contact display fix complete (disclose flags), previous
+    bug fix removed
+
+  * fred-mifd processing identification - more exceptions for error
+    state distinction
+
+2010-11-11 Jiri Sadek (2.5.9)
+
+  * fred-pifd quick bug fix release (mojeid - whois disclose flags)
+
+2010-11-08 Jiri Sadek, Jan Zima, Jaromir Talir, Juraj Vicenik (2.5.8)
+
+  * fred-mifd create/transfer checks rewritten, bugfixes
+
+2010-10-25 Jiri Sadek, Jan Zima, Jaromir Talir, Juraj Vicenik (2.5.6)
+
+  * fred-mifd another sql query performance fix
+
+2010-10-25 Jiri Sadek, Jan Zima, Jaromir Talir, Juraj Vicenik (2.5.5)
+
+  * fred-mifd sql query performance fix
+
+2010-10-25 Jiri Sadek, Jan Zima, Jaromir Talir, Juraj Vicenik (2.5.4)
+
+  * fred-mifd some database insert/update checks added
+
+2010-10-25 Jiri Sadek, Jan Zima, Jaromir Talir, Juraj Vicenik (2.5.3)
+
+  * fred-mifd fixes (contact data validation - phone, address check,
+    required check trimmed, contact transfer poll message)
+
+2010-10-24 Jiri Sadek, Jan Zima, Jaromir Talir, Juraj Vicenik (2.5.2)
+
+  * fred-mifd fixes
+
+2010-10-18 Jiri Sadek, Jan Zima, Jaromir Talir, Juraj Vicenik (2.5.0)
+
+  * new logger interface
+
+  * new fred-mifd server for MojeID backend functions 
+
+2010-08-27 Jiri Sadek, Jan Zima, Jaromir Talir (2.4.3)
+
+  * sending of expiration letters fix
+
+  * config defaults changed
+
+  * spec file update
+
+2010-07-23 Jiri Sadek, Juraj Vicenik (2.4.2)
+
+  * generation of expiration letters fix
+
+  * logger request detail minor fix (id)
+
+2010-07-22 Jiri Sadek, Juraj Vicenik, Jan Zima (2.4.1)
+
+  * Coverity errors fixes
+
+  * postservice
+      - order state check
+	  - limit for domains per letter
+	  - batch processing
+	  - configuration and logging fixes
+
+  * old banking client removed
+
+2010-06-17 Jiri Sadek, Juraj Vicenik, Jan Zima (2.4.0)
+
+  * registrar groups and certification implemented
+
+  * expiration letters notification refactoring
+      - now sending with postservice - optional
+      - multiple domains in one letter (address grouping)
+	  - new letter format
+
+  * Epp update_domain command - changes behaviour
+      - if changing nsset and not keyset,
+	    keyset will be removed (to not break dnssec)
+
+  * Epp sessions - add locks (thread safe issue with session counter)
+
+  * Inactivation of domain from dns is now notified by mails with
+    generic addresses automatically (like kontakt@domena.cz, info@domena.cz..)
+
+  * fixes in logd component
+
+  * tests for model, groups, certifications
+
+2010-06-16 Jiri Sadek (2.3.11)
+
+  * fix enumdir to use publish flag correctly (forgotten from 2.2)
+
 2010-04-28 Juraj Vicenik, Jaromir Talir, Jiri Sadek, Jan Zima (2.3.10)
 
   * fix/optimization invoice list (VAT)

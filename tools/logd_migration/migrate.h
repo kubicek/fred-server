@@ -8,7 +8,8 @@
 
 #include "db/transaction.h"
 
-#include "src/register/request_impl.h"
+#include "src/fredlib/requests/request.h"
+
 
 #include "util/types/id.h"
 
@@ -18,7 +19,7 @@
 #define ALLOC_STEP 4
 
 using namespace Database;
-using namespace Register::Logger;
+using namespace Fred::Logger;
 
 typedef unsigned long long TID;
 

@@ -16,101 +16,72 @@
  *  along with FRED.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "simple.h"
 #include "commonclient.h"
 #include "contactclient.h"
-#include "register/register.h"
+#include "fredlib/registry.h"
 
 namespace Admin {
-
-const struct options *
-ContactClient::getOpts()
-{
-    return m_opts;
-}
 
 void
 ContactClient::runMethod()
 {
-    if (m_conf.hasOpt(CONTACT_INFO_NAME)) {
-        info();
-    } else if (m_conf.hasOpt(CONTACT_LIST_NAME)) {
+    if (contact_list) {
         list();
-    } else if (m_conf.hasOpt(CONTACT_SHOW_OPTS_NAME)) {
-        show_opts();
     }
-}
-
-void
-ContactClient::show_opts()
-{
-    callHelp(m_conf, no_help);
-    print_options("Contact", getOpts(), getOptsCount());
-}
-
-void
-ContactClient::info()
-{
-    callHelp(m_conf, no_help);
-    CLIENT_LOGIN;
-
-    std::string name = m_conf.get<std::string>(CONTACT_INFO_NAME);
-    std::string cltrid;
-    std::string xml;
-    xml = "<fqdn>" + name + "</fqdn>";
-    cltrid = "info_contact";
-
-    ccReg::Contact *c = new ccReg::Contact;
-    
-    epp->ContactInfo(name.c_str(), c, clientId, cltrid.c_str(), xml.c_str());
-
-    std::cout << c->Name << std::endl;
-
-    CLIENT_LOGOUT;
-
-    return;
 }
 
 void
 ContactClient::list()
 {
-    callHelp(m_conf, list_help);
-    std::auto_ptr<Register::Contact::Manager> conMan(
-            Register::Contact::Manager::create(&m_db, true));
-    std::auto_ptr<Register::Contact::List> conList(
+    std::auto_ptr<Fred::Contact::Manager> conMan(
+            Fred::Contact::Manager::create(m_db, true));
+    std::auto_ptr<Fred::Contact::List> conList(
             conMan->createList());
 
     Database::Filters::Contact *conFilter;
     conFilter = new Database::Filters::ContactHistoryImpl();
 
-    apply_ID(conFilter);
-    apply_HANDLE(conFilter);
-    apply_NAME(conFilter);
-    apply_ORGANIZATION(conFilter);
-    apply_CITY(conFilter);
-    apply_EMAIL(conFilter);
-    apply_NOTIFY_EMAIL(conFilter);
-    apply_VAT(conFilter);
-    apply_SSN(conFilter);
-    apply_REGISTRAR_ID(conFilter);
-    apply_REGISTRAR_HANDLE(conFilter);
-    apply_REGISTRAR_NAME(conFilter);
-    apply_CRDATE(conFilter);
-    apply_DELDATE(conFilter);
-    apply_UPDATE(conFilter);
-    apply_TRANSDATE(conFilter);
+    if (params.contact_id.is_value_set()) conFilter->addId().setValue(Database::ID(params.contact_id.get_value()));
+    if (params.contact_handle.is_value_set()) conFilter->addHandle().setValue(params.contact_handle.get_value());
+    if (params.contact_name.is_value_set()) conFilter->addName().setValue(params.contact_name.get_value());
+    if (params.contact_organization.is_value_set()) conFilter->addOrganization().setValue(params.contact_organization.get_value());
+    if (params.contact_city.is_value_set()) conFilter->addCity().setValue(params.contact_city.get_value());
+    if (params.contact_email.is_value_set()) conFilter->addEmail().setValue(params.contact_email.get_value());
+    if (params.contact_notify_email.is_value_set()) conFilter->addNotifyEmail().setValue(params.contact_notify_email.get_value());
+    if (params.contact_vat.is_value_set()) conFilter->addVat().setValue(params.contact_vat.get_value());
+    if (params.contact_ssn.is_value_set()) conFilter->addSsn().setValue(params.contact_ssn.get_value());
+    if (params.registrar_id.is_value_set()) conFilter->addRegistrar().addId().setValue(Database::ID(params.registrar_id.get_value()));
+    if (params.registrar_handle.is_value_set()) conFilter->addRegistrar().addHandle().setValue(params.registrar_handle.get_value());
+    if (params.registrar_name.is_value_set()) conFilter->addRegistrar().addName().setValue(params.registrar_name.get_value());
+    if (params.crdate.is_value_set()) {
+        conFilter->addCreateTime().setValue(
+                *parseDateTime(params.crdate.get_value()));
+    };
+    if (params.deldate.is_value_set()) {
+        conFilter->addDeleteTime().setValue(
+                *parseDateTime(params.deldate.get_value()));
+    };
+    if (params.update.is_value_set()) {
+        conFilter->addUpdateTime().setValue(
+                *parseDateTime(params.update.get_value()));
+    };
+    if (params.transdate.is_value_set()) {
+        conFilter->addTransferTime().setValue(
+                *parseDateTime(params.transdate.get_value()));
+    };
+
 
     Database::Filters::Union *unionFilter;
     unionFilter = new Database::Filters::Union();
 
     unionFilter->addFilter(conFilter);
-    apply_LIMIT(conList);
+    conList->setLimit(params.limit.get_value());
 
     conList->reload(*unionFilter);
 
     std::cout << "<objects>\n";
     for (unsigned int i = 0; i < conList->getCount(); i++) {
-        Register::Contact::Contact *contact = conList->getContact(i);
+        Fred::Contact::Contact *contact = conList->getContact(i);
         std::cout
             << "\t<contact>\n"
             << "\t\t<id>" << contact->getId() << "</id>\n"
@@ -141,7 +112,7 @@ ContactClient::list()
             << "\t\t<disclose_vat>" << contact->getDiscloseVat() << "</disclose_vat>\n"
             << "\t\t<disclose_ident>" << contact->getDiscloseIdent() << "</disclose_ident>\n"
             << "\t\t<disclose_notify_email>" << contact->getDiscloseNotifyEmail() << "</disclose_notify_email>\n";
-        if (m_conf.hasOpt(FULL_LIST_NAME)) {
+        if (params.full_list) {
             std::cout
                 << "\t\t<create_date>" << contact->getCreateDate() << "</create_date>\n"
                 << "\t\t<transfer_date>" << contact->getTransferDate() << "</transfer_date>\n"
@@ -162,7 +133,7 @@ ContactClient::list()
                 << "\t\t<auth_password>" << contact->getAuthPw() << "</auth_password>\n"
                 << "\t\t<ROID>" << contact->getROID() << "</ROID>\n";
             for (unsigned int j = 0; j < contact->getStatusCount(); j++) {
-                Register::Status *status = (Register::Status *)contact->getStatusByIdx(j);
+                Fred::Status *status = (Fred::Status *)contact->getStatusByIdx(j);
                 std::cout
                     << "\t\t<status>\n"
                     << "\t\t\t<id>" << status->getStatusId() << "</id>\n"
@@ -177,67 +148,6 @@ ContactClient::list()
     std::cout << "</object>" << std::endl;
     unionFilter->clear();
     delete unionFilter;
-}
-
-void
-ContactClient::list_help()
-{
-    std::cout
-        << "** Contact list **\n\n"
-        << "  $ " << g_prog_name << " --" << CONTACT_LIST_NAME << " \\\n"
-        << "    [--" << ID_NAME << "=<id_nubmer>] \\\n"
-        << "    [--" << HANDLE_NAME << "=<handle>] \\\n"
-        << "    [--" << NAME_NAME << "=<name>] \\\n"
-        << "    [--" << ORGANIZATION_NAME << "=<organization>] \\\n"
-        << "    [--" << CITY_NAME << "=<city>] \\\n"
-        << "    [--" << EMAIL_NAME << "=<email>] \\\n"
-        << "    [--" << NOTIFY_EMAIL_NAME << "=<email>] \\\n"
-        << "    [--" << VAT_NAME << "=<vat>] \\\n"
-        << "    [--" << SSN_NAME << "=<ssn>] \\\n"
-        << "    [--" << REGISTRAR_ID_NAME << "=<registrar_id_number>] \\\n"
-        << "    [--" << REGISTRAR_HANDLE_NAME << "=<registrar_handle>] \\\n"
-        << "    [--" << REGISTRAR_NAME_NAME << "=<registrar_name>] \\\n"
-        << "    [--" << CRDATE_NAME << "=<create_date>] \\\n"
-        << "    [--" << DELDATE_NAME << "=<delete_date>] \\\n"
-        << "    [--" << UPDATE_NAME << "=<update_date>] \\\n"
-        << "    [--" << TRANSDATE_NAME << "=<transfer_date>] \\\n"
-        << "    [--" << FULL_LIST_NAME << "]\n"
-        << std::endl;
-}
-
-#define ADDOPT(name, type, callable, visible) \
-    {CLIENT_CONTACT, name, name##_DESC, type, callable, visible}
-
-const struct options
-ContactClient::m_opts[] = {
-    ADDOPT(CONTACT_INFO_NAME, TYPE_STRING, true, true),
-    ADDOPT(CONTACT_LIST_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(CONTACT_LIST_PLAIN_NAME, TYPE_NOTYPE, true, true),
-    ADDOPT(CONTACT_SHOW_OPTS_NAME, TYPE_NOTYPE, true, true),
-    add_ID,
-    add_HANDLE,
-    add_NAME,
-    add_ORGANIZATION,
-    add_CITY,
-    add_EMAIL,
-    add_NOTIFY_EMAIL,
-    add_VAT,
-    add_SSN,
-    add_REGISTRAR_ID,
-    add_REGISTRAR_HANDLE,
-    add_REGISTRAR_NAME,
-    add_CRDATE,
-    add_UPDATE,
-    add_TRANSDATE,
-    add_DELDATE,
-};
-
-#undef ADDOPT
-
-int 
-ContactClient::getOptsCount()
-{
-    return sizeof(m_opts) / sizeof(options);
 }
 
 } // namespace Admin;

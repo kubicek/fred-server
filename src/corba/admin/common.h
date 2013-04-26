@@ -7,17 +7,18 @@
 #include <math.h>
 #include <memory>
 #include <iomanip>
-#include <corba/ccReg.hh>
+#include <corba/Admin.hh>
 
-#include "register/register.h"
-#include "register/invoice.h"
+#include "fredlib/registry.h"
+#include "fredlib/invoicing/invoice.h"
+#include "types/money.h"
 
 using namespace boost::posix_time;
 using namespace boost::gregorian;
 
 std::string formatDate(date d);
 std::string formatTime(ptime p, bool date, bool _to_local = false);
-std::string formatMoney(Database::Money m);
+std::string formatMoney(Money m);
 ptime makeBoostTime(const ccReg::DateTimeType& t);
 date makeBoostDate(const ccReg::DateType& t);
 ccReg::DateTimeType makeCorbaTime(ptime p, bool _to_local = false);
@@ -62,19 +63,19 @@ _name.type   = ccReg::_type;
 
 #define CHANGED(method) (act->method() != prev->method()) || (act == prev)
 
-#define ADD_NEW_HISTORY_RECORD(_field, _value)                                        \
-unsigned i = detail->_field.length();                                                 \
-detail->_field.length(i + 1);                                                         \
-detail->_field[i].value  <<= _value;                                                  \
-detail->_field[i].actionId = act->getActionId();                                      \
-detail->_field[i].from     = makeCorbaTime(act->getActionStartTime(), true);          \
-detail->_field[i].to       = (i > 0 ? makeCorbaTime(prev->getActionStartTime(), true) \
+#define ADD_NEW_HISTORY_RECORD(_field, _value)                                         \
+unsigned i = detail->_field.length();                                                  \
+detail->_field.length(i + 1);                                                          \
+detail->_field[i].value  <<= _value;                                                   \
+detail->_field[i].requestId = act->getRequestId();                                     \
+detail->_field[i].from     = makeCorbaTime(act->getRequestStartTime(), true);          \
+detail->_field[i].to       = (i > 0 ? makeCorbaTime(prev->getRequestStartTime(), true) \
                                     : makeCorbaTime(ptime(not_a_date_time)));    
 
 #define MODIFY_LAST_HISTORY_RECORD(_field)                                            \
 unsigned i = detail->_field.length();                                                 \
-detail->_field[i - 1].actionId = act->getActionId();                                  \
-detail->_field[i - 1].from     = makeCorbaTime(act->getActionStartTime(), true);
+detail->_field[i - 1].requestId = act->getRequestId();                                \
+detail->_field[i - 1].from     = makeCorbaTime(act->getRequestStartTime(), true);
 
 
 #define MAP_HISTORY_VARIABLE(_field, _method, _conv)                                  \

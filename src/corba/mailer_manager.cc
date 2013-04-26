@@ -19,6 +19,7 @@
 #include <exception>
 #include <boost/tokenizer.hpp>
 #include <set>
+#include <boost/algorithm/string/trim.hpp>
 
 #include "mailer_manager.h"
 #include "old_utils/log.h"
@@ -34,30 +35,35 @@ MailerManager::MailerManager(NameService *ns) : ns_ptr(ns)
   }
 }
 
-Register::TID 
+Fred::TID
 MailerManager::sendEmail(
   const std::string& from,
   const std::string& to,
   const std::string& subject,
   const std::string& mailTemplate,
-  const Register::Mailer::Parameters &params,
-  const Register::Mailer::Handles &handles,
-  const Register::Mailer::Attachments &attach
-) throw (Register::Mailer::NOT_SEND)
+  const Fred::Mailer::Parameters &params,
+  const Fred::Mailer::Handles &handles,
+  const Fred::Mailer::Attachments &attach,
+  const std::string& reply_to
+) throw (Fred::Mailer::NOT_SEND)
 {
   LOGGER("mailer").debug(boost::format("recipients = '%1%'") % to);
   if (to.empty() || to == "NULL ") {
     LOGGER("mailer").error("recipients empty!? not sending");
-    throw Register::Mailer::NOT_SEND();
+    throw Fred::Mailer::NOT_SEND();
   }
   // prepare header
   ccReg::MailHeader header;
   header.h_from = CORBA::string_dup(from.c_str());
   header.h_to = CORBA::string_dup(to.c_str());
+  std::string h_reply_to = boost::algorithm::trim_copy(reply_to);
+  if (!h_reply_to.empty()) {
+      header.h_reply_to = CORBA::string_dup(h_reply_to.c_str());
+  }
   // prepare data
   ccReg::KeyValues data;
   data.length(params.size());
-  Register::Mailer::Parameters::const_iterator i; // source position
+  Fred::Mailer::Parameters::const_iterator i; // source position
   unsigned j; // result position
   for (i=params.begin(),j=0; i!=params.end(); i++,j++) {
     data[j].key = CORBA::string_dup(i->first.c_str());
@@ -90,7 +96,7 @@ MailerManager::sendEmail(
   bool prev = false;
   CORBA::String_var prevMsg;
   // call mailer
-  // if (CORBA::is_nil(mailer)) throw Register::Mailer::NOT_SEND();
+  // if (CORBA::is_nil(mailer)) throw Fred::Mailer::NOT_SEND();
   try {
     LOGGER("mailer").debug(boost::format("mailer->mailNotify mailType '%1%'") % mailTemplate.c_str());
     _resolveInit();
@@ -99,7 +105,7 @@ MailerManager::sendEmail(
     );
     return (unsigned long)id;
   } catch (...) {
-    throw Register::Mailer::NOT_SEND();
+    throw Fred::Mailer::NOT_SEND();
   }
 } 
 

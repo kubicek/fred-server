@@ -1,16 +1,12 @@
 #include "common.h"
 
+#include "types/stringify.h"
+#include "types/money.h"
+
 std::string
 formatDate(date d)
 {
-  if (d.is_special()) return "";
-  std::ostringstream buf;
-  buf.imbue(std::locale(
-    buf.getloc(),
-    new boost::gregorian::date_facet("%d.%m.%Y")
-  ));
-  buf << d; 
-  return buf.str();
+  return stringify(d);
 }
 
 std::string 
@@ -39,13 +35,11 @@ formatTime(ptime p, bool date, bool _to_local)
 }
 
 std::string
-formatMoney(Database::Money m)
+formatMoney(Money m)
 {
-  std::stringstream buf;
-  buf << m;
-  // buf << m / 100 << "." << std::setw(2) << std::setfill('0') << m % 100;
-  return buf.str();
+  return m.get_string(".2f");
 }
+
 
 ptime
 makeBoostTime(const ccReg::DateTimeType& t)

@@ -19,23 +19,15 @@
 #ifndef _ENUMPARAMCLIENT_H_
 #define _ENUMPARAMCLIENT_H_
 
-#define ENUMPARAM_ENUM_PARAMETER_CHANGE         "enum_parameter_change"
-#define ENUMPARAM_ENUM_PARAMETER_CHANGE_DESC    "change value of enum_parameter by name"
-#define ENUMPARAM_NAME                          "parameter_name"
-#define ENUMPARAM_NAME_DESC                     "enum parameter name"
-#define ENUMPARAM_VALUE                         "parameter_value"
-#define ENUMPARAM_VALUE_DESC                    "enum parameter value"
-
-
-
 #include <boost/program_options.hpp>
 #include <iostream>
 
-#include "old_utils/dbsql.h"
-#include "register/register.h"
+#include "fredlib/registry.h"
 
 #include "corba/admin/admin_impl.h"
 #include "baseclient.h"
+
+#include "enumparam_params.h"
 
 
 namespace Admin
@@ -43,24 +35,26 @@ namespace Admin
 
 class EnumParamClient : public BaseClient {
 private:
-    CORBA::Long m_clientId;
-    DB m_db;
     ccReg::EPP_var m_epp;
-    Config::Conf m_conf;
+
+    bool enum_parameter_change_;
+    EnumParameterChangeArgs enum_parameter_change_params;
 
     static const struct options m_opts[];
 public:
     EnumParamClient()
+    : enum_parameter_change_(false)
     { }
     EnumParamClient(
-            const std::string &connstring,
-            const std::string &nsAddr,
-            const Config::Conf &conf):
-        BaseClient(connstring, nsAddr),
-        m_conf(conf)
-    {
-        m_db.OpenDatabase(connstring.c_str());
-    }
+            const std::string &connstring
+            , const std::string &nsAddr
+            , bool _enum_parameter_change
+            , const EnumParameterChangeArgs& _enum_parameter_change_params
+            )
+        : BaseClient(connstring, nsAddr)
+        , enum_parameter_change_(_enum_parameter_change)
+        , enum_parameter_change_params(_enum_parameter_change_params)
+        { }
     ~EnumParamClient()
     { }
 

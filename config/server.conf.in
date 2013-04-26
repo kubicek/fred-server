@@ -63,6 +63,7 @@ nsset_level = 3
 
 docgen_path = @BINDIR@/fred-doc2pdf
 docgen_template_path = @DATAROOTDIR@/fred-doc2pdf/
+docgen_domain_count_limit = 100
 
 fileclient_path = @BINDIR@/filemanager_client
 
@@ -75,6 +76,8 @@ fileclient_path = @BINDIR@/filemanager_client
 session_max = 200
 session_timeout = 300
 session_registrar_max = 5
+# clear keyset when update domain command is changing nsset
+epp_update_domain_keyset_clear = true
 
 ##
 # ADIFD specific settings
@@ -92,14 +95,17 @@ session_garbage = 150
 [logd]
 monitoring_hosts_file = @MONITORINGIPS@
 
-##
-# fred-banking specific options (until merged with fred-admin)
-##
+[sms]
+command = LOGIN=login PASSWORD=pass sms_send.bash
 
-[banking]
-host=@DBHOST@
-port=@DBPORT@
-dbname=@DBNAME@
-log_level=7
-log_local=1
+
+##
+# MIFD specific settings
+##
+[mojeid]
+registrar_handle = REG-MOJEID
+hostname = demo.mojeid.cz
+notify_commands = false 
+# demo mode true - send both passwords via email
+demo_mode = false
 

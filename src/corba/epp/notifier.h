@@ -1,11 +1,7 @@
 #include "corba/mailer_manager.h"
 #include "action.h"
 #include "old_utils/dbsql.h"
-#include "register/register.h"
-
-#ifndef ID
-#define ID unsigned  int
-#endif
+#include "fredlib/registry.h"
 
 // type of object  1 contact  2 nsset 3 domain 4 keyset
 #define OBJECT_CONTACT 1
@@ -23,7 +19,7 @@
 #define KEY_CONTACT       5 // tech-c at keyset
 typedef struct
 {
-  ID contactID; // id of the constact
+  unsigned int contactID; // id of the constact
   short type; // type of the contact admin or tech 
   short modify; // old  -1 , new 1 , not changed  0 
   std::string notifyEmail; // notify e-mail 
@@ -34,14 +30,14 @@ typedef struct
 class EPPNotifier
 {
   MailerManager *mm;
-  DB *db;
+  DBSharedPtr  db;
   std::vector<NotifyST> notify;
 
   short enum_action; // id fom  enum_action table EPP operation
-  ID registrarID; // idof registrar who make change
-  ID objectID; // type of the object  where make change
+  unsigned int registrarID; // idof registrar who make change
+  unsigned int objectID; // type of the object  where make change
 
-  Register::Manager *rm_;
+  Fred::Manager *rm_;
 
   bool disable; // for fast upload of objects
   std::string extraEmails; // for fixing notification of notifyEmail change
@@ -49,9 +45,9 @@ class EPPNotifier
   /* for separation sending and constructing messages 
    * we need it for passing between methods (for Ticket #1622) */
   bool messages_ready_;
-  Register::Mailer::Parameters params;
-  Register::Mailer::Handles handles;
-  Register::Mailer::Attachments attach;
+  Fred::Mailer::Parameters params;
+  Fred::Mailer::Handles handles;
+  Fred::Mailer::Attachments attach;
   std::string emails;
 
 public:
@@ -62,85 +58,85 @@ public:
   }
   EPPNotifier(bool _disable, 
               MailerManager *mailManager, 
-              DB *dbs, 
-              ID regid, 
-              ID objectid,
-              Register::Manager *_rm = 0); // add default contacts for object ID
+              DBSharedPtr  db_disconnect_guard,
+              unsigned int regid, 
+              unsigned int objectid,
+              Fred::Manager *_rm = 0); // add default contacts for object ID
   ~EPPNotifier();
   bool Send(); // send e-mail messages by mailer manager
   void constructMessages(); // construct messages - running all sql queries (Ticket #1622)
 
-  ID GetObjectID() {return objectID;}
-  ; // return ID of the object
-  ID GetRegistrarID() {return registrarID;}
+  unsigned int GetObjectID() {return objectID;}
+  ; // return unsigned int of the object
+  unsigned int GetRegistrarID() {return registrarID;}
   ; //  return ID of the registrar
 
 
   void AddNSSetTechByDomain(
-    ID domainID); // add ale tech-c of the nsset linked with domain with  SQL query
+    unsigned int domainID); // add ale tech-c of the nsset linked with domain with  SQL query
   void AddNSSetTech(
-    ID nssetID); // add all tech-c with nsset  with  SQL query
+    unsigned int nssetID); // add all tech-c with nsset  with  SQL query
   void AddKeySetTechByDomain(
-          ID domainID); //add all tech-c of keyset linket with domain with SQL query
+          unsigned int domainID); //add all tech-c of keyset linket with domain with SQL query
   void AddKeySetTech(
-          ID keysetID); //add all tech-c with keyset with sql query
+          unsigned int keysetID); //add all tech-c with keyset with sql query
   void AddDomainAdmin(
-    ID domainID); // add all admin-c at domain with  SQL query
+    unsigned int domainID); // add all admin-c at domain with  SQL query
   void AddDomainRegistrant(
-    ID domainID); // add owner of domain with  SQL query
+    unsigned int domainID); // add owner of domain with  SQL query
 
   void AddRegistrant(
-    ID contactID)
+    unsigned int contactID)
   {
     AddContactID(contactID, REGISTRANT_CONTACT, 0);
   }
   ;
   void AddRegistrantNew(
-    ID contactID)
+    unsigned int contactID)
   {
     AddContactID(contactID, REGISTRANT_CONTACT, NEW);
   }
   ;
   void AddRegistrantOld(
-    ID contactID)
+    unsigned int contactID)
   {
     AddContactID(contactID, REGISTRANT_CONTACT, OLD);
   }
   ;
 
   void AddTech(
-    ID contactID)
+    unsigned int contactID)
   {
     AddContactID(contactID, TECH_CONTACT, 0);
   }
   ;
   void AddTechNew(
-    ID contactID)
+    unsigned int contactID)
   {
     AddContactID(contactID, TECH_CONTACT, NEW);
   }
   ;
   void AddTechOld(
-    ID contactID)
+    unsigned int contactID)
   {
     AddContactID(contactID, TECH_CONTACT, OLD);
   }
   ;
 
   void AddAdmin(
-    ID contactID)
+    unsigned int contactID)
   {
     AddContactID(contactID, ADMIN_CONTACT, 0);
   }
   ;
   void AddAdminNew(
-    ID contactID)
+    unsigned int contactID)
   {
     AddContactID(contactID, ADMIN_CONTACT, NEW);
   }
   ;
   void AddAdminOld(
-    ID contactID)
+    unsigned int contactID)
   {
     AddContactID(contactID, ADMIN_CONTACT, OLD);
   }
@@ -148,7 +144,7 @@ public:
 
 private:
   void AddContactID(
-    ID contactID, short type, short mod); // add contactID to the list notify
+    unsigned int contactID, short type, short mod); // add contactID to the list notify
 
   void AddDefault()
   {

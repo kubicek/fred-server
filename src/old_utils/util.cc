@@ -32,6 +32,10 @@
 #include "log/logger.h"
 #include "corba/epp/action.h"
 
+#include "util/random_data_generator.h"
+
+RandomDataGenerator rdg;
+
 // generate randoma password contains characters  [a-z] [A-Z] and [0-9] with length PASS_LEN
 void random_pass(
   char *str)
@@ -40,8 +44,9 @@ void random_pass(
   int i;
   char c;
 
+
   for (i = 0; i < len;) {
-    c = 32+(int) (96.0*rand()/(RAND_MAX+1.0));
+    c = rdg.xnletter();//32+(int) (96.0*rand()/(RAND_MAX+1.0));
 
     if (isalnum(c) ) {
       str[i] = c;
@@ -152,14 +157,6 @@ int atoh(
   return Value;
 }
 
-// generate roid started with prefix unique indentificator of object
-void get_roid(
-  char *roid, char *prefix, int id)
-{
-  sprintf(roid, "%s%010d-CZ", prefix, id);
-  LOG( LOG_DEBUG , "get_ROID [%s] from prefix %s  id %d" , roid , prefix , id );
-
-}
 // contact handle
 bool get_CONTACTHANDLE(
   char * HANDLE, const char *handle)
@@ -366,30 +363,6 @@ int TestPeriodyInterval(
     return 2; // period is out of range
 }
 
-//  count VAT from price without tax with help of coefficient a round VAT to dimes
-// count VAT  ( local CZ ) function for banking
-long count_dph(
-  long price, double koef)
-{
-  double p;
-  long d, r, mod;
-
-  p = price/100.0; // convert to double
-  d = (long ) ( (p* koef) * 100.0 ); // to long 2 decimal places
-
-  mod = d % 10;
-
-  if (mod > 4)
-    r = (d / 10) * 10 + 10; // round up dimes
-  else
-    r = (d / 10) * 10; // down
-
-
-  LOG( LOG_DEBUG , "count_dph koef  %lf p = %lf price %ld d = %ld  mod %ld zaokrouhleno dph->%ld" , koef , p , price , d ,mod , r );
-
-  return r;
-}
-
 // convert price of penny without conversion through float
 // convert  local currency string
 long get_price(
@@ -424,14 +397,6 @@ long get_price(
   LOG( LOG_DEBUG , "get_price from string[%s] -> %ld hal" , priceStr , price );
 
   return price;
-}
-
-// convert price in pennies to string
-// return currency in long to string
-void get_priceStr(
-  char *priceStr, long price)
-{
-  sprintf(priceStr, "%ld%c%02ld", price/100, '.', price %100);
 }
 
 // convert local format time in string to time_t
@@ -516,7 +481,7 @@ time_t get_utctime_from_localdate(
 
 //  convert date  from database  ( int UTC date ) to local  date
 void convert_rfc3339_date(
-  char *dateStr, const char *string)
+  char *dateStr, size_t len, const char *string)
 {
   time_t t;
 
@@ -525,12 +490,12 @@ void convert_rfc3339_date(
     dateStr[0] = (char)NULL; //  ERROR
 
   else
-    get_rfc3339_timestamp(t, dateStr, true); // return  local date
+    get_rfc3339_timestamp(t, dateStr, len, true); // return  local date
 }
 
 // convert timestamp from database  ( int UTC ) to local date time
 void convert_rfc3339_timestamp(
-  char *dateStr, const char *string)
+  char *dateStr, size_t len, const char *string)
 {
   time_t t;
 
@@ -539,11 +504,11 @@ void convert_rfc3339_timestamp(
     dateStr[0] = (char)NULL; //  ERROR
     // return string in rfc3339  like a date time with time zone
   else
-    get_rfc3339_timestamp(t, dateStr, false);
+    get_rfc3339_timestamp(t, dateStr, len, false);
 }
 
 void get_rfc3339_timestamp(
-  time_t t, char *string, bool day)
+  time_t t, char *string, size_t string_len, bool day)
 {
   struct tm *dt;
   int diff;
@@ -566,16 +531,16 @@ void get_rfc3339_timestamp(
 
   // convert only date
   if (day)
-    sprintf(string, "%4d-%02d-%02d", dt->tm_year + 1900, dt->tm_mon + 1,
+    snprintf(string, string_len, "%4d-%02d-%02d", dt->tm_year + 1900, dt->tm_mon + 1,
         dt->tm_mday);
   else {
-    sprintf(string, "%4d-%02d-%02dT%02d:%02d:%02d%c", dt->tm_year + 1900,
+    snprintf(string, string_len, "%4d-%02d-%02dT%02d:%02d:%02d%c", dt->tm_year + 1900,
         dt->tm_mon + 1, dt->tm_mday, dt->tm_hour, dt->tm_min, dt->tm_sec, sign);
 
     if (diff != 0) {
-      sprintf(tzstr, "%02d:%02d", diff / SECSPERHOUR, (diff % SECSPERHOUR )
+      snprintf(tzstr, sizeof(tzstr), "%02d:%02d", diff / SECSPERHOUR, (diff % SECSPERHOUR )
           / MINSPERHOUR); // get timezone
-      strcat(string, tzstr);
+      strncat(string, tzstr, string_len-strlen(string)-1);
     }
 
   }
@@ -584,7 +549,7 @@ void get_rfc3339_timestamp(
 
 // function forconvert timestamp  time_t -> SQL string
 void get_timestamp(
-  char *string, time_t t)
+  char *string, size_t len, time_t t)
 {
   struct tm *dt;
 
@@ -593,7 +558,7 @@ void get_timestamp(
   dt = gmtime_r( &t, &result);
 
   // get SQL string
-  sprintf(string, "%4d-%02d-%02d %02d:%02d:%02d", dt->tm_year+1900, dt->tm_mon
+  snprintf(string, len, "%4d-%02d-%02d %02d:%02d:%02d", dt->tm_year+1900, dt->tm_mon
       +1, dt->tm_mday, dt->tm_hour, dt->tm_min, dt->tm_sec);
 
 }

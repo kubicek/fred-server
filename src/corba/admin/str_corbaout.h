@@ -2,8 +2,6 @@
 #define STR_CORBAOUT_H_
 
 #include "common.h"
-#include "types/convert_str_pod.h"
-#include "types/convert_str_boost_datetime.h"
 #include "types/stringify.h"
 
 
@@ -35,6 +33,15 @@ inline std::string str_corbaout(const ptime &_value) {
   }
 }
 
+template<>
+inline std::string str_corbaout(const Decimal &_value) {
+  if (_value.is_special()) {
+    return std::string();
+  }
+  else {
+    return _value.get_string();
+  }
+}
 
 template<>
 inline std::string str_corbaout(const Database::DateTime &_value) {

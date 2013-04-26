@@ -27,31 +27,55 @@
 #include <math.h>
 #include <memory>
 #include <iomanip>
-#include <corba/ccReg.hh>
+#include <corba/Admin.hh>
 
 #include "common.h"
 #include "admin_impl.h"
 #include "old_utils/log.h"
 #include "old_utils/dbsql.h"
-#include "register/register.h"
-#include "register/notify.h"
+#include "fredlib/registry.h"
+#include "fredlib/notify.h"
 #include "corba/mailer_manager.h"
+#include "fredlib/messages/messages_impl.h"
+#include "fredlib/object_states.h"
+#include "fredlib/poll.h"
+#include "bank_payment.h"
 
 #include "log/logger.h"
 #include "log/context.h"
 
-#include "rand_string.h"
+#include "random.h"
 
 #include "corba/connection_releaser.h"
 
-#ifdef ADIF
-#endif
+#include "epp_corba_client_impl.h"
 
-ccReg_Admin_i::ccReg_Admin_i(const std::string _database,
-                             NameService *_ns,
-                             Config::Conf& _cfg,
-                             bool _session_garbage) throw (DB_CONNECT_FAILED) :
-  m_connection_string(_database), ns(_ns), cfg(_cfg), bankingInvoicing(_ns) {
+class Registry_RegistrarCertification_i;
+class Registry_RegistrarGroup_i;
+
+ccReg_Admin_i::ccReg_Admin_i(const std::string _database, NameService *_ns
+                             , bool restricted_handles
+                             , const std::string& docgen_path
+                             , const std::string& docgen_template_path
+                             , unsigned int docgen_domain_count_limit
+                             , const std::string& fileclient_path
+                             , unsigned adifd_session_max
+                             , unsigned adifd_session_timeout
+                             , unsigned adifd_session_garbage
+                             , bool _session_garbage)
+: m_connection_string(_database), ns(_ns)
+, restricted_handles_(restricted_handles)
+, docgen_path_(docgen_path)
+, docgen_template_path_(docgen_template_path)
+, docgen_domain_count_limit_(docgen_domain_count_limit)
+, fileclient_path_(fileclient_path)
+, adifd_session_max_(adifd_session_max)
+, adifd_session_timeout_(adifd_session_timeout)
+, adifd_session_garbage_(adifd_session_garbage)
+, bankingInvoicing(_ns)
+, session_garbage_active_ (false)
+, session_garbage_thread_ (0)
+{
 
   /* HACK: to recognize ADIFD and PIFD until separation of objects */
   if (_session_garbage) {
@@ -60,18 +84,26 @@ ccReg_Admin_i::ccReg_Admin_i(const std::string _database,
   else {
     server_name_ = ("pifd");
   }
+
+
+
+  //instances held until deactivation
+  Registry_Registrar_Certification_Manager_i * reg_cert_mgr_i
+      = new Registry_Registrar_Certification_Manager_i();
+  reg_cert_mgr_ref_ = reg_cert_mgr_i->_this();
+  reg_cert_mgr_i->_remove_ref();
+  Registry_Registrar_Group_Manager_i * reg_grp_mgr_i
+      = new Registry_Registrar_Group_Manager_i();
+  reg_grp_mgr_ref_ = reg_grp_mgr_i->_this();
+  reg_grp_mgr_i->_remove_ref();
+
   Logging::Context ctx(server_name_);
+  db_disconnect_guard_ = connect_DB(m_connection_string
+                          , DB_CONNECT_FAILED());
 
-  // these object are shared between threads (CAUTION)
-  if (!db.OpenDatabase(m_connection_string.c_str())) {
-    LOG(ALERT_LOG,
-        "cannot connect to DATABASE %s",
-        m_connection_string.c_str());
-    throw DB_CONNECT_FAILED();
-  }
-
-  register_manager_.reset(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  register_manager_->initStates();
+  registry_manager_.reset(Fred::Manager::create(db_disconnect_guard_
+          , restricted_handles_));
+  registry_manager_->initStates();
 
   if (_session_garbage) {
     session_garbage_active_ = true;
@@ -81,7 +113,6 @@ ccReg_Admin_i::ccReg_Admin_i(const std::string _database,
 
 ccReg_Admin_i::~ccReg_Admin_i() {
   TRACE("[CALL] ccReg_Admin_i::~ccReg_Admin_i()");
-  db.Disconnect();
 
   session_garbage_active_ = false;
   cond_.notify_one();
@@ -102,23 +133,25 @@ ccReg_Admin_i::~ccReg_Admin_i() {
   TRACE("Admin object completely destroyed.");
 }
 
-#define SWITCH_CONVERT(x) case Register::x : ch->handleClass = ccReg::x; break
-#define SWITCH_CONVERT_T(x) case Register::x : ch->hType = ccReg::x; break
+#define SWITCH_CONVERT(x) case Fred::x : ch->handleClass = ccReg::x; break
+#define SWITCH_CONVERT_T(x) case Fred::x : ch->hType = ccReg::x; break
 void ccReg_Admin_i::checkHandle(const char* handle,
                                 ccReg::CheckHandleTypeSeq_out chso) {
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
-  DB ldb;
-  ldb.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&ldb, cfg.get<bool>("registry.restricted_handles")));
+  DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
+                                  , DB_CONNECT_FAILED());
+
+  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
+          , restricted_handles_));
   ccReg::CheckHandleTypeSeq* chs = new ccReg::CheckHandleTypeSeq;
-  Register::CheckHandleList chl;
+  Fred::CheckHandleList chl;
   r->checkHandle(handle, chl, true); // allow IDN in whois queries
   chs->length(chl.size());
   for (unsigned i=0; i< chl.size(); i++) {
     ccReg::CheckHandleType *ch = &(*chs)[i];
-    Register::CheckHandle& chd = chl[i];
+    Fred::CheckHandle& chd = chl[i];
     ch->newHandle = CORBA::string_dup(chd.newHandle.c_str());
     ch->conflictHandle = CORBA::string_dup(chd.conflictHandle.c_str());
     switch (chd.type) {
@@ -142,7 +175,6 @@ void ccReg_Admin_i::checkHandle(const char* handle,
     }
   }
   chso = chs;
-  ldb.Disconnect();
 }
 
 void ccReg_Admin_i::garbageSession() {
@@ -157,7 +189,7 @@ void ccReg_Admin_i::garbageSession() {
     
     boost::xtime sleep_time;
     boost::xtime_get(&sleep_time, boost::TIME_UTC);
-    sleep_time.sec += cfg.get<unsigned>("adifd.session_garbage");
+    sleep_time.sec += adifd_session_garbage_;
     cond_.timed_wait(scoped_lock, sleep_time);
     
     LOGGER(PACKAGE).debug("procedure invoked");
@@ -199,7 +231,7 @@ char* ccReg_Admin_i::createSession(const char* username) {
   TRACE(boost::format("[CALL] ccReg_Admin_i::createSession('%1%')") % username);
 
   boost::mutex::scoped_lock scoped_lock(m_session_list_mutex);
-  unsigned sess_max = cfg.get<unsigned>("adifd.session_max");
+  unsigned sess_max = adifd_session_max_;
   if (sess_max && m_session_list.size() == sess_max) {
     LOGGER(PACKAGE).info(boost::format("session limit (max=%1%) exceeded") % sess_max);
 
@@ -223,21 +255,22 @@ char* ccReg_Admin_i::createSession(const char* username) {
 
   ccReg_User_i *user_info = new ccReg_User_i(1 /* dummy id until user management */, username, username, username);
 
-  std::string session_id = "sessid#" + RandStringGenerator::generate(5) + "-" + username;
+  std::string session_id = "sessid#" + Random::string_alphanum(5) + "-" + username;
 
   
-  ccReg_Session_i *session = new ccReg_Session_i(session_id, m_connection_string, ns, cfg, bankingInvoicing._this(), user_info);
+  ccReg_Session_i *session = new ccReg_Session_i(session_id, m_connection_string, ns,
+          restricted_handles_,
+          docgen_path_,
+          docgen_template_path_,
+          fileclient_path_,
+          adifd_session_timeout_,
+          bankingInvoicing._this(), user_info);
+
   m_session_list[session_id] = session; 
 
-#ifdef ADIF
-  LOGGER(PACKAGE).notice(boost::format("admin session '%1%' created -- total number of sessions is '%2%'")
-      % session_id % m_session_list.size());
-#endif
 
-#ifdef LOGD
   LOGGER(PACKAGE).notice(boost::format("admin session '%1%' created -- total number of sessions is '%2%'")
       % session_id % m_session_list.size());
-#endif
 
   return CORBA::string_dup(session_id.c_str());
 }
@@ -281,8 +314,9 @@ ccReg::Session_ptr ccReg_Admin_i::getSession(const char* _session_id)
   return it->second->_this();
 }
 
-void ccReg_Admin_i::fillRegistrar(ccReg::Registrar& creg,
-                                  Register::Registrar::Registrar *reg) {
+
+void ccReg_Admin_i::fillRegistrar(ccReg::AdminRegistrar& creg,
+                                  Fred::Registrar::Registrar *reg) {
 
   creg.id = reg->getId();
   creg.name = DUPSTRFUN(reg->getName);
@@ -299,7 +333,7 @@ void ccReg_Admin_i::fillRegistrar(ccReg::Registrar& creg,
   creg.telephone = DUPSTRFUN(reg->getTelephone);
   creg.fax = DUPSTRFUN(reg->getFax);
   creg.email = DUPSTRFUN(reg->getEmail);
-  creg.credit = DUPSTRC(formatMoney(reg->getCredit()*100));
+  creg.credit = DUPSTRC(formatMoney(reg->getCredit()));
   creg.access.length(reg->getACLSize());
   for (unsigned i=0; i<reg->getACLSize(); i++) {
     creg.access[i].md5Cert = DUPSTRFUN(reg->getACL(i)->getCertificateMD5);
@@ -309,20 +343,21 @@ void ccReg_Admin_i::fillRegistrar(ccReg::Registrar& creg,
 }
 
 ccReg::RegistrarList* ccReg_Admin_i::getRegistrars()
-    throw (ccReg::Admin::SQL_ERROR) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
+    throw (ccReg::Admin::SQL_ERROR)
+{
+    Logging::Context ctx(server_name_);
+    ConnectionReleaser releaser;
+  try {
 
-  DB ldb;
-  if (!ldb.OpenDatabase(m_connection_string.c_str())) {
-    throw ccReg::Admin::SQL_ERROR();
-  }
-  try { 
-    std::auto_ptr<Register::Manager> regm(
-        Register::Manager::create(&ldb, cfg.get<bool>("registry.restricted_handles"))
+    DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
+                                            , ccReg::Admin::SQL_ERROR());
+
+    std::auto_ptr<Fred::Manager> regm(
+        Fred::Manager::create(ldb_disconnect_guard
+                , restricted_handles_)
     );
-    Register::Registrar::Manager *rm = regm->getRegistrarManager();
-    Register::Registrar::RegistrarList::AutoPtr rl = rm->createList();
+    Fred::Registrar::Manager *rm = regm->getRegistrarManager();
+    Fred::Registrar::RegistrarList::AutoPtr rl = rm->createList();
 
     Database::Filters::UnionPtr unionFilter = Database::Filters::CreateClearedUnionPtr();
     unionFilter->addFilter( new Database::Filters::RegistrarImpl(true) );
@@ -333,68 +368,29 @@ ccReg::RegistrarList* ccReg_Admin_i::getRegistrars()
     reglist->length(rl->size());
     for (unsigned i=0; i<rl->size(); i++)
     fillRegistrar((*reglist)[i],rl->get(i));
-    ldb.Disconnect();
     return reglist;
   }
-  catch (Register::SQL_ERROR) {
-    ldb.Disconnect();
+  catch (Fred::SQL_ERROR) {
     throw ccReg::Admin::SQL_ERROR();
   }
 }
 
-ccReg::RegistrarList* ccReg_Admin_i::getRegistrarsByZone(const char *zone)
-    throw (ccReg::Admin::SQL_ERROR) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  DB ldb;
-  if (!ldb.OpenDatabase(m_connection_string.c_str())) {
-    throw ccReg::Admin::SQL_ERROR();
-  }
-  try {
-    std::auto_ptr<Register::Manager> regm(
-        Register::Manager::create(&ldb,cfg.get<bool>("registry.restricted_handles"))
-    );
-    Register::Registrar::Manager *rm = regm->getRegistrarManager();
-    Register::Registrar::RegistrarList::AutoPtr rl = rm->createList();
-
-    Database::Filters::UnionPtr unionFilter = Database::Filters::CreateClearedUnionPtr();
-    std::auto_ptr<Database::Filters::Registrar> r ( new Database::Filters::RegistrarImpl(true));
-    r->addZoneFqdn().setValue(zone);
-    unionFilter->addFilter( r.release() );
-    rl->reload(*unionFilter.get());
-
-    LOG( NOTICE_LOG, "getRegistrars: num -> %d", rl->size() );
-    ccReg::RegistrarList* reglist = new ccReg::RegistrarList;
-    reglist->length(rl->size());
-    for (unsigned i=0; i<rl->size(); i++)
-    fillRegistrar((*reglist)[i],rl->get(i));
-    ldb.Disconnect();
-    return reglist;
-  }
-  catch (Register::SQL_ERROR) {
-    ldb.Disconnect();
-    throw ccReg::Admin::SQL_ERROR();
-  }
-}
-
-ccReg::Registrar* ccReg_Admin_i::getRegistrarById(ccReg::TID id)
+ccReg::AdminRegistrar* ccReg_Admin_i::getRegistrarById(ccReg::TID id)
     throw (ccReg::Admin::ObjectNotFound, ccReg::Admin::SQL_ERROR) {
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
   LOG( NOTICE_LOG, "getRegistarByHandle: id -> %lld", (unsigned long long)id );
   if (!id) throw ccReg::Admin::ObjectNotFound();
-  DB ldb;
-  if (!ldb.OpenDatabase(m_connection_string.c_str())) {
-    throw ccReg::Admin::SQL_ERROR();
-  }
+
   try {
-    std::auto_ptr<Register::Manager> regm(
-        Register::Manager::create(&ldb,cfg.get<bool>("registry.restricted_handles"))
+    DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
+                                                        , ccReg::Admin::SQL_ERROR());
+    std::auto_ptr<Fred::Manager> regm(
+        Fred::Manager::create(ldb_disconnect_guard,restricted_handles_)
     );
-    Register::Registrar::Manager *rm = regm->getRegistrarManager();
-    Register::Registrar::RegistrarList::AutoPtr rl = rm->createList();
+    Fred::Registrar::Manager *rm = regm->getRegistrarManager();
+    Fred::Registrar::RegistrarList::AutoPtr rl = rm->createList();
 
     Database::Filters::UnionPtr unionFilter = Database::Filters::CreateClearedUnionPtr();
     std::auto_ptr<Database::Filters::Registrar> r ( new Database::Filters::RegistrarImpl(true));
@@ -403,999 +399,28 @@ ccReg::Registrar* ccReg_Admin_i::getRegistrarById(ccReg::TID id)
     rl->reload(*unionFilter.get());
 
     if (rl->size() < 1) {
-      ldb.Disconnect();
       throw ccReg::Admin::ObjectNotFound();
     }
-    ccReg::Registrar* creg = new ccReg::Registrar;
+    ccReg::AdminRegistrar* creg = new ccReg::AdminRegistrar;
     fillRegistrar(*creg,rl->get(0));
-    ldb.Disconnect();
     return creg;
   }
-  catch (Register::SQL_ERROR) {
-    ldb.Disconnect();
+  catch (Fred::SQL_ERROR) {
     throw ccReg::Admin::SQL_ERROR();
   }
 }
-
-ccReg::Registrar* ccReg_Admin_i::getRegistrarByHandle(const char* handle)
-    throw (ccReg::Admin::ObjectNotFound, ccReg::Admin::SQL_ERROR) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  LOG( NOTICE_LOG, "getRegistarByHandle: handle -> %s", handle );
-  if (!handle || !*handle) throw ccReg::Admin::ObjectNotFound();
-  DB ldb;
-  if (!ldb.OpenDatabase(m_connection_string.c_str())) {
-    throw ccReg::Admin::SQL_ERROR();
-  }
-  try {
-    std::auto_ptr<Register::Manager> regm(
-        Register::Manager::create(&ldb,cfg.get<bool>("registry.restricted_handles"))
-    );
-    Register::Registrar::Manager *rm = regm->getRegistrarManager();
-    Register::Registrar::RegistrarList::AutoPtr rl = rm->createList();
-    Database::Filters::UnionPtr unionFilter = Database::Filters::CreateClearedUnionPtr();
-    std::auto_ptr<Database::Filters::Registrar> r ( new Database::Filters::RegistrarImpl(true));
-    r->addHandle().setValue(handle);
-    unionFilter->addFilter( r.release() );
-    rl->reload(*unionFilter.get());
-
-    if (rl->size() < 1) {
-      ldb.Disconnect();
-      throw ccReg::Admin::ObjectNotFound();
-    }
-    ccReg::Registrar* creg = new ccReg::Registrar;
-    fillRegistrar(*creg,rl->get(0));
-    ldb.Disconnect();
-    return creg;
-  }
-  catch (Register::SQL_ERROR) {
-    ldb.Disconnect();
-    throw ccReg::Admin::SQL_ERROR();
-  }
-}
-
-void ccReg_Admin_i::putRegistrar(const ccReg::Registrar& regData) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  DB db;
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::Registrar::Manager *rm = r->getRegistrarManager();
-  Register::Registrar::RegistrarList::AutoPtr rl = rm->createList();
-  Register::Registrar::Registrar::AutoPtr  reg_guard;//delete at the end
-  Register::Registrar::Registrar *reg; // registrar to be created or updated
-  if (!regData.id)
-  {
-      reg_guard = rm->createRegistrar();
-      reg = reg_guard.get();
-  }
-  else {
-      Database::Filters::UnionPtr unionFilter = Database::Filters::CreateClearedUnionPtr();
-      std::auto_ptr<Database::Filters::Registrar> r ( new Database::Filters::RegistrarImpl(true));
-      r->addId().setValue(Database::ID(regData.id));
-      unionFilter->addFilter( r.release() );
-      rl->reload(*unionFilter.get());
-
-    if (rl->size() != 1) {
-      db.Disconnect();
-      throw ccReg::Admin::UpdateFailed();
-    }
-    reg = rl->get(0);
-  }
-  reg->setHandle((const char *)regData.handle);
-  reg->setURL((const char *)regData.url);
-  reg->setName((const char *)regData.name);
-  reg->setOrganization((const char *)regData.organization);
-  reg->setStreet1((const char *)regData.street1);
-  reg->setStreet2((const char *)regData.street2);
-  reg->setStreet3((const char *)regData.street3);
-  reg->setCity((const char *)regData.city);
-  reg->setProvince((const char *)regData.stateorprovince);
-  reg->setPostalCode((const char *)regData.postalcode);
-  reg->setCountry((const char *)regData.country);
-  reg->setTelephone((const char *)regData.telephone);
-  reg->setFax((const char *)regData.fax);
-  reg->setEmail((const char *)regData.email);
-  reg->clearACLList();
-  for (unsigned i=0; i<regData.access.length(); i++) {
-    Register::Registrar::ACL *acl = reg->newACL();
-    acl->setCertificateMD5((const char *)regData.access[i].md5Cert);
-    acl->setPassword((const char *)regData.access[i].password);
-  }
-  try {
-    reg->save();
-    db.Disconnect();
-  } catch (...) {
-    db.Disconnect();
-    throw ccReg::Admin::UpdateFailed();
-  }
-}
-
-void ccReg_Admin_i::fillContact(ccReg::ContactDetail* cc,
-                                Register::Contact::Contact* c) {
-
-  cc->id = c->getId();
-  cc->handle = DUPSTRFUN(c->getHandle);
-  cc->roid = DUPSTRFUN(c->getROID);
-  cc->registrarHandle = DUPSTRFUN(c->getRegistrarHandle);
-  cc->transferDate = DUPSTRDATE(c->getTransferDate);
-  cc->updateDate = DUPSTRDATE(c->getUpdateDate);
-  cc->createDate = DUPSTRDATE(c->getCreateDate);
-  cc->createRegistrarHandle = DUPSTRFUN(c->getCreateRegistrarHandle);
-  cc->updateRegistrarHandle = DUPSTRFUN(c->getUpdateRegistrarHandle);
-  cc->authInfo = DUPSTRFUN(c->getAuthPw);
-  cc->name = DUPSTRFUN(c->getName);
-  cc->organization = DUPSTRFUN(c->getOrganization);
-  cc->street1 = DUPSTRFUN(c->getStreet1);
-  cc->street2 = DUPSTRFUN(c->getStreet2);
-  cc->street3 = DUPSTRFUN(c->getStreet3);
-  cc->province = DUPSTRFUN(c->getProvince);
-  cc->postalcode = DUPSTRFUN(c->getPostalCode);
-  cc->city = DUPSTRFUN(c->getCity);
-  cc->country = DUPSTRFUN(c->getCountry);
-  cc->telephone = DUPSTRFUN(c->getTelephone);
-  cc->fax = DUPSTRFUN(c->getFax);
-  cc->email = DUPSTRFUN(c->getEmail);
-  cc->notifyEmail = DUPSTRFUN(c->getNotifyEmail);
-  cc->ssn = DUPSTRFUN(c->getSSN);
-  cc->ssnType = DUPSTRFUN(c->getSSNType);
-  cc->vat = DUPSTRFUN(c->getVAT);
-  cc->discloseName = c->getDiscloseName();
-  cc->discloseOrganization = c->getDiscloseOrganization();
-  cc->discloseAddress = c->getDiscloseAddr();
-  cc->discloseEmail = c->getDiscloseEmail();
-  cc->discloseTelephone = c->getDiscloseTelephone();
-  cc->discloseFax = c->getDiscloseFax();
-  cc->discloseIdent = c->getDiscloseIdent();
-  cc->discloseVat = c->getDiscloseVat();
-  cc->discloseNotifyEmail = c->getDiscloseNotifyEmail();
-  std::vector<unsigned> slist;
-  for (unsigned i=0; i<c->getStatusCount(); i++) {
-    if (register_manager_->getStatusDesc(
-        c->getStatusByIdx(i)->getStatusId()
-    )->getExternal())
-      slist.push_back(c->getStatusByIdx(i)->getStatusId());
-  }
-  cc->statusList.length(slist.size());
-  for (unsigned i=0; i<slist.size(); i++)
-    cc->statusList[i] = slist[i];
-}
-
-ccReg::ContactDetail* ccReg_Admin_i::getContactByHandle(const char* handle)
-    throw (ccReg::Admin::ObjectNotFound) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  TRACE(boost::format("[CALL] ccReg_Admin_i::getContactByHandle('%1%')") % handle);
-
-  DB db;
-  if (!handle || !*handle)
-    throw ccReg::Admin::ObjectNotFound();
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::Contact::Manager *cr = r->getContactManager();
-  std::auto_ptr<Register::Contact::List> cl(cr->createList());
-  cl->setWildcardExpansion(false);
-  cl->setHandleFilter(handle);
-  cl->reload();
-  if (cl->getCount() != 1) {
-    db.Disconnect();
-    throw ccReg::Admin::ObjectNotFound();
-  }
-  ccReg::ContactDetail* cc = new ccReg::ContactDetail;
-  fillContact(cc, cl->getContact(0));
-  db.Disconnect();
-  return cc;
-}
-
-ccReg::ContactDetail* ccReg_Admin_i::getContactById(ccReg::TID id)
-    throw (ccReg::Admin::ObjectNotFound) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  TRACE(boost::format("[CALL] ccReg_Admin_i::getContactById(%1%)") % id);
-  DB db;
-  if (!id)
-    throw ccReg::Admin::ObjectNotFound();
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::Contact::Manager *cr = r->getContactManager();
-  std::auto_ptr<Register::Contact::List> cl(cr->createList());
-
-  Database::Filters::Union uf;
-  Database::Filters::Contact *cf = new Database::Filters::ContactHistoryImpl();
-  cf->addId().setValue(Database::ID(id));
-  uf.addFilter(cf);
-  cl->reload(uf);
-
-  //cl->setIdFilter(id);
-  //cl->reload();
-
-  if (cl->getCount() != 1) {
-    db.Disconnect();
-    throw ccReg::Admin::ObjectNotFound();
-  }
-  ccReg::ContactDetail* cc = new ccReg::ContactDetail;
-  fillContact(cc, cl->getContact(0));
-  db.Disconnect();
-  TRACE(boost::format("[IN] ccReg_Admin_i::getContactById(%1%): found contact with handle '%2%'")
-      % id % cc->handle);
-  return cc;
-}
-
-void ccReg_Admin_i::fillNSSet(ccReg::NSSetDetail* cn, Register::NSSet::NSSet* n) {
-  cn->id = n->getId();
-  cn->handle = DUPSTRFUN(n->getHandle);
-  cn->roid = DUPSTRFUN(n->getROID);
-  cn->registrarHandle = DUPSTRFUN(n->getRegistrarHandle);
-  cn->transferDate = DUPSTRDATE(n->getTransferDate);
-  cn->updateDate = DUPSTRDATE(n->getUpdateDate);
-  cn->createDate = DUPSTRDATE(n->getCreateDate);
-  cn->createRegistrarHandle = DUPSTRFUN(n->getCreateRegistrarHandle);
-  cn->updateRegistrarHandle = DUPSTRFUN(n->getUpdateRegistrarHandle);
-  cn->authInfo = DUPSTRFUN(n->getAuthPw);
-  cn->admins.length(n->getAdminCount());
-  try {
-    for (unsigned i=0; i<n->getAdminCount(); i++)
-    cn->admins[i] = DUPSTRC(n->getAdminByIdx(i));
-  }
-  catch (Register::NOT_FOUND) {
-    /// some implementation error - index is out of bound - WHAT TO DO?
-  }
-  cn->hosts.length(n->getHostCount());
-  for (unsigned i=0; i<n->getHostCount(); i++) {
-    cn->hosts[i].fqdn = DUPSTRFUN(n->getHostByIdx(i)->getNameIDN);
-    cn->hosts[i].inet.length(n->getHostByIdx(i)->getAddrCount());
-    for (unsigned j=0; j<n->getHostByIdx(i)->getAddrCount(); j++)
-      cn->hosts[i].inet[j] = DUPSTRC(n->getHostByIdx(i)->getAddrByIdx(j));
-  }
-  std::vector<unsigned> slist;
-  for (unsigned i=0; i<n->getStatusCount(); i++) {
-    if (register_manager_->getStatusDesc(
-        n->getStatusByIdx(i)->getStatusId()
-    )->getExternal())
-      slist.push_back(n->getStatusByIdx(i)->getStatusId());
-  }
-  cn->statusList.length(slist.size());
-  for (unsigned i=0; i<slist.size(); i++)
-    cn->statusList[i] = slist[i];
-}
-
-ccReg::NSSetDetail* ccReg_Admin_i::getNSSetByHandle(const char* handle)
-    throw (ccReg::Admin::ObjectNotFound) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  TRACE(boost::format("[CALL] ccReg_Admin_i::getNSSetByHandle('%1%')") % handle);
-
-  DB db;
-  if (!handle || !*handle)
-    throw ccReg::Admin::ObjectNotFound();
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::NSSet::Manager *nr = r->getNSSetManager();
-  std::auto_ptr<Register::NSSet::List> nl(nr->createList());
-  nl->setWildcardExpansion(false);
-  nl->setHandleFilter(handle);
-  nl->reload();
-  if (nl->getCount() != 1) {
-    db.Disconnect();
-    throw ccReg::Admin::ObjectNotFound();
-  }
-  ccReg::NSSetDetail* cn = new ccReg::NSSetDetail;
-  fillNSSet(cn, nl->getNSSet(0));
-  db.Disconnect();
-  return cn;
-}
-
-ccReg::NSSetDetail* ccReg_Admin_i::getNSSetById(ccReg::TID id)
-    throw (ccReg::Admin::ObjectNotFound) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  TRACE(boost::format("[CALL] ccReg_Admin_i::getNSSetById('%1%')") % id);
-  DB db;
-  if (!id)
-    throw ccReg::Admin::ObjectNotFound();
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::NSSet::Manager *nr = r->getNSSetManager();
-  std::auto_ptr<Register::NSSet::List> nl(nr->createList());
-
-  Database::Filters::Union uf;
-  Database::Filters::NSSet *nf = new Database::Filters::NSSetHistoryImpl();
-  nf->addId().setValue(Database::ID(id));
-  uf.addFilter(nf);
-  nl->reload(uf);
-
-  // nl->setIdFilter(id);
-  // nl->reload();
-
-  if (nl->getCount() != 1) {
-    db.Disconnect();
-    throw ccReg::Admin::ObjectNotFound();
-  }
-  ccReg::NSSetDetail* cn = new ccReg::NSSetDetail;
-  fillNSSet(cn, nl->getNSSet(0));
-  db.Disconnect();
-  return cn;
-}
-
-void
-ccReg_Admin_i::fillKeySet(ccReg::KeySetDetail *ck, Register::KeySet::KeySet *k)
-{
-    ck->id = k->getId();
-    ck->handle          = DUPSTRFUN(k->getHandle);
-    ck->roid            = DUPSTRFUN(k->getROID);
-    ck->registrarHandle = DUPSTRFUN(k->getRegistrarHandle);
-    ck->transferDate    = DUPSTRDATE(k->getTransferDate);
-    ck->updateDate      = DUPSTRDATE(k->getUpdateDate);
-    ck->createDate      = DUPSTRDATE(k->getCreateDate);
-    ck->createRegistrarHandle = DUPSTRFUN(k->getCreateRegistrarHandle);
-    ck->updateRegistrarHandle = DUPSTRFUN(k->getUpdateRegistrarHandle);
-    ck->authInfo        = DUPSTRFUN(k->getAuthPw);
-    ck->admins.length(k->getAdminCount());
-    try {
-        for (unsigned int i = 0; i < k->getAdminCount(); i++)
-            ck->admins[i] = DUPSTRC(k->getAdminByIdx(i));
-    }
-    catch (Register::NOT_FOUND) {
-        // TODO implement error handling
-    }
-
-    ck->dsrecords.length(k->getDSRecordCount());
-    for (unsigned int i = 0; i < k->getDSRecordCount(); i++) {
-        ck->dsrecords[i].keyTag = k->getDSRecordByIdx(i)->getKeyTag();
-        ck->dsrecords[i].alg = k->getDSRecordByIdx(i)->getAlg();
-        ck->dsrecords[i].digestType = k->getDSRecordByIdx(i)->getDigestType();
-        ck->dsrecords[i].digest = DUPSTRC(k->getDSRecordByIdx(i)->getDigest());
-        ck->dsrecords[i].maxSigLife = k->getDSRecordByIdx(i)->getMaxSigLife();
-    }
-
-    ck->dnskeys.length(k->getDNSKeyCount());
-    for (unsigned int i = 0; i < k->getDNSKeyCount(); i++) {
-        ck->dnskeys[i].flags = k->getDNSKeyByIdx(i)->getFlags();
-        ck->dnskeys[i].protocol = k->getDNSKeyByIdx(i)->getProtocol();
-        ck->dnskeys[i].alg = k->getDNSKeyByIdx(i)->getAlg();
-        ck->dnskeys[i].key = DUPSTRFUN(k->getDNSKeyByIdx(i)->getKey);
-    }
-
-    std::vector<unsigned int> slist;
-    for (unsigned int i = 0; i < k->getStatusCount(); i++)
-        if (register_manager_->getStatusDesc(
-                    k->getStatusByIdx(i)->getStatusId())->getExternal())
-            slist.push_back(k->getStatusByIdx(i)->getStatusId());
-
-    ck->statusList.length(slist.size());
-    for (unsigned int i = 0; i < slist.size(); i++)
-        ck->statusList[i] = slist[i];
-}
-
-ccReg::KeySetDetail *
-ccReg_Admin_i::getKeySetByHandle(const char *handle)
-    throw (ccReg::Admin::ObjectNotFound)
-{
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-    TRACE(boost::format(
-                "[CALL] ccReg_Admin_i::getKeySetByHandle('%1%')") % handle);
-
-    DB db;
-    if (!handle || !*handle)
-        throw ccReg::Admin::ObjectNotFound();
-
-    db.OpenDatabase(m_connection_string.c_str());
-    std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, 
-                cfg.get<bool>("registry.restricted_handles")));
-    Register::KeySet::Manager *kr = r->getKeySetManager();
-    std::auto_ptr<Register::KeySet::List> kl(kr->createList());
-    kl->setWildcardExpansion(false);
-    kl->setHandleFilter(handle);
-    kl->reload();
-
-    if (kl->getCount() != 1) {
-        db.Disconnect();
-        throw ccReg::Admin::ObjectNotFound();
-    }
-
-    ccReg::KeySetDetail *ck = new ccReg::KeySetDetail;
-    fillKeySet(ck, kl->getKeySet(0));
-    db.Disconnect();
-    return ck;
-}
-
-ccReg::KeySetDetail *
-ccReg_Admin_i::getKeySetById(ccReg::TID id)
-    throw (ccReg::Admin::ObjectNotFound)
-{
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-    TRACE(boost::format(
-                "[CALL] ccReg_Admin_i::getKeySetById('%1%')") % id);
-    DB db;
-    if (!id)
-        throw ccReg::Admin::ObjectNotFound();
-    db.OpenDatabase(m_connection_string.c_str());
-
-    std::auto_ptr<Register::Manager> r(
-            Register::Manager::create(&db,  cfg.get<bool>("registry.restricted_handles")));
-    Register::KeySet::Manager *kr = r->getKeySetManager();
-    std::auto_ptr<Register::KeySet::List> kl(kr->createList());
-
-    Database::Filters::Union uf;
-    Database::Filters::KeySet *kf = new Database::Filters::KeySetHistoryImpl();
-    kf->addId().setValue(Database::ID(id));
-    uf.addFilter(kf);
-    kl->reload(uf);
-
-    if (kl->getCount() != 1) {
-        db.Disconnect();
-        throw ccReg::Admin::ObjectNotFound();
-    }
-
-    ccReg::KeySetDetail *ck = new ccReg::KeySetDetail;
-    fillKeySet(ck, kl->getKeySet(0));
-    db.Disconnect();
-    return ck;
-}
-// ccReg::KeySetDetail *
-// ccReg_Admin_i::getKeySetByDomainFQDN(const char *fqdn)
-    // throw (ccReg::Admin::ObjectNotFound)
-// {
-    // DB db;
-    // if (!fqdn)
-        // throw ccReg::Admin::ObjectNotFound();
-    // db.OpenDatabase(m_connection_string.c_str());
-// 
-    // std::auto_ptr<Register::Manager> regMan(
-            // Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-    // Register::KeySet::Manager *keyR = regMan->getKeySetManager();
-    // std::auto_ptr<Register::KeySet::List> klist(keyR->createList());
-    // 
-    // Database::Filters::Union uf;
-    // Database::Filters::KeySet *keyF = new Database::Filters::KeySetHistoryImpl();
-    // kf-
-// }
-
-void ccReg_Admin_i::fillEPPAction(ccReg::EPPAction* cea,
-                                  const Register::Registrar::EPPAction *rea) {
-  cea->id = rea->getId();
-  cea->xml = DUPSTRFUN(rea->getEPPMessageIn);
-  cea->xml_out = DUPSTRFUN(rea->getEPPMessageOut);
-  cea->time = DUPSTRDATE(rea->getStartTime);
-  cea->type = DUPSTRFUN(rea->getTypeName);
-  cea->objectHandle = DUPSTRFUN(rea->getHandle);
-  cea->registrarHandle = DUPSTRFUN(rea->getRegistrarHandle);
-  cea->result = rea->getResult();
-  cea->clTRID = DUPSTRFUN(rea->getClientTransactionId);
-  cea->svTRID = DUPSTRFUN(rea->getServerTransactionId);
-}
-
-ccReg::EPPAction* ccReg_Admin_i::getEPPActionBySvTRID(const char* svTRID)
-    throw (ccReg::Admin::ObjectNotFound) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  DB db;
-  if (!svTRID || !*svTRID)
-    throw ccReg::Admin::ObjectNotFound();
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::Registrar::Manager *rm = r->getRegistrarManager();
-  Register::Registrar::EPPActionList *eal = rm->getEPPActionList();
-  eal->setSvTRIDFilter(svTRID);
-  eal->setPartialLoad(false);
-  eal->reload();
-  if (eal->size() != 1) {
-    db.Disconnect();
-    throw ccReg::Admin::ObjectNotFound();
-  }
-  ccReg::EPPAction* ea = new ccReg::EPPAction;
-  fillEPPAction(ea, eal->get(0));
-  db.Disconnect();
-  return ea;
-}
-
-ccReg::EPPAction* ccReg_Admin_i::getEPPActionById(ccReg::TID id)
-    throw (ccReg::Admin::ObjectNotFound) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  TRACE(boost::format("[CALL] ccReg_Admin_i::getEPPActionById(%1%)") % id);
-  if (!id)
-    throw ccReg::Admin::ObjectNotFound();
-  
-  DB ldb;  
-  if (!ldb.OpenDatabase(m_connection_string.c_str())) {
-    throw ccReg::Admin::SQL_ERROR();
-  }  
-  try {
-    std::auto_ptr<Register::Manager> r(Register::Manager::create(&ldb,cfg.get<bool>("registry.restricted_handles")));
-    Register::Registrar::Manager *rm = r->getRegistrarManager();
-    Register::Registrar::EPPActionList *eal = rm->getEPPActionList();
-    eal->setIdFilter(id);
-    eal->setPartialLoad(false);
-    eal->reload();
-    if (eal->size() != 1) {
-      ldb.Disconnect();
-      throw ccReg::Admin::ObjectNotFound();
-    }
-    ccReg::EPPAction* ea = new ccReg::EPPAction;
-    fillEPPAction(ea, eal->get(0));
-    ldb.Disconnect();
-    TRACE(boost::format("[IN] ccReg_Admin_i::getEPPActionById(%1%): found action for object with handle '%2%'")
-        % id % ea->objectHandle);
-    return ea;
-  }
-  catch (Register::SQL_ERROR) {
-    ldb.Disconnect();
-    throw ccReg::Admin::SQL_ERROR();
-  }
-}
-
-void ccReg_Admin_i::fillDomain(ccReg::DomainDetail* cd,
-                               Register::Domain::Domain* d) {
-  cd->id = d->getId();
-  cd->fqdn = DUPSTRFUN(d->getFQDNIDN);
-  cd->roid = DUPSTRFUN(d->getROID);
-  cd->registrarHandle = DUPSTRFUN(d->getRegistrarHandle);
-  cd->transferDate = DUPSTRDATE(d->getTransferDate);
-  cd->updateDate = DUPSTRDATE(d->getUpdateDate);
-  cd->createDate = DUPSTRDATE(d->getCreateDate);
-  cd->createRegistrarHandle = DUPSTRFUN(d->getCreateRegistrarHandle);
-  cd->updateRegistrarHandle = DUPSTRFUN(d->getUpdateRegistrarHandle);
-  cd->authInfo = DUPSTRFUN(d->getAuthPw);
-  cd->registrantHandle = DUPSTRFUN(d->getRegistrantHandle);
-  cd->expirationDate = DUPSTRDATED(d->getExpirationDate);
-  cd->valExDate = DUPSTRDATED(d->getValExDate);
-  cd->nssetHandle = DUPSTRFUN(d->getNSSetHandle);
-  cd->keysetHandle = DUPSTRFUN(d->getKeySetHandle);
-  cd->admins.length(d->getAdminCount(1));
-  cd->temps.length(d->getAdminCount(2));
-  std::vector<unsigned> slist;
-  for (unsigned i=0; i<d->getStatusCount(); i++) {
-    if (register_manager_->getStatusDesc(
-        d->getStatusByIdx(i)->getStatusId()
-    )->getExternal())
-      slist.push_back(d->getStatusByIdx(i)->getStatusId());
-  }
-  cd->statusList.length(slist.size());
-  for (unsigned i=0; i<slist.size(); i++)
-    cd->statusList[i] = slist[i];
-  try {
-    for (unsigned i=0; i<d->getAdminCount(1); i++)
-    cd->admins[i] = DUPSTRC(d->getAdminHandleByIdx(i,1));
-    for (unsigned i=0; i<d->getAdminCount(2); i++)
-    cd->temps[i] = DUPSTRC(d->getAdminHandleByIdx(i,2));
-  }
-  catch (Register::NOT_FOUND) {
-    /// some implementation error - index is out of bound - WHAT TO DO?
-  }
-}
-
-ccReg::DomainDetail* ccReg_Admin_i::getDomainByFQDN(const char* fqdn)
-    throw (ccReg::Admin::ObjectNotFound) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  TRACE(boost::format("[CALL] ccReg_Admin_i::getDomainByFQDN('%1%')") % fqdn);
-
-  DB db;
-  if (!fqdn || !*fqdn)
-    throw ccReg::Admin::ObjectNotFound();
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::Domain::Manager *dm = r->getDomainManager();
-  std::auto_ptr<Register::Domain::List> dl(dm->createList());
-  dl->setWildcardExpansion(false);
-  dl->setFQDNFilter(r->getZoneManager()->encodeIDN(fqdn));
-  dl->reload();
-  if (dl->getCount() != 1) {
-    db.Disconnect();
-    throw ccReg::Admin::ObjectNotFound();
-  }
-  ccReg::DomainDetail* cd = new ccReg::DomainDetail;
-  fillDomain(cd, dl->getDomain(0));
-  db.Disconnect();
-  return cd;
-}
-
-ccReg::DomainDetail* ccReg_Admin_i::getDomainById(ccReg::TID id)
-    throw (ccReg::Admin::ObjectNotFound) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  TRACE(boost::format("[CALL] ccReg_Admin_i::getDomainById('%1%')") % id);
-  DB db;
-  if (!id)
-    throw ccReg::Admin::ObjectNotFound();
-  db.OpenDatabase(m_connection_string.c_str());
-
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::Domain::Manager *dm = r->getDomainManager();
-  std::auto_ptr<Register::Domain::List> dl(dm->createList());
-
-  Database::Filters::Union uf;
-  Database::Filters::Domain *df = new Database::Filters::DomainHistoryImpl();
-  df->addId().setValue(Database::ID(id));
-  uf.addFilter(df);
-  dl->reload(uf);
-
-  //dl->setIdFilter(id);
-  //dl->reload();
-
-
-  if (dl->getCount() != 1) {
-    db.Disconnect();
-    throw ccReg::Admin::ObjectNotFound();
-  }
-  ccReg::DomainDetail* cd = new ccReg::DomainDetail;
-  fillDomain(cd, dl->getDomain(0));
-  db.Disconnect();
-  return cd;
-}
-ccReg::DomainDetails *
-ccReg_Admin_i::getDomainsByKeySetId(ccReg::TID id, CORBA::Long limit)
-    throw (ccReg::Admin::ObjectNotFound)
-{
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-    DB db;
-    if (!id)
-        throw ccReg::Admin::ObjectNotFound();
-    db.OpenDatabase(m_connection_string.c_str());
-    std::auto_ptr<Register::Manager> r(
-            Register::Manager::create(&db, 
-                cfg.get<bool>("registry.restricted_handles"))
-            );
-    Register::Domain::Manager *dm = r->getDomainManager();
-    std::auto_ptr<Register::Domain::List> dl(dm->createList());
-
-    Database::Filters::Union uf;
-    Database::Filters::Domain *df = new Database::Filters::DomainHistoryImpl();
-    df->addKeySetId().setValue(Database::ID(id));
-    uf.addFilter(df);
-    dl->setLimit(limit);
-    dl->reload(uf);
-
-    ccReg::DomainDetails_var dlist = new ccReg::DomainDetails;
-    dlist->length(dl->getCount());
-    for (unsigned int i = 0; i < dl->getCount(); i++)
-        fillDomain(&dlist[i], dl->getDomain(i));
-    db.Disconnect();
-    return dlist._retn();
-}
-
-ccReg::DomainDetails *
-ccReg_Admin_i::getDomainsByKeySetHandle(const char *handle, CORBA::Long limit)
-    throw (ccReg::Admin::ObjectNotFound)
-{
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-    TRACE(boost::format("[CALL] ccReg_Admin_i::getDomainsByKeySetHandle('%1%')")
-                % handle);
-    DB db;
-    if (!handle || !*handle)
-        throw ccReg::Admin::ObjectNotFound();
-    db.OpenDatabase(m_connection_string.c_str());
-    std::auto_ptr<Register::Manager> r(
-            Register::Manager::create(&db, 
-                cfg.get<bool>("registry.restricted_handles"))
-            );
-    Register::Domain::Manager *dm = r->getDomainManager();
-    std::auto_ptr<Register::Domain::List> dl(dm->createList());
-
-    Database::Filters::Union uf;
-    Database::Filters::Domain *df = new Database::Filters::DomainHistoryImpl();
-
-    df->addKeySet().addHandle().setValue(
-            std::string(handle));
-    uf.addFilter(df);
-    dl->setLimit(limit);
-    dl->reload(uf);
-    
-    ccReg::DomainDetails_var dlist = new ccReg::DomainDetails;
-    dlist->length(dl->getCount());
-    for (unsigned int i = 0; i < dl->getCount(); i++)
-        fillDomain(&dlist[i], dl->getDomain(i));
-
-    db.Disconnect();
-    return dlist._retn();
-}
-
-
-ccReg::DomainDetails* ccReg_Admin_i::getDomainsByInverseKey(const char* key,
-                                                            ccReg::DomainInvKeyType type,
-                                                            CORBA::Long limit) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  TRACE(boost::format("[CALL] ccReg_Admin_i::getDomainsByInverseKey('%1%', %2%, %3%)")
-      % key % type % limit);
-
-  DB db;
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::Domain::Manager *dm = r->getDomainManager();
-  std::auto_ptr<Register::Domain::List> dl(dm->createList());
-  switch (type) {
-    case ccReg::DIKT_REGISTRANT:
-      dl->setRegistrantHandleFilter(key);
-      break;
-    case ccReg::DIKT_ADMIN:
-      dl->setAdminHandleFilter(key);
-      break;
-    case ccReg::DIKT_TEMP:
-      dl->setTempHandleFilter(key);
-      break;
-    case ccReg::DIKT_NSSET:
-      dl->setNSSetHandleFilter(key);
-      break;
-    case ccReg::DIKT_KEYSET:
-      dl->setKeySetHandleFilter(key);
-      break;
-  }
-  dl->setLimit(limit);
-  dl->reload();
-  ccReg::DomainDetails_var dlist = new ccReg::DomainDetails;
-  dlist->length(dl->getCount());
-  for (unsigned i=0; i<dl->getCount(); i++)
-    fillDomain(&dlist[i], dl->getDomain(i));
-  db.Disconnect();
-  return dlist._retn();
-}
-
-ccReg::NSSetDetails* ccReg_Admin_i::getNSSetsByInverseKey(const char* key,
-                                                          ccReg::NSSetInvKeyType type,
-                                                          CORBA::Long limit) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  DB db;
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::Zone::Manager *zm = r->getZoneManager();
-  Register::NSSet::Manager *nm = r->getNSSetManager();
-  std::auto_ptr<Register::NSSet::List> nl(nm->createList());
-  switch (type) {
-    case ccReg::NIKT_NS : nl->setHostNameFilter(zm->encodeIDN(key)); break;
-    case ccReg::NIKT_TECH : nl->setAdminFilter(key); break;
-  }
-  nl->setLimit(limit);
-  nl->reload();
-  ccReg::NSSetDetails_var nlist = new ccReg::NSSetDetails;
-  nlist->length(nl->getCount());
-  for (unsigned i=0; i<nl->getCount(); i++)
-    fillNSSet(&nlist[i], nl->getNSSet(i));
-  db.Disconnect();
-  return nlist._retn();
-}
-
-ccReg::KeySetDetails *
-ccReg_Admin_i::getKeySetsByInverseKey(
-        const char *key,
-        ccReg::KeySetInvKeyType type,
-        CORBA::Long limit)
-{
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-    DB db;
-    db.OpenDatabase(m_connection_string.c_str());
-    std::auto_ptr<Register::Manager> r(
-            Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-    Register::KeySet::Manager *km = r->getKeySetManager();
-    std::auto_ptr<Register::KeySet::List> kl(km->createList());
-    switch (type) {
-        case ccReg::KIKT_TECH:
-            kl->setAdminFilter(key);
-            break;
-    }
-    kl->setLimit(limit);
-    kl->reload();
-    ccReg::KeySetDetails_var klist = new ccReg::KeySetDetails;
-    klist->length(kl->getCount());
-    for (unsigned int i = 0; i < kl->getCount(); i++)
-        fillKeySet(&klist[i], kl->getKeySet(i));
-    db.Disconnect();
-    return klist._retn();
-}
-
-ccReg::KeySetDetails *
-ccReg_Admin_i::getKeySetsByContactId(ccReg::TID id, CORBA::Long limit)
-  throw (ccReg::Admin::ObjectNotFound)
-{
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-    DB db;
-    if (!id)
-        throw ccReg::Admin::ObjectNotFound();
-    db.OpenDatabase(m_connection_string.c_str());
-    std::auto_ptr<Register::Manager> r(
-            Register::Manager::create(&db, 
-                cfg.get<bool>("registry.restricted_handles"))
-            );
-    Register::KeySet::Manager *km = r->getKeySetManager();
-    std::auto_ptr<Register::KeySet::List> kl(km->createList());
-
-    Database::Filters::Union uf;
-    Database::Filters::KeySet *kf = new Database::Filters::KeySetHistoryImpl();
-    kf->addTechContact().addId().setValue(Database::ID(id));
-    uf.addFilter(kf);
-    kl->setLimit(limit);
-    kl->reload(uf);
-
-    ccReg::KeySetDetails_var klist = new ccReg::KeySetDetails;
-    klist->length(kl->getCount());
-    for (unsigned int i = 0; i < kl->getCount(); i++)
-        fillKeySet(&klist[i], kl->getKeySet(i));
-    db.Disconnect();
-    return klist._retn();
-}
-
-ccReg::KeySetDetails *
-ccReg_Admin_i::getKeySetsByContactHandle(const char *handle, CORBA::Long limit)
-  throw (ccReg::Admin::ObjectNotFound)
-{
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-    DB db;
-    if (!handle || !*handle)
-        throw ccReg::Admin::ObjectNotFound();
-    db.OpenDatabase(m_connection_string.c_str());
-    std::auto_ptr<Register::Manager> r(
-            Register::Manager::create(&db, 
-                cfg.get<bool>("registry.restricted_handles"))
-            );
-    Register::KeySet::Manager *km = r->getKeySetManager();
-    std::auto_ptr<Register::KeySet::List> kl(km->createList());
-
-    Database::Filters::Union uf;
-    Database::Filters::KeySet *kf = new Database::Filters::KeySetHistoryImpl();
-    kf->addTechContact().addHandle().setValue(std::string(handle));
-    uf.addFilter(kf);
-    kl->setLimit(limit);
-    kl->reload(uf);
-
-    ccReg::KeySetDetails_var klist = new ccReg::KeySetDetails;
-    klist->length(kl->getCount());
-    for (unsigned int i = 0; i < kl->getCount(); i++)
-        fillKeySet(&klist[i], kl->getKeySet(i));
-    db.Disconnect();
-    return klist._retn();
-}
-
-ccReg::Mailing::Detail* ccReg_Admin_i::getEmailById(ccReg::TID id)
-    throw (ccReg::Admin::ObjectNotFound) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  if (!id)
-    throw ccReg::Admin::ObjectNotFound();
-  MailerManager mm(ns);
-  MailerManager::Filter mf;
-  mf.id = id;
-  try {mm.reload(mf);}
-  catch (...) {throw ccReg::Admin::ObjectNotFound();}
-  if (mm.getMailList().size() != 1)
-    throw ccReg::Admin::ObjectNotFound();
-  MailerManager::Detail& mld = mm.getMailList()[0];
-  ccReg::Mailing::Detail* md = new ccReg::Mailing::Detail;
-  md->id = mld.id;
-  md->type = mld.type;
-  md->status = mld.status;
-  md->createTime = DUPSTRC(mld.createTime);
-  md->modTime = DUPSTRC(mld.modTime);
-  md->content = DUPSTRC(mld.content);
-  md->handles.length(mld.handles.size());
-  for (unsigned i=0; i<mld.handles.size(); i++)
-    md->handles[i] = DUPSTRC(mld.handles[i]);
-  md->attachments.length(mld.attachments.size());
-  for (unsigned i=0; i<mld.attachments.size(); i++)
-    md->attachments[i] = mld.attachments[i];
-  return md;
-}
-
-/*
- *disabled in 2.3
-void ccReg_Admin_i::fillInvoice(ccReg::Invoicing::Invoice *ci,
-                                Register::Invoicing::Invoice *i) {
-  std::stringstream buf;
-  ci->id = i->getId();
-  ci->zone = i->getZoneId();
-  ci->crTime = DUPSTRDATE(i->getCrDate);
-  ci->taxDate = DUPSTRDATED(i->getTaxDate);
-  ci->fromDate = DUPSTRDATED(i->getAccountPeriod().begin);
-  ci->toDate = DUPSTRDATED(i->getAccountPeriod().end);
-  ci->type
-      = (i->getType() == Register::Invoicing::IT_DEPOSIT ? ccReg::Invoicing::IT_ADVANCE
-                                                         : ccReg::Invoicing::IT_ACCOUNT);
-  buf << i->getPrefix();
-  ci->number = DUPSTRC(buf.str());
-  ci->registrarId = i->getRegistrarId();
-  ci->registrarHandle = DUPSTRC(i->getClient()->getHandle());
-  ci->credit = DUPSTRC(formatMoney(i->getCredit()));
-  ci->price = DUPSTRC(formatMoney(i->getPrice()));
-  ci->vatRate = i->getVat();
-  ci->total = DUPSTRC(formatMoney(i->getTotal()));
-  ci->totalVAT = DUPSTRC(formatMoney(i->getTotalVat()));
-  ci->varSymbol = DUPSTRC(i->getVarSymbol());
-  ci->filePDF = i->getFileId();
-  ci->fileXML = i->getFileXmlId();
-  ci->payments.length(i->getSourceCount());
-  for (unsigned k=0; k<i->getSourceCount(); k++) {
-    const Register::Invoicing::PaymentSource *ps = i->getSource(k);
-    ci->payments[k].id = ps->getId();
-    ci->payments[k].price = DUPSTRC(formatMoney(ps->getPrice()));
-    ci->payments[k].balance = DUPSTRC(formatMoney(ps->getCredit()));
-    buf.str("");
-    buf << ps->getNumber();
-    ci->payments[k].number = DUPSTRC(buf.str());
-  }
-  ci->actions.length(i->getActionCount());
-  for (unsigned k=0; k<i->getActionCount(); k++) {
-    const Register::Invoicing::PaymentAction *pa = i->getAction(k);
-    ci->actions[k].objectId = pa->getObjectId();
-    ci->actions[k].objectName = DUPSTRFUN(pa->getObjectName);
-    ci->actions[k].actionTime = DUPSTRDATE(pa->getActionTime);
-    ci->actions[k].exDate = DUPSTRDATED(pa->getExDate);
-    ci->actions[k].actionType = pa->getAction();
-    ci->actions[k].unitsCount = pa->getUnitsCount();
-    ci->actions[k].pricePerUnit = DUPSTRC(formatMoney(pa->getPricePerUnit()));
-    ci->actions[k].price = DUPSTRC(formatMoney(pa->getPrice()));
-  }
-}
-
-
-ccReg::Invoicing::Invoice* ccReg_Admin_i::getInvoiceById(ccReg::TID id)
-    throw (ccReg::Admin::ObjectNotFound) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  if (!id)
-    throw ccReg::Admin::ObjectNotFound();
-
-  MailerManager mm(ns);
-  std::auto_ptr<Register::Document::Manager>
-      docman(Register::Document::Manager::create(cfg.get<std::string>("registry.docgen_path"),
-                                                 cfg.get<std::string>("registry.docgen_template_path"),
-                                                 cfg.get<std::string>("registry.fileclient_path"),
-                                                 ns->getHostName() ) );
-  std::auto_ptr<Register::Invoicing::Manager>
-      invman(Register::Invoicing::Manager::create(docman.get(),&mm));
-  Register::Invoicing::List *invl = invman->createList();
-  Database::Filters::Invoice *invFilter = new Database::Filters::InvoiceImpl();
-  Database::Filters::Union *unionFilter = new Database::Filters::Union();
-  invFilter->addId().setValue(Database::ID(id));
-  unionFilter->addFilter(invFilter);
-  invl->reload(*unionFilter);
-  if (invl->getSize() != 1) {
-    throw ccReg::Admin::ObjectNotFound();
-  }
-  ccReg::Invoicing::Invoice* inv = new ccReg::Invoicing::Invoice;
-  fillInvoice(inv, invl->get(0));
-  return inv;
-}
- */
 
 CORBA::Long ccReg_Admin_i::getDomainCount(const char *zone) {
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
-  DB db;
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::Domain::Manager *dm = r->getDomainManager();
+  DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
+                                                , ccReg::Admin::SQL_ERROR());
+
+  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
+          , restricted_handles_));
+  Fred::Domain::Manager *dm = r->getDomainManager();
   CORBA::Long ret = dm->getDomainCount(zone);
-  db.Disconnect();
   return ret;
 }
 
@@ -1403,12 +428,13 @@ CORBA::Long ccReg_Admin_i::getSignedDomainCount(const char *_fqdn)
 {
   Logging::Context ctx(server_name_);
 
-  DB db;
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db,cfg.get<bool>("registry.restricted_handles")));
-  Register::Domain::Manager *dm = r->getDomainManager();
+  DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
+                                                , ccReg::Admin::SQL_ERROR());
+
+  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
+          ,restricted_handles_));
+  Fred::Domain::Manager *dm = r->getDomainManager();
   CORBA::Long ret = dm->getSignedDomainCount(_fqdn);
-  db.Disconnect();
   return ret;
 }
 
@@ -1416,56 +442,39 @@ CORBA::Long ccReg_Admin_i::getEnumNumberCount() {
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
-  DB db;
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::Domain::Manager *dm = r->getDomainManager();
+  DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
+                                                , ccReg::Admin::SQL_ERROR());
+
+  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
+          , restricted_handles_));
+  Fred::Domain::Manager *dm = r->getDomainManager();
   CORBA::Long ret = dm->getEnumNumberCount();
-  db.Disconnect();
   return ret;
 }
 
-ccReg::EPPActionTypeSeq* ccReg_Admin_i::getEPPActionTypeList() {
+
+Registry::CountryDescSeq* ccReg_Admin_i::getCountryDescList() {
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
-  DB db;
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
-  Register::Registrar::Manager *rm = r->getRegistrarManager();
-  ccReg::EPPActionTypeSeq *et = new ccReg::EPPActionTypeSeq;
-  
-  et->length(rm->getEPPActionTypeCount());
-  for (unsigned i=0; i<rm->getEPPActionTypeCount(); i++) {
-    (*et)[i].id = rm->getEPPActionTypeByIdx(i).id;
-    (*et)[i].name = DUPSTRC(rm->getEPPActionTypeByIdx(i).name);
-  }
-  
-  db.Disconnect();
-  return et;
-}
+  DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
+                                                , ccReg::Admin::SQL_ERROR());
 
-ccReg::CountryDescSeq* ccReg_Admin_i::getCountryDescList() {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  DB db;
-  db.OpenDatabase(m_connection_string.c_str());
-  std::auto_ptr<Register::Manager> r(Register::Manager::create(&db, cfg.get<bool>("registry.restricted_handles")));
+  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
+          , restricted_handles_));
   /* 
    * TEMP: this is for loading country codes from database - until new database 
    * library is not fully integrated into registrar library 
    */ 
   r->dbManagerInit();
   
-  ccReg::CountryDescSeq *cd = new ccReg::CountryDescSeq;
+  Registry::CountryDescSeq *cd = new Registry::CountryDescSeq;
   cd->length(r->getCountryDescSize());
   for (unsigned i=0; i<r->getCountryDescSize(); i++) {
     (*cd)[i].cc = DUPSTRC(r->getCountryDescByIdx(i).cc);
     (*cd)[i].name = DUPSTRC(r->getCountryDescByIdx(i).name);
   }
   
-  db.Disconnect();
   return cd;
 }
 
@@ -1476,120 +485,59 @@ char* ccReg_Admin_i::getDefaultCountry() {
   return CORBA::string_dup("CZ");
 }
 
-ccReg::ObjectStatusDescSeq* ccReg_Admin_i::getDomainStatusDescList(const char *lang) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
 
-  ccReg::ObjectStatusDescSeq* o = new ccReg::ObjectStatusDescSeq;
-  for (unsigned i=0; i<register_manager_->getStatusDescCount(); i++) {
-    const Register::StatusDesc *sd = register_manager_->getStatusDescByIdx(i);
-    if (sd->getExternal() && sd->isForType(3)) {
-      o->length(o->length()+1);
-      try {
-        (*o)[o->length()-1].name = DUPSTRC(sd->getDesc(lang));
-      } catch (...) {
-        // unknown language
-        (*o)[o->length()-1].name = CORBA::string_dup("");
-      }
-      (*o)[o->length()-1].id    = sd->getId();
-      (*o)[o->length()-1].shortName = DUPSTRFUN(sd->getName);
-    }
-  }
-  return o;
-}
+Registry::ObjectStatusDescSeq *ccReg_Admin_i::getObjectStatusDescList(const char *lang) {
 
-ccReg::ObjectStatusDescSeq* ccReg_Admin_i::getContactStatusDescList(const char *lang) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
+    try
+    {
+        Logging::Context ctx(server_name_);
+        ConnectionReleaser releaser;
 
-  ccReg::ObjectStatusDescSeq* o = new ccReg::ObjectStatusDescSeq;
-  for (unsigned i=0; i<register_manager_->getStatusDescCount(); i++) {
-    const Register::StatusDesc *sd = register_manager_->getStatusDescByIdx(i);
-    if (sd->getExternal() && sd->isForType(1)) {
-      o->length(o->length()+1);
-      try {
-        (*o)[o->length()-1].name = DUPSTRC(sd->getDesc(lang));
-      } catch (...) {
-        // unknown language
-        (*o)[o->length()-1].name = CORBA::string_dup("");
-      }
-      (*o)[o->length()-1].id    = sd->getId();
-      (*o)[o->length()-1].shortName = DUPSTRFUN(sd->getName);
-    }
-  }
-  return o;
-}
-
-ccReg::ObjectStatusDescSeq* ccReg_Admin_i::getNSSetStatusDescList(const char *lang) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  ccReg::ObjectStatusDescSeq* o = new ccReg::ObjectStatusDescSeq;
-  for (unsigned i=0; i<register_manager_->getStatusDescCount(); i++) {
-    const Register::StatusDesc *sd = register_manager_->getStatusDescByIdx(i);
-    if (sd->getExternal() && sd->isForType(2)) {
-      o->length(o->length()+1);
-      try {
-        (*o)[o->length()-1].name = DUPSTRC(sd->getDesc(lang));
-      } catch (...) {
-        // unknown language
-        (*o)[o->length()-1].name = CORBA::string_dup("");
-      }
-      (*o)[o->length()-1].id    = sd->getId();
-      (*o)[o->length()-1].shortName = DUPSTRFUN(sd->getName);
-    }
-  }
-  return o;
-}
-
-ccReg::ObjectStatusDescSeq *
-ccReg_Admin_i::getKeySetStatusDescList(const char *lang)
-{
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-    ccReg::ObjectStatusDescSeq *o = new ccReg::ObjectStatusDescSeq;
-    for (unsigned int i = 0; i < register_manager_->getStatusDescCount(); i++) {
-        const Register::StatusDesc *sd = register_manager_->getStatusDescByIdx(i);
-        if (sd->getExternal() && sd->isForType(4)) {
-            o->length(o->length() + 1);
-            try {
-                (*o)[o->length()-1].name = DUPSTRC(sd->getDesc(lang));
-            }
-            catch (...) {
-                //unknown lang
-                (*o)[o->length()-1].name = CORBA::string_dup("");
-            }
-            (*o)[o->length()-1].id    = sd->getId();
-            (*o)[o->length()-1].shortName = DUPSTRFUN(sd->getName);
+        Registry::ObjectStatusDescSeq_var o = new Registry::ObjectStatusDescSeq;
+        const Registry::ObjectStatusDescSeq* optr = &(o.in());
+        if(optr == 0)
+        {
+            LOGGER(PACKAGE).error("ccReg_Admin_i::getObjectStatusDescList error new Registry::ObjectStatusDescSeq failed ");
+            throw ccReg::Admin::InternalServerError();
         }
+
+        unsigned states_count = registry_manager_->getStatusDescCount();
+        o->length(states_count);
+        for (unsigned i = 0; i < states_count; ++i) {
+        const Fred::StatusDesc *sd = registry_manager_->getStatusDescByIdx(i);
+        if(sd == 0)
+        {
+            LOGGER(PACKAGE).error((std::string(
+                    "ccReg_Admin_i::getObjectStatusDescList error registry_manager_->getStatusDescByIdx(i) i: "
+                    +boost::lexical_cast<std::string>(i))).c_str());
+            throw ccReg::Admin::InternalServerError();
+        }
+        o[i].id    = sd->getId();
+        o[i].shortName = DUPSTRFUN(sd->getName);
+        o[i].name  = DUPSTRC(sd->getDesc(lang));
+      }
+      return o._retn();
+    }//try
+    catch(const std::exception& ex)
+    {
+        std::string msg = std::string("ccReg_Admin_i::getObjectStatusDescList ex: ")+ex.what();
+        LOGGER(PACKAGE).error(msg.c_str());
+        throw ccReg::Admin::InternalServerError();
     }
-    return o;
-}
-
-ccReg::ObjectStatusDescSeq *ccReg_Admin_i::getObjectStatusDescList(const char *lang) {
-  Logging::Context ctx(server_name_);
-  ConnectionReleaser releaser;
-
-  ccReg::ObjectStatusDescSeq *o = new ccReg::ObjectStatusDescSeq;
-  unsigned states_count = register_manager_->getStatusDescCount();
-  o->length(states_count);
-  for (unsigned i = 0; i < states_count; ++i) {
-    const Register::StatusDesc *sd = register_manager_->getStatusDescByIdx(i);
-    (*o)[i].id    = sd->getId();
-    (*o)[i].shortName = DUPSTRFUN(sd->getName);
-    (*o)[i].name  = DUPSTRC(sd->getDesc(lang));
-  }
-  return o;
+    catch(...)
+    {
+        LOGGER(PACKAGE).error("ccReg_Admin_i::getObjectStatusDescList error ");
+        throw ccReg::Admin::InternalServerError();
+    }
 }
 
 char* ccReg_Admin_i::getCreditByZone(const char*registrarHandle, ccReg::TID zone) {
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
-  std::auto_ptr<Register::Invoicing::Manager>
-      invman(Register::Invoicing::Manager::create());
-  char *ret = DUPSTRC(formatMoney(invman->getCreditByZone(registrarHandle, zone)));
+  std::auto_ptr<Fred::Invoicing::Manager>
+      invman(Fred::Invoicing::Manager::create());
+  char *ret = DUPSTRC(invman->getCreditByZone(registrarHandle, zone));
   return ret;
 }
 
@@ -1597,48 +545,55 @@ void ccReg_Admin_i::generateLetters() {
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
-  DB ldb;
+
   try {
-    ldb.OpenDatabase(m_connection_string.c_str());
-    
+
+    DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
+                                                  , ccReg::Admin::SQL_ERROR());
+
     MailerManager mm(ns);
-    std::auto_ptr<Register::Document::Manager> docman(
-        Register::Document::Manager::create(cfg.get<std::string>("registry.docgen_path"), 
-                                            cfg.get<std::string>("registry.docgen_template_path"),
-                                            cfg.get<std::string>("registry.fileclient_path"), 
+    std::auto_ptr<Fred::Document::Manager> docman(
+        Fred::Document::Manager::create(docgen_path_,
+                                            docgen_template_path_,
+                                            fileclient_path_,
                                             ns->getHostName()));
-    std::auto_ptr<Register::Zone::Manager> zoneMan(
-        Register::Zone::Manager::create());
-    std::auto_ptr<Register::Domain::Manager> domMan(
-        Register::Domain::Manager::create(&ldb,
+    std::auto_ptr<Fred::Zone::Manager> zoneMan(
+        Fred::Zone::Manager::create());
+
+    Fred::Messages::ManagerPtr msgMan
+        = Fred::Messages::create_manager();
+
+
+    std::auto_ptr<Fred::Domain::Manager> domMan(
+        Fred::Domain::Manager::create(ldb_disconnect_guard,
                                           zoneMan.get()));
-    std::auto_ptr<Register::Contact::Manager> conMan(
-        Register::Contact::Manager::create(&ldb,
-                                           cfg.get<bool>("registry.restricted_handles")));
-    std::auto_ptr<Register::NSSet::Manager> nssMan(
-        Register::NSSet::Manager::create(&ldb,
+    std::auto_ptr<Fred::Contact::Manager> conMan(
+        Fred::Contact::Manager::create(ldb_disconnect_guard,
+                                           restricted_handles_));
+    std::auto_ptr<Fred::NSSet::Manager> nssMan(
+        Fred::NSSet::Manager::create(ldb_disconnect_guard,
                                          zoneMan.get(),
-                                         cfg.get<bool>("registry.restricted_handles")));
-    std::auto_ptr<Register::KeySet::Manager> keyMan(
-            Register::KeySet::Manager::create(
-                &ldb,
-                cfg.get<bool>("registry.restricted_handles")));
-    std::auto_ptr<Register::Registrar::Manager> rMan(
-        Register::Registrar::Manager::create(&ldb));
-    std::auto_ptr<Register::Notify::Manager> notifyMan(
-        Register::Notify::Manager::create(&ldb,
+                                         restricted_handles_));
+    std::auto_ptr<Fred::KeySet::Manager> keyMan(
+            Fred::KeySet::Manager::create(
+                    ldb_disconnect_guard,
+                restricted_handles_));
+    std::auto_ptr<Fred::Registrar::Manager> rMan(
+        Fred::Registrar::Manager::create(ldb_disconnect_guard));
+    std::auto_ptr<Fred::Notify::Manager> notifyMan(
+        Fred::Notify::Manager::create(ldb_disconnect_guard,
                                           &mm,
                                           conMan.get(),
                                           nssMan.get(),
                                           keyMan.get(),
                                           domMan.get(), 
                                           docman.get(),
-                                          rMan.get()));
-    notifyMan->generateLetters();
-    ldb.Disconnect();
+                                          rMan.get(),
+                                          msgMan
+                                          ));
+    notifyMan->generateLetters(docgen_domain_count_limit_);
   }
   catch (...) {
-    ldb.Disconnect();
   }
 }
 
@@ -1693,13 +648,11 @@ ccReg_Admin_i::setInZoneStatus(ccReg::TID domainId)
     return true;
 }
 
-// TODO _epp_action_id is not used because so far this method is only used in web interface 
-// (so epp_action_id is not filled)
-// if it's going to be used, registrar_id should be filled as well
-ccReg::TID ccReg_Admin_i::createPublicRequest(ccReg::PublicRequest::Type _type,
+ccReg::TID ccReg_Admin_i::createPublicRequest(Registry::PublicRequest::Type _type,
                                               const char *_reason,
                                               const char *_email_to_answer,
-                                              const ccReg::Admin::ObjectIdList& _object_ids) 
+                                              const ccReg::Admin::ObjectIdList& _object_ids,
+                                              const ccReg::TID requestId) 
   throw (
     ccReg::Admin::BAD_EMAIL, ccReg::Admin::OBJECT_NOT_FOUND,
     ccReg::Admin::ACTION_NOT_FOUND, ccReg::Admin::SQL_ERROR,
@@ -1708,33 +661,34 @@ ccReg::TID ccReg_Admin_i::createPublicRequest(ccReg::PublicRequest::Type _type,
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
-  TRACE(boost::format("[CALL] ccReg_Admin_i::createPublicRequest(%1%, '%2%', '%3%, %4%)") % 
-        _type %  _reason % _email_to_answer % &_object_ids);
+  TRACE(boost::format("[CALL] ccReg_Admin_i::createPublicRequest(%1%, '%2%', '%3%', %4%, %5%)") %
+        _type %  _reason % _email_to_answer % &_object_ids % requestId);
   
   MailerManager mailer_manager(ns);
   
-  std::auto_ptr<Register::Document::Manager> doc_manager(
-          Register::Document::Manager::create(
-              cfg.get<std::string>("registry.docgen_path"),
-              cfg.get<std::string>("registry.docgen_template_path"),
-              cfg.get<std::string>("registry.fileclient_path"),
+  std::auto_ptr<Fred::Document::Manager> doc_manager(
+          Fred::Document::Manager::create(
+              docgen_path_,
+              docgen_template_path_,
+              fileclient_path_,
               ns->getHostName())
           );
-  std::auto_ptr<Register::PublicRequest::Manager> request_manager(
-          Register::PublicRequest::Manager::create(
-              register_manager_->getDomainManager(),
-              register_manager_->getContactManager(),
-              register_manager_->getNSSetManager(),
-              register_manager_->getKeySetManager(),
+  std::auto_ptr<Fred::PublicRequest::Manager> request_manager(
+          Fred::PublicRequest::Manager::create(
+              registry_manager_->getDomainManager(),
+              registry_manager_->getContactManager(),
+              registry_manager_->getNSSetManager(),
+              registry_manager_->getKeySetManager(),
               &mailer_manager,
-              doc_manager.get())
+              doc_manager.get(),
+              registry_manager_->getMessageManager())
           );
   
 #define REQUEST_TYPE_CORBA2DB_CASE(type)            \
-  case ccReg::PublicRequest::type:                  \
-    request_type = Register::PublicRequest::type; break;  
+  case Registry::PublicRequest::type:                  \
+    request_type = Fred::PublicRequest::type; break;
   
-  Register::PublicRequest::Type request_type;
+  Fred::PublicRequest::Type request_type;
   switch (_type) {
     REQUEST_TYPE_CORBA2DB_CASE(PRT_AUTHINFO_AUTO_RIF)
     REQUEST_TYPE_CORBA2DB_CASE(PRT_AUTHINFO_AUTO_PIF)
@@ -1754,13 +708,18 @@ ccReg::TID ccReg_Admin_i::createPublicRequest(ccReg::PublicRequest::Type _type,
       throw ccReg::Admin::INVALID_INPUT();
   }
   
-  std::auto_ptr<Register::PublicRequest::PublicRequest> new_request(request_manager->createRequest(request_type));
+  std::auto_ptr<Fred::PublicRequest::PublicRequest> new_request(request_manager->createRequest(request_type));
   new_request->setType(request_type);
   new_request->setRegistrarId(0);
   new_request->setReason(_reason);
   new_request->setEmailToAnswer(_email_to_answer);
-  for (unsigned i=0; i<_object_ids.length(); i++)
-    new_request->addObject(Register::PublicRequest::OID(_object_ids[i]));
+  new_request->setRequestId(requestId);
+  for (unsigned i=0; i<_object_ids.length(); i++) {
+    if (_object_ids[i] == 0) {
+        throw ccReg::Admin::OBJECT_NOT_FOUND();
+    }
+    new_request->addObject(Fred::PublicRequest::OID(_object_ids[i]));
+  }
   try {
     if (!new_request->check()) throw ccReg::Admin::REQUEST_BLOCKED();
     new_request->save();
@@ -1769,13 +728,16 @@ ccReg::TID ccReg_Admin_i::createPublicRequest(ccReg::PublicRequest::Type _type,
   catch (ccReg::Admin::REQUEST_BLOCKED) {
     throw;
   }
+  catch (ccReg::Admin::OBJECT_NOT_FOUND) {
+    throw;
+  }
   catch (...) {
     throw ccReg::Admin::SQL_ERROR();
   }
 }
 
-void ccReg_Admin_i::processPublicRequest(ccReg::TID id, CORBA::Boolean invalid)
-  throw (
+void ccReg_Admin_i::processPublicRequest(ccReg::TID id, CORBA::Boolean invalid) 
+    throw (
     ccReg::Admin::SQL_ERROR, ccReg::Admin::OBJECT_NOT_FOUND, 
     ccReg::Admin::MAILER_ERROR, ccReg::Admin::REQUEST_BLOCKED
   ) {
@@ -1786,36 +748,42 @@ void ccReg_Admin_i::processPublicRequest(ccReg::TID id, CORBA::Boolean invalid)
   	id % invalid);
 
   MailerManager mailer_manager(ns);  
-  std::auto_ptr<Register::Document::Manager> doc_manager(
-          Register::Document::Manager::create(
-              cfg.get<std::string>("registry.docgen_path"),
-              cfg.get<std::string>("registry.docgen_template_path"),
-              cfg.get<std::string>("registry.fileclient_path"),
+  std::auto_ptr<Fred::Document::Manager> doc_manager(
+          Fred::Document::Manager::create(
+              docgen_path_,
+              docgen_template_path_,
+              fileclient_path_,
               ns->getHostName())
           );
-  std::auto_ptr<Register::PublicRequest::Manager> request_manager(
-          Register::PublicRequest::Manager::create(
-              register_manager_->getDomainManager(),
-              register_manager_->getContactManager(),
-              register_manager_->getNSSetManager(),
-              register_manager_->getKeySetManager(),
+  std::auto_ptr<Fred::PublicRequest::Manager> request_manager(
+          Fred::PublicRequest::Manager::create(
+              registry_manager_->getDomainManager(),
+              registry_manager_->getContactManager(),
+              registry_manager_->getNSSetManager(),
+              registry_manager_->getKeySetManager(),
               &mailer_manager,
-              doc_manager.get())
+              doc_manager.get(),
+              registry_manager_->getMessageManager())
           );
   try {
     request_manager->processRequest(id,invalid,true);
   }
-  catch (Register::SQL_ERROR) {
+  catch (Fred::SQL_ERROR) {
     throw ccReg::Admin::SQL_ERROR();
   }
-  catch (Register::NOT_FOUND) {
+  catch (Fred::NOT_FOUND) {
     throw ccReg::Admin::OBJECT_NOT_FOUND();
   }
-  catch (Register::Mailer::NOT_SEND) {
+  catch (Fred::Mailer::NOT_SEND) {
     throw ccReg::Admin::MAILER_ERROR();
   }
-  catch (Register::PublicRequest::REQUEST_BLOCKED) {
+  catch (Fred::PublicRequest::REQUEST_BLOCKED) {
     throw ccReg::Admin::REQUEST_BLOCKED();
+  }
+  catch (...) {
+    /* this also catches when try to process request which
+     * need to be authenticated */
+    throw ccReg::Admin::OBJECT_NOT_FOUND();
   }
 }
 
@@ -1829,23 +797,24 @@ ccReg::Admin::Buffer* ccReg_Admin_i::getPublicRequestPDF(ccReg::TID id,
 
   MailerManager mailer_manager(ns);
    
-  std::auto_ptr<Register::Document::Manager> doc_manager(
-          Register::Document::Manager::create(
-              cfg.get<std::string>("registry.docgen_path"),
-              cfg.get<std::string>("registry.docgen_template_path"),
-              cfg.get<std::string>("registry.fileclient_path"),
+  std::auto_ptr<Fred::Document::Manager> doc_manager(
+          Fred::Document::Manager::create(
+              docgen_path_,
+              docgen_template_path_,
+              fileclient_path_,
               ns->getHostName())
           );
-  std::auto_ptr<Register::PublicRequest::Manager> request_manager(
-          Register::PublicRequest::Manager::create(
-              register_manager_->getDomainManager(),
-              register_manager_->getContactManager(),
-              register_manager_->getNSSetManager(),
-              register_manager_->getKeySetManager(),
+  std::auto_ptr<Fred::PublicRequest::Manager> request_manager(
+          Fred::PublicRequest::Manager::create(
+              registry_manager_->getDomainManager(),
+              registry_manager_->getContactManager(),
+              registry_manager_->getNSSetManager(),
+              registry_manager_->getKeySetManager(),
               &mailer_manager,
-              doc_manager.get())
-          );  
-  DB db;
+              doc_manager.get(),
+              registry_manager_->getMessageManager())
+          );
+
   try {
     std::stringstream outstr;
     request_manager-> getPdf(id,lang,outstr);
@@ -1857,10 +826,10 @@ ccReg::Admin::Buffer* ccReg_Admin_i::getPublicRequestPDF(ccReg::TID id,
                          id % lang);
     return output;
   }
-  catch (Register::SQL_ERROR) {
+  catch (Fred::SQL_ERROR) {
     throw ccReg::Admin::SQL_ERROR();
   }
-  catch (Register::NOT_FOUND) {
+  catch (Fred::NOT_FOUND) {
     throw ccReg::Admin::OBJECT_NOT_FOUND();
   }
 }
@@ -1874,6 +843,7 @@ std::string ccReg_Admin_i::_createQueryForEnumDomainsByRegistrant(const std::str
   std::string query = "";
 
   std::string from_part = "domain d JOIN zone z ON (z.id = d.zone) " \
+              "JOIN enumval ev ON (d.id = ev.domainid) "             \
               "JOIN object_registry oreg ON (oreg.id = d.id) "       \
               "JOIN contact c ON (c.id = d.registrant)";
 
@@ -1893,19 +863,17 @@ std::string ccReg_Admin_i::_createQueryForEnumDomainsByRegistrant(const std::str
   Database::Connection conn = Database::Manager::acquire();
   std::string ename = conn.escape(namecopy);
 
+  where_part = "ev.publish='t' AND z.enum_zone='t'";
   if (by_person && by_org) {
-    where_part = str(boost::format("z.enum_zone='t' " \
-                    "AND COALESCE(c.organization, c.name) ILIKE " + translate)
+    where_part += str(boost::format(" AND COALESCE(c.organization, c.name) ILIKE " + translate)
                     % ename);
   }
   else if (by_person) {
-    where_part = str(boost::format("z.enum_zone='t' " \
-                    "AND c.name ILIKE " + translate + " AND c.organization IS NULL")
+    where_part += str(boost::format(" AND c.name ILIKE " + translate + " AND c.organization IS NULL")
                     % ename);
   }
   else if (by_org) {
-    where_part = str(boost::format("z.enum_zone='t' " \
-                    "AND c.organization ILIKE " + translate)
+    where_part += str(boost::format(" AND c.organization ILIKE " + translate)
                     % ename);
   }
   return str(boost::format("SELECT %1% FROM %2% WHERE %3%")
@@ -2026,10 +994,12 @@ ccReg::EnumDictList* ccReg_Admin_i::getEnumDomainsRecentEntries(::CORBA::Long co
                 "TRIM(COALESCE(c.postalcode, '')), "                                 \
                 "TRIM(COALESCE(c.stateorprovince, '')), "                            \
                 "TRIM(COALESCE(c.country, '')), oreg.name AS domain "                \
-                "FROM domain d join zone z ON (z.id = d.zone) "                      \
+                "FROM domain d JOIN zone z ON (z.id = d.zone) "                      \
+                "JOIN enumval ev ON (d.id = ev.domainid) "                           \
                 "JOIN object_registry oreg ON (oreg.id = d.id) "                     \
                 "JOIN contact c ON (c.id = d.registrant) "                           \
-                "WHERE z.enum_zone = 't' ORDER BY oreg.crdate DESC LIMIT %1%")
+                "WHERE z.enum_zone = 't' AND ev.publish = 't' "                      \
+                "ORDER BY oreg.crdate DESC LIMIT %1%")
                  % count;
 
     /* execute query */
@@ -2070,4 +1040,563 @@ ccReg::EnumDictList* ccReg_Admin_i::getEnumDomainsRecentEntries(::CORBA::Long co
     throw ccReg::Admin::InternalServerError();
   }
 }
+
+Registry::Registrar::Certification::Manager_ptr ccReg_Admin_i::getCertificationManager()
+{
+    Logging::Context ctx(server_name_);
+    return Registry::Registrar::Certification::Manager::_duplicate(reg_cert_mgr_ref_);
+}
+Registry::Registrar::Group::Manager_ptr ccReg_Admin_i::getGroupManager()
+{
+    Logging::Context ctx(server_name_);
+    return  Registry::Registrar::Group::Manager::_duplicate(reg_grp_mgr_ref_);
+}
+
+Registry_Registrar_Certification_Manager_i::Registry_Registrar_Certification_Manager_i()
+{}
+Registry_Registrar_Certification_Manager_i::~Registry_Registrar_Certification_Manager_i()
+{}
+
+//   Methods corresponding to IDL attributes and operations
+ccReg::TID Registry_Registrar_Certification_Manager_i::createCertification(
+        ccReg::TID reg_id
+        , const ccReg::DateType& from
+        , const ccReg::DateType& to
+        , ::CORBA::Short score
+        , ccReg::TID evaluation_file_id)
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        if((score < 0) || (score > 5))
+            throw std::runtime_error("Invalid value of score");
+        if(evaluation_file_id < 1)
+            throw std::runtime_error("Invalid value of evaluation_file_id");
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///create registrar certification
+        return regman->createRegistrarCertification(
+                reg_id
+                , Database::Date(makeBoostDate(from))
+                , Database::Date(makeBoostDate(to))
+                , static_cast<Fred::Registrar::RegCertClass>(score)
+                , evaluation_file_id);
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}//createCertification
+
+void Registry_Registrar_Certification_Manager_i::shortenCertification(
+        ccReg::TID cert_id
+        , const ccReg::DateType& to)
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///shorten registrar certification
+        return regman->shortenRegistrarCertification(
+                cert_id
+                , Database::Date(makeBoostDate(to)));
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}//shortenCertification
+
+void Registry_Registrar_Certification_Manager_i::updateCertification(
+        ccReg::TID cert_id
+        , ::CORBA::Short score
+        , ccReg::TID evaluation_file_id)
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        if((score < 0) || (score > 5))
+            throw std::runtime_error("Invalid value of score");
+        if(evaluation_file_id < 1)
+            throw std::runtime_error("Invalid value of evaluation_file_id");
+
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///update registrar certification
+        return regman->updateRegistrarCertification(
+                cert_id
+                , static_cast<Fred::Registrar::RegCertClass>(score)
+                , evaluation_file_id);
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}//updateCertification
+
+Registry::Registrar::Certification::CertificationList*
+Registry_Registrar_Certification_Manager_i::getCertificationsByRegistrar(
+        ccReg::TID registrar_id)
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///get registrar certification
+        Fred::Registrar::CertificationSeq cs
+        = regman->getRegistrarCertifications(registrar_id);
+
+        std::auto_ptr<Registry::Registrar::Certification::CertificationList> cl
+         (new Registry::Registrar::Certification::CertificationList);
+        cl->length(cs.size());
+
+        for(unsigned i = 0;i < cs.size(); ++i)
+        {
+            (*cl)[i].id = cs[i].id;
+            (*cl)[i].fromDate = makeCorbaDate(cs[i].valid_from);
+            (*cl)[i].toDate = makeCorbaDate(cs[i].valid_until);
+            (*cl)[i].score = cs[i].classification;
+            (*cl)[i].evaluation_file_id = cs[i].eval_file_id;
+        }
+
+        return cl.release();
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}//getCertificationsByRegistrar
+
+Registry_Registrar_Group_Manager_i::Registry_Registrar_Group_Manager_i()
+{}
+Registry_Registrar_Group_Manager_i::~Registry_Registrar_Group_Manager_i()
+{}
+//   Methods corresponding to IDL attributes and operations
+ccReg::TID Registry_Registrar_Group_Manager_i::createGroup(const char* name)
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///create group
+        return regman->createRegistrarGroup(std::string(name));
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}//createGroup
+
+void Registry_Registrar_Group_Manager_i::deleteGroup(ccReg::TID group_id)
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///delete group
+        regman->cancelRegistrarGroup(group_id);
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}//deleteGroup
+
+void Registry_Registrar_Group_Manager_i::updateGroup(
+        ccReg::TID group_id
+        , const char* name)
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///update group
+        regman->updateRegistrarGroup(group_id, std::string(name));
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}//updateGroup
+
+ccReg::TID Registry_Registrar_Group_Manager_i::addRegistrarToGroup(
+        ccReg::TID reg_id
+        , ccReg::TID group_id)
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///create membership of registrar in group
+        return regman->createRegistrarGroupMembership(
+                reg_id
+                , group_id
+                , Database::Date(NOW)
+                , Database::Date(POS_INF));
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}//addRegistrarToGroup
+
+void Registry_Registrar_Group_Manager_i::removeRegistrarFromGroup(
+        ccReg::TID reg_id
+        , ccReg::TID group_id)
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///end membership of registrar in group
+        regman->endRegistrarGroupMembership(
+                reg_id
+                , group_id);
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}
+
+Registry::Registrar::Group::GroupList*
+Registry_Registrar_Group_Manager_i::getGroups()
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///get registrar certification
+        Fred::Registrar::GroupSeq gs
+        = regman->getRegistrarGroups();
+
+        std::auto_ptr<Registry::Registrar::Group::GroupList> gl
+         (new Registry::Registrar::Group::GroupList);
+        gl->length(gs.size());
+
+        for(unsigned i = 0;i < gs.size(); ++i)
+        {
+            (*gl)[i].id = gs[i].id;
+            (*gl)[i].name = CORBA::string_dup(gs[i].name.c_str());
+            (*gl)[i].cancelled = makeCorbaTime(gs[i].cancelled);
+        }
+
+        return gl.release();
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw;// Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}//getGroups
+
+
+Registry::Registrar::Group::MembershipByRegistrarList*
+Registry_Registrar_Group_Manager_i::getMembershipsByRegistar(
+        ccReg::TID registrar_id)
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///get registrar certification
+        Fred::Registrar::MembershipByRegistrarSeq mbrs
+        = regman->getMembershipByRegistrar(registrar_id);
+
+        std::auto_ptr<Registry::Registrar::Group::MembershipByRegistrarList> mbrl
+         (new Registry::Registrar::Group::MembershipByRegistrarList);
+        mbrl->length(mbrs.size());
+
+        for(unsigned i = 0;i < mbrs.size(); ++i)
+        {
+            (*mbrl)[i].id = mbrs[i].id;
+            (*mbrl)[i].group_id = mbrs[i].group_id;
+            (*mbrl)[i].fromDate = makeCorbaDate(mbrs[i].member_from);
+            (*mbrl)[i].toDate = makeCorbaDate(mbrs[i].member_until);
+        }
+
+        return mbrl.release();
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}//getMembershipsByRegistar
+
+Registry::Registrar::Group::MembershipByGroupList*
+Registry_Registrar_Group_Manager_i::getMembershipsByGroup(ccReg::TID group_id)
+{
+    Logging::Context ctx("adifd");
+    ConnectionReleaser releaser;
+
+    try
+    {
+        Fred::Registrar::Manager::AutoPtr regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+        ///get registrar certification
+        Fred::Registrar::MembershipByGroupSeq mbgs
+        = regman->getMembershipByGroup(group_id);
+
+        std::auto_ptr<Registry::Registrar::Group::MembershipByGroupList> mbgl
+         (new Registry::Registrar::Group::MembershipByGroupList);
+        mbgl->length(mbgs.size());
+
+        for(unsigned i = 0;i < mbgs.size(); ++i)
+        {
+            (*mbgl)[i].id = mbgs[i].id;
+            (*mbgl)[i].registrar_id = mbgs[i].registrar_id;
+            (*mbgl)[i].fromDate = makeCorbaDate(mbgs[i].member_from);
+            (*mbgl)[i].toDate = makeCorbaDate(mbgs[i].member_until);
+        }
+
+        return mbgl.release();
+    }//try
+    catch(const std::exception & ex)
+    {
+        LOGGER(PACKAGE).debug(boost::format("exception: %1%") % ex.what());
+        throw Registry::Registrar::InvalidValue(CORBA::string_dup(ex.what()));
+    }//catch std ex
+    catch(...)
+    {
+        LOGGER(PACKAGE).debug("exception");
+        throw Registry::Registrar::InternalServerError();
+    }//catch all
+}//getMembershipsByGroup
+
+
+ccReg::EnumList* ccReg_Admin_i::getBankAccounts()
+{
+  Logging::Context ctx(server_name_);
+  ConnectionReleaser releaser;
+
+  LOGGER(PACKAGE).debug("ccReg_Admin_i::getBankAccounts");
+  try
+  {
+      Fred::Banking::EnumList el = Fred::Banking::getBankAccounts();
+      ccReg::EnumList_var ret = new ccReg::EnumList;
+      ret->length(el.size());
+      for(std::size_t i = 0; i < el.size(); ++i)
+      {
+          ret[i].id = el[i].id;
+          ret[i].name = CORBA::string_dup(el[i].name.c_str());
+      }
+      return ret._retn();
+  }//try
+  catch(std::exception& ex)
+  {
+      throw ccReg::ErrorReport(ex.what());
+  }
+  catch(...)
+  {
+      throw ccReg::ErrorReport("unknown exception");
+  }
+}//ccReg_Admin_i::getBankAccounts
+
+
+ccReg::RegistrarRequestCountInfo* ccReg_Admin_i::getRegistrarRequestCount(const char* _registrar)
+{
+    try {
+        Logging::Context ctx(server_name_);
+        ConnectionReleaser releaser;
+
+        DBSharedPtr ldb_dc_guard = connect_DB(m_connection_string, DB_CONNECT_FAILED());
+        std::auto_ptr<Fred::Poll::Manager> poll_mgr(Fred::Poll::Manager::create(ldb_dc_guard));
+        std::auto_ptr<Fred::Poll::MessageRequestFeeInfo> rfi(poll_mgr->getLastRequestFeeInfoMessage(_registrar));
+
+        ccReg::RegistrarRequestCountInfo_var ret = new ccReg::RegistrarRequestCountInfo;
+        ret->periodFrom = CORBA::string_dup(formatTime(rfi->getPeriodFrom(), true, true).c_str());
+        ret->periodTo = CORBA::string_dup(formatTime(rfi->getPeriodTo() - boost::posix_time::seconds(1), true, true).c_str());
+        ret->totalFreeCount = rfi->getTotalFreeCount();
+        ret->usedCount = rfi->getUsedCount();
+        ret->price = CORBA::string_dup(rfi->getPrice().c_str());
+
+        return ret._retn();
+    }
+    catch (Fred::NOT_FOUND&) {
+        throw ccReg::Admin::ObjectNotFound();
+    }
+    catch (std::exception &ex) {
+        LOGGER(PACKAGE).error(ex.what());
+        throw ccReg::Admin::InternalServerError();
+    }
+    catch (...) {
+        LOGGER(PACKAGE).error("unknown error");
+        throw ccReg::Admin::InternalServerError();
+    }
+}
+
+bool ccReg_Admin_i::isRegistrarBlocked(ccReg::TID reg_id) throw (
+         ccReg::Admin::InternalServerError, ccReg::Admin::ObjectNotFound)
+{
+    try {
+        Logging::Context(server_name_);
+        ConnectionReleaser release;
+        TRACE(boost::format("[CALL] ccReg_Admin_i::isRegistrarBlocked(%1%)") % reg_id);
+
+        std::auto_ptr<Fred::Registrar::Manager> regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+
+        regman->checkRegistrarExists(reg_id);
+        return regman->isRegistrarBlocked(reg_id);
+    } catch (Fred::NOT_FOUND &) {
+        throw ccReg::Admin::ObjectNotFound();
+    } catch (std::exception &ex) {
+        LOGGER(PACKAGE).error(ex.what());
+        throw ccReg::Admin::InternalServerError();
+    } catch (...) {
+        LOGGER(PACKAGE).error("unknown error in isRegistrarBlocked");
+        throw ccReg::Admin::InternalServerError();
+    }
+
+}
+
+bool ccReg_Admin_i::blockRegistrar(ccReg::TID reg_id) throw (
+         ccReg::Admin::InternalServerError, ccReg::Admin::ObjectNotFound)
+{
+    try {
+        Logging::Context(server_name_);
+        ConnectionReleaser release;
+        TRACE(boost::format("[CALL] ccReg_Admin_i::blockRegistrar(%1%)") % reg_id);
+
+        std::auto_ptr<Fred::Registrar::Manager> regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+
+        regman->checkRegistrarExists(reg_id);
+
+        std::auto_ptr<EppCorbaClient> epp_cli(new EppCorbaClientImpl());
+        return regman->blockRegistrar(reg_id, epp_cli.get());
+    } catch (Fred::NOT_FOUND &) {
+        throw ccReg::Admin::ObjectNotFound();
+    } catch (std::exception &ex) {
+        LOGGER(PACKAGE).error(ex.what());
+        throw ccReg::Admin::InternalServerError();
+    } catch (...) {
+        LOGGER(PACKAGE).error("unknown error in blockRegistrar");
+        throw ccReg::Admin::InternalServerError();
+    }
+
+}
+
+void ccReg_Admin_i::unblockRegistrar(ccReg::TID reg_id, ccReg::TID request_id) throw (
+         ccReg::Admin::InternalServerError, ccReg::Admin::ObjectNotFound, ccReg::Admin::ObjectNotBlocked)
+{
+    try {
+        Logging::Context(server_name_);
+        ConnectionReleaser release;
+        TRACE(boost::format("[CALL] ccReg_Admin_i::unblockRegistrar(%1%, %2%)") % reg_id % request_id);
+
+        std::auto_ptr<Fred::Registrar::Manager> regman(
+                Fred::Registrar::Manager::create(DBDisconnectPtr(NULL)));
+
+        regman->checkRegistrarExists(reg_id);
+        regman->unblockRegistrar(reg_id, request_id);
+    } catch (Fred::NOT_FOUND &) {
+        throw ccReg::Admin::ObjectNotFound();
+    } catch (Fred::NOT_BLOCKED &) {
+        throw ccReg::Admin::ObjectNotBlocked();
+    } catch (std::exception &ex) {
+        LOGGER(PACKAGE).error(ex.what());
+        throw ccReg::Admin::InternalServerError();
+    } catch (...) {
+        LOGGER(PACKAGE).error("unknown error in unblockRegistrar");
+        throw ccReg::Admin::InternalServerError();
+    }
+}
+
 

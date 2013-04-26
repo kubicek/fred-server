@@ -21,6 +21,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sstream>
+#include <vector>
 
 #ifdef TIMELOG
 #include <sys/time.h>
@@ -47,6 +48,7 @@ PQ::~PQ()
 #ifdef TIMECLOCK
   timeclock_quit();
 #endif
+  FreeSelect();
 }
 
 static void noActionNoticeReceiver(
@@ -67,6 +69,7 @@ bool PQ::OpenDatabase(
     LOG( ALERT_LOG , "Connection to database failed: %s",
         PQerrorMessage(connection));
     PQfinish(connection);
+    connection = NULL;
     return false;
   } else {
     LOG( NOTICE_LOG , "Database connection OK user %s host %s port %s DB %s" ,
@@ -199,16 +202,13 @@ bool PQ::ExecSelect(
 
   LOG( SQL_LOG , "SELECT: [%s]" , sqlString );
 
-  if (result != NULL) {
-      PQclear(result);
-      result = NULL;
-  }
+  FreeSelect();
   result = PQexec(connection, sqlString);
 
   if (PQresultStatus(result) != PGRES_TUPLES_OK) {
     LOG( ERROR_LOG , "SELECT [%s]failed: %s", sqlString , PQerrorMessage(connection));
     LOG( ERROR_LOG , "SQL ERROR: %s" , PQresultErrorMessage(result) );
-    PQclear(result);
+    FreeSelect();
     return false;
   }
 
@@ -228,24 +228,27 @@ bool PQ::ExecSelect(
 void PQ::FreeSelect()
 {
   LOG( SQL_LOG , "Free  select" );
-  PQclear(result);
-  result = NULL;
-
+  if(result != NULL) {
+      PQclear(result);
+      result = NULL;
+  }
 }
 
 void PQ::Disconnect()
 {
   LOG( NOTICE_LOG , "PQ: finish");
-  PQfinish(connection);
+  if(connection != NULL) {
+      PQfinish(connection);
+      connection = NULL;
+  }
 }
 
 std::string PQ::Escape2(
   const std::string& str)
 {
-  char *buffer = new char[3*str.length()];
-  PQescapeStringConn(connection, buffer, str.c_str(), str.length(), NULL);
-  std::string ret = buffer;
-  delete[] buffer;
+  std::vector<char> buffer(3*str.length()+10,0);
+  PQescapeStringConn(connection, &buffer[0], str.c_str(), str.length(), NULL);
+  std::string ret (&buffer[0]);
   return ret;
 }
 
@@ -284,10 +287,12 @@ bool PQ::ExecSQL(
     if (PQresultStatus(res) == PGRES_COMMAND_OK) {
       LOG( SQL_LOG , "PQcmdTuples: %s" , PQcmdTuples( res) );
       PQclear(res);
+      res = NULL;
       return true;
     } else {
       LOG( ERROR_LOG , "EXECSQL: SQL ERROR: %s" , PQresultErrorMessage(res) );
       PQclear(res);
+      res = NULL;
       return false;
     }
 

@@ -21,6 +21,12 @@
 
 #include "commonclient.h"
 
+#include "corba_wrapper_decl.h"
+#include "cfg/faked_args.h"
+#include "cfg/config_handler_decl.h"
+#include "cfg/handle_corbanameservice_args.h"
+
+
 
 const char *corbaOpts[][2] = {
     {"nativeCharCodeSet", "UTF-8"},
@@ -347,4 +353,3 @@ parseDateTime(std::string str)
     ret = new Database::DateTimeInterval(dateFrom, dateTo);
     return ret;
 }
-

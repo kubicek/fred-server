@@ -12,7 +12,6 @@
 
 #include "pagetable_impl.h"
 #include "pagetable_registrars.h"
-#include "pagetable_eppactions.h"
 #include "pagetable_domains.h"
 #include "pagetable_contacts.h"
 #include "pagetable_nssets.h"
@@ -28,18 +27,21 @@
 // #include "pagetable_logger.h"
 #include "pagetable_logsession.h"
 #include "pagetable_zones.h"
+#include "pagetable_messages.h"
 
 #include "user_impl.h"
 #include "corba/mailer_manager.h"
 #include "corba/file_manager_client.h"
-#include "register/register.h"
+#include "fredlib/registry.h"
+#include "fredlib/requests/request_manager.h"
 #include "old_utils/dbsql.h"
-#include "old_utils/conf.h"
 #include "model/model_filters.h"
 
-#include "conf/manager.h"
+//#include "conf/manager.h"
 
 #include "settings.h"
+
+#include <corba/Logger.hh>
 
 
 using namespace boost::posix_time;
@@ -50,14 +52,21 @@ class ccReg_Session_i: public POA_ccReg::Session,
                        public PortableServer::RefCountServantBase {
 private:
   std::string session_id_;
-  Config::Conf& cfg_;
+
+  //conf
+  bool restricted_handles_;
+  std::string docgen_path_;
+  std::string docgen_template_path_;
+  std::string fileclient_path_;
+  unsigned adifd_session_timeout_;
+
   NameService* m_ns;
 
   ccReg::BankingInvoicing_ptr m_banking_invoicing;
 
+  ccReg_Messages_i* m_messages;
   ccReg_Zones_i* m_zones;
   ccReg_Registrars_i* m_registrars;
-  ccReg_EPPActions_i* m_eppactions;
   ccReg_Domains_i* m_domains;
   ccReg_Contacts_i* m_contacts;
   ccReg_NSSets_i* m_nssets;
@@ -72,15 +81,15 @@ private:
   ccReg_Files_i* m_files;  
   ccReg_LogSession_i* m_logsession;  
 
-  std::auto_ptr<Register::Manager> m_register_manager;
-  std::auto_ptr<Register::PublicRequest::Manager> m_publicrequest_manager;
-  std::auto_ptr<Register::Document::Manager> m_document_manager;
-  std::auto_ptr<Register::Invoicing::Manager> m_invoicing_manager;
-  std::auto_ptr<Register::Mail::Manager> mail_manager_;
-  std::auto_ptr<Register::File::Manager> file_manager_;
-  std::auto_ptr<Register::Logger::Manager> m_logger_manager;
-  std::auto_ptr<Register::Session::Manager> m_logsession_manager;
-  std::auto_ptr<Register::Banking::Manager> m_banking_manager;
+  std::auto_ptr<Fred::Manager> m_registry_manager;
+  std::auto_ptr<Fred::PublicRequest::Manager> m_publicrequest_manager;
+  std::auto_ptr<Fred::Document::Manager> m_document_manager;
+  std::auto_ptr<Fred::Invoicing::Manager> m_invoicing_manager;
+  std::auto_ptr<Fred::Mail::Manager> mail_manager_;
+  std::auto_ptr<Fred::File::Manager> file_manager_;
+  std::auto_ptr<Fred::Logger::Manager> m_logger_manager;
+  std::auto_ptr<Fred::Session::Manager> m_logsession_manager;
+  std::auto_ptr<Fred::Banking::Manager> m_banking_manager;
   MailerManager m_mailer_manager;
   FileManagerClient m_fm_client;
 
@@ -91,7 +100,9 @@ private:
   std::string base_context_;
 
   ptime m_last_activity;
-  DB db;
+  DBSharedPtr db_disconnect_guard_;
+
+
 
   Settings settings_;
 
@@ -102,47 +113,45 @@ private:
   Registry::NSSet::Detail* getNSSetDetail(ccReg::TID _id);
   Registry::KeySet::Detail *getKeySetDetail(ccReg::TID _id);
   Registry::Registrar::Detail* getRegistrarDetail(ccReg::TID _id);
-  Registry::EPPAction::Detail* getEppActionDetail(ccReg::TID _id);
   Registry::PublicRequest::Detail* getPublicRequestDetail(ccReg::TID _id);
   Registry::Mailing::Detail* getMailDetail(ccReg::TID _id);
   Registry::Invoicing::Detail* getInvoiceDetail(ccReg::TID _id);
-  Registry::Request::Detail*  getLoggerDetail(ccReg::TID _id);
+  ccReg::Logger::Detail*  getLoggerDetail(ccReg::TID _id);
   Registry::Zone::Detail* getZoneDetail(ccReg::TID _id);
   Registry::Banking::BankItem::Detail * getPaymentDetail(ccReg::TID _id);
   //Registry::Banking::BankHead::Detail * getStatementDetail(ccReg::TID _id);
-
+  Registry::Message::Detail* getMessageDetail(ccReg::TID _id);
 
   /*
    * TODO:
-   * this should be rather in separate library - it is only general CORBA-to-Register
+   * this should be rather in separate library - it is only general CORBA-to-Registry
    * mapping
    */
-  ccReg::DomainDetail* createDomainDetail(Register::Domain::Domain* _domain);
-  ccReg::ContactDetail* createContactDetail(Register::Contact::Contact* _contact);
-  ccReg::NSSetDetail* createNSSetDetail(Register::NSSet::NSSet* _contact);
-  ccReg::KeySetDetail *createKeySetDetail(Register::KeySet::KeySet *_contact);
-  Registry::Domain::Detail* createHistoryDomainDetail(Register::Domain::List* _list);
-  Registry::Contact::Detail* createHistoryContactDetail(Register::Contact::List* _list);
-  Registry::NSSet::Detail* createHistoryNSSetDetail(Register::NSSet::List* _list);
-  Registry::KeySet::Detail* createHistoryKeySetDetail(Register::KeySet::List* _list);
-  Registry::Registrar::Detail* createRegistrarDetail(Register::Registrar::Registrar* _registrar);
-  Registry::EPPAction::Detail* createEppActionDetail(Register::Registrar::EPPAction *_action);
-  Registry::PublicRequest::Detail* createPublicRequestDetail(Register::PublicRequest::PublicRequest* _request);
-  Registry::Mailing::Detail* createMailDetail(Register::Mail::Mail *_mail);
-  Registry::Invoicing::Detail* createInvoiceDetail(Register::Invoicing::Invoice *_invoice);  
-  Registry::Zone::Detail* createZoneDetail(Register::Zone::Zone* _registrar);
-  Registry::Banking::BankItem::Detail *createPaymentDetail(Register::Banking::Payment *_payment);
-  //Registry::Banking::BankHead::Detail *createStatementDetail(Register::Banking::Statement *_statement);
 
-
- 
-  void _createUpdateRegistrar(const ccReg::Registrar& _registrar);
+  Registry::Domain::Detail* createHistoryDomainDetail(Fred::Domain::List* _list);
+  Registry::Contact::Detail* createHistoryContactDetail(Fred::Contact::List* _list);
+  Registry::NSSet::Detail* createHistoryNSSetDetail(Fred::NSSet::List* _list);
+  Registry::KeySet::Detail* createHistoryKeySetDetail(Fred::KeySet::List* _list);
+  Registry::Registrar::Detail* createRegistrarDetail(Fred::Registrar::Registrar* _registrar);
+  Registry::PublicRequest::Detail* createPublicRequestDetail(Fred::PublicRequest::PublicRequest* _request);
+  Registry::Mailing::Detail* createMailDetail(Fred::Mail::Mail *_mail);
+  Registry::Invoicing::Detail* createInvoiceDetail(Fred::Invoicing::Invoice *_invoice);
+  Registry::Zone::Detail* createZoneDetail(Fred::Zone::Zone* _registrar);
+  Registry::Banking::BankItem::Detail *createPaymentDetail(Fred::Banking::Payment *_payment);
+  //Registry::Banking::BankHead::Detail *createStatementDetail(Fred::Banking::Statement *_statement);
+  Registry::Message::Detail* createMessageDetail(Fred::Messages::MessagePtr _message);
 
 public:
   ccReg_Session_i(const std::string& _session_id,
                   const std::string& database,
                   NameService *ns,
-                  Config::Conf& cfg,
+
+                  bool restricted_handles,
+                  const std::string& docgen_path,
+                  const std::string& docgen_template_path,
+                  const std::string& fileclient_path,
+                  unsigned adifd_session_timeout,
+
                   ccReg::BankingInvoicing_ptr _banking,
                   ccReg_User_i* _user);
   ~ccReg_Session_i();
@@ -154,18 +163,18 @@ public:
   bool isTimeouted() const;
   const ptime& getLastActivity() const;
 
-  ccReg::User_ptr getUser();
+  Registry::User_ptr getUser();
 
   Registry::PageTable_ptr getPageTable(ccReg::FilterType _type);
   CORBA::Any* getDetail(ccReg::FilterType _type, ccReg::TID _id);
 
-  ccReg::TID updateRegistrar(const ccReg::Registrar& _registrar);
-  void createRegistrar(const ccReg::Registrar& _registrar);
+  ccReg::TID updateRegistrar(const ccReg::AdminRegistrar& _registrar);
+  void createRegistrar(const ccReg::AdminRegistrar& _registrar);
 
   void setHistory(CORBA::Boolean _flag);
 };
 
-void fillPaymentDetail(Registry::Banking::BankItem::Detail &d, const Register::Banking::Payment *_payment);
+void fillPaymentDetail(Registry::Banking::BankItem::Detail &d, const Fred::Banking::Payment *_payment);
 
 class CompareSessionsByLastActivity {
 public:

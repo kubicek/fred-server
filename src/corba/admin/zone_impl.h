@@ -2,7 +2,7 @@
 #define ZONE_IMPL_H_
 
 #include <string>
-#include "register/zone.h"
+#include "fredlib/zone.h"
 
 class ccReg_ZoneIf_i:
     public POA_ccReg::ZoneIf,
@@ -44,7 +44,7 @@ public:
     		, const char* ns_fqdn
     );
     bool updateZoneById
-    (		ccReg::TID id
+    (		unsigned long long id
     		, const char* fqdn
     		, CORBA::Long ex_period_min
     		, CORBA::Long ex_period_max
@@ -64,7 +64,7 @@ public:
     );
     bool updateZoneNs
     (
-    		ccReg::TID id
+    		unsigned long long id
     		, const char* zone_fqdn
     		, const char* fqdn
     		, const char* addr

@@ -1,8 +1,9 @@
 #include "pagetable_logger.h"
 
-const int ccReg_Logger_i::NUM_COLUMNS = 7;
+const int ccReg_Logger_i::NUM_COLUMNS = 8;
 
-ccReg_Logger_i::ccReg_Logger_i(Register::Logger::List *_list) : m_lel (_list)  {
+
+ccReg_Logger_i::ccReg_Logger_i(Fred::Logger::List *_list) : m_lel (_list)  {
 }
 
 ccReg_Logger_i::~ccReg_Logger_i() {
@@ -27,18 +28,20 @@ Registry::Table::ColumnHeaders* ccReg_Logger_i::getColumnHeaders() {
   COLHEAD(ch,1,"time_end",CT_OTHER);
   COLHEAD(ch,2,"serv_type",CT_OTHER);
   COLHEAD(ch,3,"source_ip",CT_OTHER);
-  COLHEAD(ch,4,"action_type",CT_OTHER);  
+  COLHEAD(ch,4,"request_type_id",CT_OTHER);  
   COLHEAD(ch,5,"user_name",CT_OTHER);
   COLHEAD(ch,6,"is_monitoring",CT_OTHER);
+  COLHEAD(ch,7,"result",CT_OTHER);
+
   return ch;
 }
 
 Registry::TableRow* ccReg_Logger_i::getRow(CORBA::UShort row)
-    throw (ccReg::Table::INVALID_ROW) {
+    throw (Registry::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
 
   try {
-    const Register::Logger::Request *a = m_lel->get(row);
+    const Fred::Logger::Request *a = m_lel->get(row);
     Registry::TableRow *tr = new Registry::TableRow;
     tr->length(NUM_COLUMNS);
 
@@ -49,10 +52,11 @@ Registry::TableRow* ccReg_Logger_i::getRow(CORBA::UShort row)
     (*tr)[4] <<= C_STR(a->getActionType());    
     (*tr)[5] <<= C_STR(a->getUserName());
     (*tr)[6] <<= C_STR(a->getIsMonitoring());
+    (*tr)[7] <<= C_STR((a->getResultCode()).second);
     return tr;
   }
   catch (...) {
-    throw ccReg::Table::INVALID_ROW();
+    throw Registry::Table::INVALID_ROW();
   }
 }
 
@@ -66,37 +70,40 @@ void ccReg_Logger_i::sortByColumn(CORBA::Short column, CORBA::Boolean dir) {
 
   switch (column) {
     case 0:
-      m_lel->sort(Register::Logger::MT_TIME_BEGIN, dir);
+      m_lel->sort(Fred::Logger::MT_TIME_BEGIN, dir);
       break;
     case 1:
-      m_lel->sort(Register::Logger::MT_TIME_END, dir);
+      m_lel->sort(Fred::Logger::MT_TIME_END, dir);
       break;
     case 2:
-      m_lel->sort(Register::Logger::MT_SERVICE, dir);
+      m_lel->sort(Fred::Logger::MT_SERVICE, dir);
       break;
     case 3:
-      m_lel->sort(Register::Logger::MT_SOURCE_IP, dir);
+      m_lel->sort(Fred::Logger::MT_SOURCE_IP, dir);
       break;
     case 4:
-      m_lel->sort(Register::Logger::MT_ACTION, dir);
+      m_lel->sort(Fred::Logger::MT_ACTION, dir);
       break;    
     case 5:
-      m_lel->sort(Register::Logger::MT_USER_NAME, dir);
+      m_lel->sort(Fred::Logger::MT_USER_NAME, dir);
       break;
     case 6:
-      m_lel->sort(Register::Logger::MT_MONITORING, dir);
+      m_lel->sort(Fred::Logger::MT_MONITORING, dir);
+      break;
+    case 7:
+      m_lel->sort(Fred::Logger::MT_RESULT_CODE, dir);
       break;
 
   }
 }
 
 ccReg::TID ccReg_Logger_i::getRowId(CORBA::UShort row)
-    throw (ccReg::Table::INVALID_ROW) {
+    throw (Registry::Table::INVALID_ROW) {
   Logging::Context ctx(base_context_);
 
-  const Register::Logger::Request *a = m_lel->get(row);
+  const Fred::Logger::Request *a = m_lel->get(row);
   if (!a)
-    throw ccReg::Table::INVALID_ROW();
+    throw Registry::Table::INVALID_ROW();
   return a->getId();
 }
 
@@ -116,13 +123,16 @@ CORBA::Short ccReg_Logger_i::numColumns() {
   return NUM_COLUMNS;
 }
 
-void ccReg_Logger_i::reload() {
+void ccReg_Logger_i::reload_worker() {
   Logging::Context ctx(base_context_);
   ConnectionReleaser releaser;
 
-  TRACE("[CALL] ccReg_Logger_i::reload()");
+  TRACE("[CALL] ccReg_Logger_i::reload_worker()");
   m_lel->setPartialLoad(true);
 //  m_lel->reload(uf);
+
+  // CustomPartitioningTweak::process_filters(uf.begin(), uf.end()); 
+  m_lel->setTimeout(query_timeout);
   m_lel->reload(uf);
 }
 
@@ -165,22 +175,22 @@ void ccReg_Logger_i::saveFilter(const char* _name) {
 
   TRACE(boost::format("[CALL] ccReg_Logger_i::saveFilter('%1%')") % _name);
 
-  std::auto_ptr<Register::Filter::Manager>
-      tmp_filter_manager(Register::Filter::Manager::create());
-  tmp_filter_manager->save(Register::Filter::FT_LOGGER, _name, uf);
+  std::auto_ptr<Fred::Filter::Manager>
+      tmp_filter_manager(Fred::Filter::Manager::create());
+  tmp_filter_manager->save(Fred::Filter::FT_LOGGER, _name, uf);
 }
 
-Register::Logger::Request* ccReg_Logger_i::findId(ccReg::TID _id) {
+Fred::Logger::Request* ccReg_Logger_i::findId(ccReg::TID _id) {
   Logging::Context ctx(base_context_);
 
   try {
-    Register::Logger::Request *request = dynamic_cast<Register::Logger::Request* >(m_lel->findId(_id));
+    Fred::Logger::Request *request = dynamic_cast<Fred::Logger::Request* >(m_lel->findId(_id));
     if (request) {
       return request;
     }
     return 0;
   }
-  catch (Register::NOT_FOUND) {
+  catch (Fred::NOT_FOUND) {
     return 0;
   }
 }
@@ -189,6 +199,16 @@ CORBA::Boolean ccReg_Logger_i::numRowsOverLimit() {
   Logging::Context ctx(base_context_);
 
   return m_lel->isLimited();
+}
+
+void ccReg_Logger_i::setOffset(CORBA::Long _offset)
+{
+    m_lel->setOffset(_offset);
+}
+
+void ccReg_Logger_i::setLimit(CORBA::Long _limit)
+{
+    m_lel->setLimit(_limit);
 }
 
 

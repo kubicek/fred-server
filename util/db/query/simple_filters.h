@@ -16,6 +16,7 @@
 #include "log/logger.h"
 #include "util.h"
 #include "base_exception.h"
+#include "util/types/convert_sql_db_types.h"
 
 namespace Database {
 namespace Filters {
@@ -34,6 +35,16 @@ public:
                                                                         beg_set(false),
                                                                         end_set(false) {
   }
+/*
+  /// copy constructor
+  Interval(const Interval<Tp>& i) :
+      Simple(i),
+      column(i.column),
+      value_beg(i.value_beg), value_end(i.value_end),
+      beg_set(i.beg_set), end_set(i.end_set),
+      column(i.column){
+  }
+*/
 
   virtual ~Interval() {
   }
@@ -58,6 +69,10 @@ public:
     value_beg = _beg;
     value_end = _end;
     beg_set = end_set = true;
+  }
+
+  void setColumn(const Column &c) {
+    column = c;
   }
 
   virtual Tp getValueBeg() const {
@@ -118,6 +133,10 @@ public:
     value = _value;
   }
 
+  void setColumn(const Column &c) {
+    column = c;
+  }
+
   virtual const DTp& getValue() const {
     return value.getValue();
   }
@@ -143,7 +162,7 @@ public:
     }
   }
 
-  virtual void serialize(Database::SelectQuery& _sq, const Settings *_settings) {
+  virtual void serialize(Database::SelectQuery& _sq, const Settings *_settings, bool plain_date = false) {
     TRACE("[CALL] _BaseDTInterval::serialize()");
     Database::SelectQuery::prepared_values_string  &prep  = _sq.where_prepared_string();
     Database::SelectQuery::prepared_values_storage &store = _sq.where_prepared_values();
@@ -163,13 +182,26 @@ public:
 
       if (!t_value.begin().is_special()) {
         prep << getConjuction() << "( ";
-        prep << column.str() << SQL_OP_GE << "%" << store.size() + 1 << "%" + value_post_;
+        prep << column.str() << SQL_OP_GE << "(%" << store.size() + 1;
+
+        if(plain_date) {
+            prep << "%::date)" + value_post_;
+        } else {
+            prep << "%::timestamp AT TIME ZONE 'Europe/Prague' AT TIME ZONE 'UTC')" + value_post_;
+        }
+
         store.push_back(t_value.begin());
         b = true;
       }
       if (!t_value.end().is_special()) {
         prep << (b ? SQL_OP_AND : getConjuction() + "( ") << column.str()
-            << second_operator << "%" << store.size() + 1 << "%" + value_post_;
+            << second_operator << "(%" << store.size() + 1;
+
+        if(plain_date) {
+            prep << "%::date)" + value_post_;
+        } else {
+            prep << "%::timestamp AT TIME ZONE 'Europe/Prague' AT TIME ZONE 'UTC')" + value_post_;
+        }
         prep << " )";
         store.push_back(t_value.end());
       } else if (b) {
@@ -239,24 +271,28 @@ public:
       LOGGER(PACKAGE).trace(boost::format("[IN] Interval<DateTime>::serialize(): value is special (special_flag='%1%')")
           % t_value.getSpecial());
       
+      std::string time = (boost::format("'%1% Europe/Prague'::timestamp")
+                % boost::posix_time::to_iso_string(microsec_clock::local_time())).str();
+      
       std::stringstream beg, end;
       std::string what = special2str(t_value.getSpecial());
   
       if (t_value.getSpecial() < PAST_HOUR) {
-        beg << "date_trunc('" << what << "', current_timestamp + interval '"
-            << t_value.getSpecialOffset() << " " << what <<"')";
+        beg << "(date_trunc('" << what << "', " << time << " + interval '"
+            << t_value.getSpecialOffset() << " " << what <<"')  AT TIME ZONE 'Europe/Prague'  AT TIME ZONE 'UTC')";
         end << "(" << beg.str() << " + interval '1 "<< what << "')";
         beg << value_post_;
         end << value_post_;
       } else {
-        if (t_value.getSpecialOffset() < 0) {
-          beg << "current_timestamp + interval '" << t_value.getSpecialOffset()
-              << " " << what << "'" + value_post_;
-          end << "current_timestamp" + value_post_;
+        if (t_value.getSpecialOffset() < 0) {            
+          beg << "((" << time << " + interval '" << t_value.getSpecialOffset()
+              << " " << what << "') AT TIME ZONE 'Europe/Prague' AT TIME ZONE 'UTC')" + value_post_;
+          end << "(" << time << " AT TIME ZONE 'Europe/Prague' AT TIME ZONE 'UTC')" + value_post_;
         } else {
-          end << "current_timestamp + interval '" << t_value.getSpecialOffset()
-              << " " << what <<"'" + value_post_;
-          beg << "current_timestamp" + value_post_;
+          end << "((" << time << " + interval '" << t_value.getSpecialOffset()
+              << " " << what <<"') AT TIME ZONE 'Europe/Prague' AT TIME ZONE 'UTC')" + value_post_;
+          beg << "(" << time <<" AT TIME ZONE 'Europe/Prague'  AT TIME ZONE 'UTC')" + value_post_;
+
         }
   
       }
@@ -281,15 +317,22 @@ public:
   
         if (!t_value.begin().is_special()) {
           prep << getConjuction() << "( ";
-          prep << column.str() << SQL_OP_GE << "((%" << store.size() + 1 << "% || ' Europe/Prague')::timestamptz AT TIME ZONE 'UTC')" + value_post_;
-          store.push_back(t_value.begin());
+          prep << column.str() << SQL_OP_GE << "('%" << store.size() + 1 << "%'::timestamp AT TIME ZONE 'Europe/Prague' AT TIME ZONE 'UTC')" + value_post_;
+          // we want to format date in the DateTime in the right way but without quotes
+          // so we need to bypass the Database::Value(DateTime) constructor
+          std::string conversion  = SqlConvert<DateTime>::to(t_value.begin());
+          store.push_back(Value(conversion, false , false, true));
+
           b = true;
         }
         if (!t_value.end().is_special()) {
           prep << (b ? SQL_OP_AND : getConjuction() + "( ") << column.str()
-              << second_operator << "((%" << store.size() + 1 << "% || ' Europe/Prague')::timestamptz AT TIME ZONE 'UTC')" + value_post_;
+              << second_operator << "('%" << store.size() + 1 << "%'::timestamp AT TIME ZONE 'Europe/Prague' AT TIME ZONE 'UTC')" + value_post_;
           prep << " )";
-          store.push_back(t_value.end());
+          // we want to format date in the DateTime in the right way but without quotes
+          // so we need to bypass the Database::Value(DateTime) constructor
+          std::string conversion = SqlConvert<DateTime>::to(t_value.end());
+          store.push_back(Value(conversion, false, false, true));
         } else if (b) {
           prep << " )";
         }
@@ -339,22 +382,26 @@ public:
       
       std::stringstream beg, end;
       std::string what = special2str(t_value.getSpecial());
+
+      // TODO convert to iso_string
+      std::string date = (boost::format("'%1%'::date AT TIME ZONE 'Europe/Prague'")
+              % day_clock::local_day()).str();
   
       if (t_value.getSpecial() < PAST_HOUR) {
-        beg << "date_trunc('" << what << "', current_date + interval '"
-            << t_value.getSpecialOffset() << " " << what <<"')";
+        beg << "(date_trunc('" << what << "', " << date << " + interval '"
+            << t_value.getSpecialOffset() << " " << what <<"') AT TIME ZONE 'UTC')";
         end << "(" << beg.str() << " + interval '1 "<< what << "')";
         beg << value_post_;
         end << value_post_;
       } else {
         if (t_value.getSpecialOffset() < 0) {
-          beg << "(current_date + interval '" << t_value.getSpecialOffset()
-              << " " << what << "')" + value_post_;
-          end << "current_date" + value_post_;
+          beg << "((" << date << " + interval '" << t_value.getSpecialOffset()
+              << " " << what << "') AT TIME ZONE 'UTC')" + value_post_;
+          end <<  "(" << date << " AT TIME ZONE 'UTC')" << value_post_;
         } else {
-          end << "(current_date + interval '" << t_value.getSpecialOffset()
-              << " " << what <<"')" + value_post_;
-          beg << "current_date" + value_post_;
+          end << "((" << date << " + interval '" << t_value.getSpecialOffset()
+              << " " << what <<"') AT TIME ZONE 'UTC')" + value_post_;
+          beg << "(" << date << " AT TIME ZONE 'UTC')" << value_post_;
         }
   
       }
@@ -364,7 +411,7 @@ public:
       prep << " )";
     }
     else {
-      _BaseDTInterval<DateInterval>::serialize(_sq, _settings);
+      _BaseDTInterval<DateInterval>::serialize(_sq, _settings, true);
     }
   }
   
@@ -405,6 +452,10 @@ public:
     active = true;
   }
   
+  void setColumn(const Column &col) {
+    column = col;
+  }
+
   virtual void setValue(const Null<Tp>& _value) {
     TRACE("[CALL] Value<Tp>::setValue()");
     active = true;
