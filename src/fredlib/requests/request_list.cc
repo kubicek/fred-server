@@ -357,11 +357,10 @@ COMPARE_CLASS_IMPL(RequestImpl, RawResponse)
 class ListImpl : public Fred::CommonListImpl,
                  virtual public List {
 private:
-  Manager *manager_;
   bool partialLoad;
 
 public:
-  ListImpl(Manager *_manager) : CommonListImpl(), manager_(_manager), partialLoad(false) {
+  ListImpl() : CommonListImpl(), partialLoad(false) {
   }
 
   virtual Request* get(unsigned _idx) const {
@@ -546,7 +545,7 @@ public:
             std::string request;
             std::string response;
 
-            std::auto_ptr<RequestProperties> props;
+            std::auto_ptr<RequestPropertiesDetail> props;
             std::auto_ptr<ObjectReferences> refs;
 
             if (!partialLoad) {
@@ -621,8 +620,8 @@ public:
 
   }
 
-  virtual std::auto_ptr<RequestProperties> getPropsForId(ID id, DateTime time_begin, int sid, bool mon) {
-    std::auto_ptr<RequestProperties> ret(new RequestProperties());
+  virtual std::auto_ptr<RequestPropertiesDetail> getPropsForId(ID id, DateTime time_begin, int sid, bool mon) {
+    std::auto_ptr<RequestPropertiesDetail> ret(new RequestPropertiesDetail());
     Database::SelectQuery query;
 
     query.select() << "t_2.name, t_1.value, t_1.output, (t_1.parent_id is not null)";
@@ -641,7 +640,7 @@ public:
         bool            output = *(++col);
         bool            is_child = *(++col);
 
-        ret->push_back(RequestProperty(name, value, output, is_child));
+        ret->push_back(RequestPropertyDetail(name, value, output, is_child));
 
     }
     return ret;
@@ -729,7 +728,7 @@ public:
                 std::string     request;
                 std::string     response;
 
-                std::auto_ptr<RequestProperties> props;
+                std::auto_ptr<RequestPropertiesDetail> props;
                                 std::auto_ptr<ObjectReferences> refs;
 
                 if(!partialLoad) {
@@ -783,7 +782,7 @@ public:
 
 // TODO where to place this?
 List *ManagerImpl::createList() const {
-    return new ListImpl((Manager *)this);
+    return new ListImpl();
 }
 
 }; // namespace Logger

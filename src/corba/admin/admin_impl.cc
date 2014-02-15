@@ -40,14 +40,13 @@
 #include "fredlib/object_states.h"
 #include "fredlib/poll.h"
 #include "bank_payment.h"
-
+#include "fredlib/public_request/public_request_authinfo_impl.h"
+#include "fredlib/public_request/public_request_block_impl.h"
+#include "util/factory_check.h"
 #include "log/logger.h"
 #include "log/context.h"
-
 #include "random.h"
-
 #include "corba/connection_releaser.h"
-
 #include "epp_corba_client_impl.h"
 
 class Registry_RegistrarCertification_i;
@@ -76,7 +75,6 @@ ccReg_Admin_i::ccReg_Admin_i(const std::string _database, NameService *_ns
 , session_garbage_active_ (false)
 , session_garbage_thread_ (0)
 {
-
   /* HACK: to recognize ADIFD and PIFD until separation of objects */
   if (_session_garbage) {
     server_name_ = ("adifd");
@@ -85,6 +83,27 @@ ccReg_Admin_i::ccReg_Admin_i(const std::string _database, NameService *_ns
     server_name_ = ("pifd");
   }
 
+  //factory_check - required keys are in factory
+  FactoryHaveSupersetOfKeysChecker<Fred::PublicRequest::Factory>
+  ::KeyVector required_keys = boost::assign::list_of
+   (Fred::PublicRequest::PRT_AUTHINFO_AUTO_PIF)
+   (Fred::PublicRequest::PRT_AUTHINFO_EMAIL_PIF)
+   (Fred::PublicRequest::PRT_AUTHINFO_POST_PIF)
+   (Fred::PublicRequest::PRT_BLOCK_TRANSFER_EMAIL_PIF)
+   (Fred::PublicRequest::PRT_BLOCK_CHANGES_EMAIL_PIF)
+   (Fred::PublicRequest::PRT_UNBLOCK_TRANSFER_EMAIL_PIF)
+   (Fred::PublicRequest::PRT_UNBLOCK_CHANGES_EMAIL_PIF)
+   (Fred::PublicRequest::PRT_BLOCK_TRANSFER_POST_PIF)
+   (Fred::PublicRequest::PRT_BLOCK_CHANGES_POST_PIF)
+   (Fred::PublicRequest::PRT_UNBLOCK_TRANSFER_POST_PIF)
+   (Fred::PublicRequest::PRT_UNBLOCK_CHANGES_POST_PIF);
+
+  FactoryHaveSupersetOfKeysChecker<Fred::PublicRequest::Factory>
+      (required_keys).check();
+
+  //factory_check - factory keys are in database
+  FactoryHaveSubsetOfKeysChecker<Fred::PublicRequest::Factory>
+      (Fred::PublicRequest::get_enum_public_request_type()).check();
 
 
   //instances held until deactivation
@@ -98,8 +117,10 @@ ccReg_Admin_i::ccReg_Admin_i(const std::string _database, NameService *_ns
   reg_grp_mgr_i->_remove_ref();
 
   Logging::Context ctx(server_name_);
-  db_disconnect_guard_ = connect_DB(m_connection_string
-                          , DB_CONNECT_FAILED());
+
+  Database::Connection conn = Database::Manager::acquire();
+  db_disconnect_guard_.reset(new DB(conn));
+
 
   registry_manager_.reset(Fred::Manager::create(db_disconnect_guard_
           , restricted_handles_));
@@ -140,10 +161,11 @@ void ccReg_Admin_i::checkHandle(const char* handle,
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
-  DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                  , DB_CONNECT_FAILED());
+  DBSharedPtr  db;
+  Database::Connection conn = Database::Manager::acquire();
+  db.reset(new DB(conn));
 
-  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
+  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(db
           , restricted_handles_));
   ccReg::CheckHandleTypeSeq* chs = new ccReg::CheckHandleTypeSeq;
   Fred::CheckHandleList chl;
@@ -188,7 +210,11 @@ void ccReg_Admin_i::garbageSession() {
     LOGGER(PACKAGE).debug("procedure sleeped");
     
     boost::xtime sleep_time;
+#if BOOST_VERSION >= 105000
+    boost::xtime_get(&sleep_time, boost::TIME_UTC_);
+#else
     boost::xtime_get(&sleep_time, boost::TIME_UTC);
+#endif
     sleep_time.sec += adifd_session_garbage_;
     cond_.timed_wait(scoped_lock, sleep_time);
     
@@ -349,11 +375,12 @@ ccReg::RegistrarList* ccReg_Admin_i::getRegistrars()
     ConnectionReleaser releaser;
   try {
 
-    DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                            , ccReg::Admin::SQL_ERROR());
+    DBSharedPtr  db;
+    Database::Connection conn = Database::Manager::acquire();
+    db.reset(new DB(conn));
 
     std::auto_ptr<Fred::Manager> regm(
-        Fred::Manager::create(ldb_disconnect_guard
+        Fred::Manager::create(db
                 , restricted_handles_)
     );
     Fred::Registrar::Manager *rm = regm->getRegistrarManager();
@@ -384,10 +411,13 @@ ccReg::AdminRegistrar* ccReg_Admin_i::getRegistrarById(ccReg::TID id)
   if (!id) throw ccReg::Admin::ObjectNotFound();
 
   try {
-    DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                                        , ccReg::Admin::SQL_ERROR());
+
+    DBSharedPtr  db;
+    Database::Connection conn = Database::Manager::acquire();
+    db.reset(new DB(conn));
+
     std::auto_ptr<Fred::Manager> regm(
-        Fred::Manager::create(ldb_disconnect_guard,restricted_handles_)
+        Fred::Manager::create(db,restricted_handles_)
     );
     Fred::Registrar::Manager *rm = regm->getRegistrarManager();
     Fred::Registrar::RegistrarList::AutoPtr rl = rm->createList();
@@ -414,10 +444,12 @@ CORBA::Long ccReg_Admin_i::getDomainCount(const char *zone) {
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
-  DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                                , ccReg::Admin::SQL_ERROR());
+  DBSharedPtr  db;
+  Database::Connection conn = Database::Manager::acquire();
+  db.reset(new DB(conn));
 
-  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
+
+  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(db
           , restricted_handles_));
   Fred::Domain::Manager *dm = r->getDomainManager();
   CORBA::Long ret = dm->getDomainCount(zone);
@@ -427,11 +459,13 @@ CORBA::Long ccReg_Admin_i::getDomainCount(const char *zone) {
 CORBA::Long ccReg_Admin_i::getSignedDomainCount(const char *_fqdn)
 {
   Logging::Context ctx(server_name_);
+  ConnectionReleaser releaser;
 
-  DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                                , ccReg::Admin::SQL_ERROR());
+  DBSharedPtr  db;
+  Database::Connection conn = Database::Manager::acquire();
+  db.reset(new DB(conn));
 
-  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
+  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(db
           ,restricted_handles_));
   Fred::Domain::Manager *dm = r->getDomainManager();
   CORBA::Long ret = dm->getSignedDomainCount(_fqdn);
@@ -442,10 +476,11 @@ CORBA::Long ccReg_Admin_i::getEnumNumberCount() {
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
-  DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                                , ccReg::Admin::SQL_ERROR());
+  DBSharedPtr  db;
+  Database::Connection conn = Database::Manager::acquire();
+  db.reset(new DB(conn));
 
-  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
+  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(db
           , restricted_handles_));
   Fred::Domain::Manager *dm = r->getDomainManager();
   CORBA::Long ret = dm->getEnumNumberCount();
@@ -457,10 +492,12 @@ Registry::CountryDescSeq* ccReg_Admin_i::getCountryDescList() {
   Logging::Context ctx(server_name_);
   ConnectionReleaser releaser;
 
-  DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                                , ccReg::Admin::SQL_ERROR());
+  DBSharedPtr  db;
+  Database::Connection conn = Database::Manager::acquire();
+  db.reset(new DB(conn));
 
-  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
+
+  std::auto_ptr<Fred::Manager> r(Fred::Manager::create(db
           , restricted_handles_));
   /* 
    * TEMP: this is for loading country codes from database - until new database 
@@ -547,9 +584,10 @@ void ccReg_Admin_i::generateLetters() {
 
 
   try {
+    DBSharedPtr db;
+    Database::Connection conn = Database::Manager::acquire();
+    db.reset(new DB(conn));
 
-    DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                                  , ccReg::Admin::SQL_ERROR());
 
     MailerManager mm(ns);
     std::auto_ptr<Fred::Document::Manager> docman(
@@ -565,23 +603,23 @@ void ccReg_Admin_i::generateLetters() {
 
 
     std::auto_ptr<Fred::Domain::Manager> domMan(
-        Fred::Domain::Manager::create(ldb_disconnect_guard,
+        Fred::Domain::Manager::create(db,
                                           zoneMan.get()));
     std::auto_ptr<Fred::Contact::Manager> conMan(
-        Fred::Contact::Manager::create(ldb_disconnect_guard,
+        Fred::Contact::Manager::create(db,
                                            restricted_handles_));
     std::auto_ptr<Fred::NSSet::Manager> nssMan(
-        Fred::NSSet::Manager::create(ldb_disconnect_guard,
+        Fred::NSSet::Manager::create(db,
                                          zoneMan.get(),
                                          restricted_handles_));
     std::auto_ptr<Fred::KeySet::Manager> keyMan(
             Fred::KeySet::Manager::create(
-                    ldb_disconnect_guard,
+                    db,
                 restricted_handles_));
     std::auto_ptr<Fred::Registrar::Manager> rMan(
-        Fred::Registrar::Manager::create(ldb_disconnect_guard));
+        Fred::Registrar::Manager::create(db));
     std::auto_ptr<Fred::Notify::Manager> notifyMan(
-        Fred::Notify::Manager::create(ldb_disconnect_guard,
+        Fred::Notify::Manager::create(db,
                                           &mm,
                                           conMan.get(),
                                           nssMan.get(),
@@ -597,52 +635,46 @@ void ccReg_Admin_i::generateLetters() {
   }
 }
 
-bool
-ccReg_Admin_i::setInZoneStatus(ccReg::TID domainId)
+bool ccReg_Admin_i::setInZoneStatus(ccReg::TID domainId)
 {
     Logging::Context ctx(server_name_);
     ConnectionReleaser releaser;
-
-    TRACE(boost::format("[CALL] ccReg_Admin_i::setInZoneStatus(%1%)")
-            % domainId);
-    Database::Query query;
-    query.buffer()
-        << "SELECT id FROM object_state_request WHERE object_id="
-        << Database::Value(domainId) << " AND state_id=6 "
-        << "AND (canceled ISNULL OR canceled > CURRENT_TIMESTAMP) "
-        << "AND (valid_to ISNULL OR valid_to > CURRENT_TIMESTAMP)";
-    // Database::Connection *conn = m_db_manager.acquire();
-    Database::Connection conn = Database::Manager::acquire();
     try {
-        Database::Result res = conn.exec(query);
-        if (res.size() != 0) {
-            LOGGER(PACKAGE).error("Already in ``object_state_request''");
-            return false;
+
+        TRACE(boost::format("[CALL] ccReg_Admin_i::setInZoneStatus(%1%)")
+                % domainId);
+
+        /* get actual time before transaction otherwise it would be in the future for the transaction */
+        boost::posix_time::ptime whatisthetime = microsec_clock::universal_time();
+        boost::gregorian::date_duration dd7 (7);
+
+        Database::Connection conn = Database::Manager::acquire();
+        Database::Transaction tx(conn);
+
+        Database::Result dname_res = conn.exec_params("SELECT obr.name "
+            " FROM object_registry obr JOIN domain d ON d.id = obr.id "
+            " WHERE d.id = $1::bigint", Database::query_param_list(domainId));
+        if(dname_res.size() != 1)
+        {
+            throw std::runtime_error("domain not found");
         }
+
+        std::string  object_name (dname_res[0][0]);
+
+        Fred::createObjectStateRequestName(
+            object_name, 3 //object_type domain
+            , Util::vector_of<std::string>(Fred::ObjectState::SERVER_INZONE_MANUAL)
+            , boost::posix_time::to_iso_extended_string(whatisthetime) //valid_from now
+            , boost::posix_time::to_iso_extended_string(whatisthetime + dd7) //const optional_string& valid_to
+            , true //bool update_object_state
+            );
+        tx.commit();
+    } catch (std::exception& ex) {
+        LOGGER(PACKAGE).error("setInZoneStatus: an error has occured");
+        LOGGER(PACKAGE).error(ex.what());
+        return false;
     } catch (...) {
         LOGGER(PACKAGE).error("setInZoneStatus: an error has occured");
-        return false;
-    }
-    Database::InsertQuery insert("object_state_request");
-    Database::DateTime now = Database::NOW_UTC;
-    insert.add("object_id", Database::Value(domainId));
-    insert.add("state_id", 6);
-    insert.add("valid_from", Database::Value(now));
-    insert.add("valid_to", Database::Value(now + Database::Days(7)));
-    insert.add("crdate", Database::Value(now));
-    try {
-        conn.exec(insert);
-    } catch (...) {
-        LOGGER(PACKAGE).error("setInZoneStatus: failed to insert");
-        return false;
-    }
-    query.clear();
-    query.buffer()
-        << "SELECT update_object_states(" << domainId << ");";
-    try {
-        conn.exec(query);
-    } catch (...) {
-        LOGGER(PACKAGE).error("setInZoneStatus: failed to update object states");
         return false;
     }
     return true;
@@ -689,7 +721,7 @@ ccReg::TID ccReg_Admin_i::createPublicRequest(Registry::PublicRequest::Type _typ
     request_type = Fred::PublicRequest::type; break;
   
   Fred::PublicRequest::Type request_type;
-  switch (_type) {
+  switch (_type)  {
     REQUEST_TYPE_CORBA2DB_CASE(PRT_AUTHINFO_AUTO_RIF)
     REQUEST_TYPE_CORBA2DB_CASE(PRT_AUTHINFO_AUTO_PIF)
     REQUEST_TYPE_CORBA2DB_CASE(PRT_AUTHINFO_EMAIL_PIF)
@@ -1074,13 +1106,14 @@ ccReg::TID Registry_Registrar_Certification_Manager_i::createCertification(
             throw std::runtime_error("Invalid value of score");
         if(evaluation_file_id < 1)
             throw std::runtime_error("Invalid value of evaluation_file_id");
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///create registrar certification
         return regman->createRegistrarCertification(
                 reg_id
-                , Database::Date(makeBoostDate(from))
-                , Database::Date(makeBoostDate(to))
+                , Database::Date(makeBoostDate_throw(from))
+                , Database::Date(makeBoostDate_throw(to))
                 , static_cast<Fred::Registrar::RegCertClass>(score)
                 , evaluation_file_id);
     }//try
@@ -1105,8 +1138,9 @@ void Registry_Registrar_Certification_Manager_i::shortenCertification(
 
     try
     {
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///shorten registrar certification
         return regman->shortenRegistrarCertification(
                 cert_id
@@ -1139,8 +1173,9 @@ void Registry_Registrar_Certification_Manager_i::updateCertification(
         if(evaluation_file_id < 1)
             throw std::runtime_error("Invalid value of evaluation_file_id");
 
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///update registrar certification
         return regman->updateRegistrarCertification(
                 cert_id
@@ -1168,8 +1203,9 @@ Registry_Registrar_Certification_Manager_i::getCertificationsByRegistrar(
 
     try
     {
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///get registrar certification
         Fred::Registrar::CertificationSeq cs
         = regman->getRegistrarCertifications(registrar_id);
@@ -1213,8 +1249,9 @@ ccReg::TID Registry_Registrar_Group_Manager_i::createGroup(const char* name)
 
     try
     {
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///create group
         return regman->createRegistrarGroup(std::string(name));
     }//try
@@ -1237,8 +1274,9 @@ void Registry_Registrar_Group_Manager_i::deleteGroup(ccReg::TID group_id)
 
     try
     {
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///delete group
         regman->cancelRegistrarGroup(group_id);
     }//try
@@ -1263,8 +1301,9 @@ void Registry_Registrar_Group_Manager_i::updateGroup(
 
     try
     {
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///update group
         regman->updateRegistrarGroup(group_id, std::string(name));
     }//try
@@ -1289,8 +1328,9 @@ ccReg::TID Registry_Registrar_Group_Manager_i::addRegistrarToGroup(
 
     try
     {
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///create membership of registrar in group
         return regman->createRegistrarGroupMembership(
                 reg_id
@@ -1319,8 +1359,9 @@ void Registry_Registrar_Group_Manager_i::removeRegistrarFromGroup(
 
     try
     {
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///end membership of registrar in group
         regman->endRegistrarGroupMembership(
                 reg_id
@@ -1346,8 +1387,9 @@ Registry_Registrar_Group_Manager_i::getGroups()
 
     try
     {
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///get registrar certification
         Fred::Registrar::GroupSeq gs
         = regman->getRegistrarGroups();
@@ -1387,8 +1429,9 @@ Registry_Registrar_Group_Manager_i::getMembershipsByRegistar(
 
     try
     {
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///get registrar certification
         Fred::Registrar::MembershipByRegistrarSeq mbrs
         = regman->getMembershipByRegistrar(registrar_id);
@@ -1427,8 +1470,9 @@ Registry_Registrar_Group_Manager_i::getMembershipsByGroup(ccReg::TID group_id)
 
     try
     {
+        DBSharedPtr nodb;
         Fred::Registrar::Manager::AutoPtr regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
         ///get registrar certification
         Fred::Registrar::MembershipByGroupSeq mbgs
         = regman->getMembershipByGroup(group_id);
@@ -1495,7 +1539,8 @@ ccReg::RegistrarRequestCountInfo* ccReg_Admin_i::getRegistrarRequestCount(const 
         Logging::Context ctx(server_name_);
         ConnectionReleaser releaser;
 
-        DBSharedPtr ldb_dc_guard = connect_DB(m_connection_string, DB_CONNECT_FAILED());
+        Database::Connection conn = Database::Manager::acquire();
+        DBSharedPtr ldb_dc_guard (new DB(conn));
         std::auto_ptr<Fred::Poll::Manager> poll_mgr(Fred::Poll::Manager::create(ldb_dc_guard));
         std::auto_ptr<Fred::Poll::MessageRequestFeeInfo> rfi(poll_mgr->getLastRequestFeeInfoMessage(_registrar));
 
@@ -1529,8 +1574,9 @@ bool ccReg_Admin_i::isRegistrarBlocked(ccReg::TID reg_id) throw (
         ConnectionReleaser release;
         TRACE(boost::format("[CALL] ccReg_Admin_i::isRegistrarBlocked(%1%)") % reg_id);
 
+        DBSharedPtr nodb;
         std::auto_ptr<Fred::Registrar::Manager> regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
 
         regman->checkRegistrarExists(reg_id);
         return regman->isRegistrarBlocked(reg_id);
@@ -1554,8 +1600,9 @@ bool ccReg_Admin_i::blockRegistrar(ccReg::TID reg_id) throw (
         ConnectionReleaser release;
         TRACE(boost::format("[CALL] ccReg_Admin_i::blockRegistrar(%1%)") % reg_id);
 
+        DBSharedPtr nodb;
         std::auto_ptr<Fred::Registrar::Manager> regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(0)));
+                Fred::Registrar::Manager::create(nodb));
 
         regman->checkRegistrarExists(reg_id);
 
@@ -1581,8 +1628,9 @@ void ccReg_Admin_i::unblockRegistrar(ccReg::TID reg_id, ccReg::TID request_id) t
         ConnectionReleaser release;
         TRACE(boost::format("[CALL] ccReg_Admin_i::unblockRegistrar(%1%, %2%)") % reg_id % request_id);
 
+        DBSharedPtr nodb;
         std::auto_ptr<Fred::Registrar::Manager> regman(
-                Fred::Registrar::Manager::create(DBDisconnectPtr(NULL)));
+                Fred::Registrar::Manager::create(nodb));
 
         regman->checkRegistrarExists(reg_id);
         regman->unblockRegistrar(reg_id, request_id);
@@ -1599,4 +1647,47 @@ void ccReg_Admin_i::unblockRegistrar(ccReg::TID reg_id, ccReg::TID request_id) t
     }
 }
 
+ccReg::ULLSeq* ccReg_Admin_i::getSummaryOfExpiredDomains(const char *registrar_handle, const ccReg::DatePeriodList &date_intervals)
+{
+    try {
+        Logging::Context(server_name_);
+        ConnectionReleaser release;
+        TRACE(boost::format("[CALL] ccReg_Admin_i::getSummaryOfExpiredDomains(%1%, date_intervals") % registrar_handle );
+
+        // convert 2nd parametre - the sequence
+        std::vector<boost::gregorian::date_period> intervals;
+        intervals.reserve(date_intervals.length());
+
+        for(unsigned i=0; i<date_intervals.length(); i++) {
+            intervals.push_back(date_period(
+                        makeBoostDate_throw(date_intervals[i].from),
+                        makeBoostDate_throw(date_intervals[i].to))
+            );
+        }
+
+        // call implementation
+        std::vector<unsigned long long> counts = Fred::Domain::getExpiredDomainSummary(registrar_handle, intervals);
+
+        // convert return value
+        ccReg::ULLSeq_var ret = new ccReg::ULLSeq();
+
+        ret->length(counts.size());
+        for (unsigned i=0; i<counts.size(); i++) {
+            ret[i] = counts[i];
+        }
+
+        return ret._retn();
+
+    } catch (Fred::INVALID_VALUE &ex) {
+        throw ccReg::Admin::InvalidValue(ex.what());
+    } catch (Fred::NOT_FOUND &) {
+        throw ccReg::Admin::ObjectNotFound();
+    } catch (std::exception &ex) {
+        LOGGER(PACKAGE).error(ex.what());
+        throw ccReg::Admin::InternalServerError();
+    } catch (...) {
+        LOGGER(PACKAGE).error("unknown exception in getSummaryOfExpiredDomains");
+        throw ccReg::Admin::InternalServerError();
+    }
+}
 

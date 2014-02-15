@@ -29,6 +29,7 @@
 #include "old_utils/dbsql.h"
 #include "model/model_filters.h"
 #include "log/logger.h"
+#include "registrar.h"
 
 namespace Fred {
 namespace Domain {
@@ -106,7 +107,7 @@ public:
     ObjectImpl(_id, _history_id, _crDate, _trDate, _upDate, _erDate, _registrar,
                _registrarHandle, _createRegistrar, _createRegistrarHandle,
                _updateRegistrar, _updateRegistrarHandle, _authPw, _roid),
-        fqdn(_fqdn), fqdnIDN(zm->decodeIDN(fqdn)), zone(_zone), nsset(_nsset), nssetHandle(_nssetHandle),
+        fqdn(_fqdn), fqdnIDN(zm->punycode_to_utf8(fqdn)), zone(_zone), nsset(_nsset), nssetHandle(_nssetHandle),
         registrant(_registrant), registrantHandle(_registrantHandle), 
         registrantName(_registrantName), registrantOrganization(_registrantOrganization),
         registrantPhone(_registrantPhone),exDate(_exDate),
@@ -852,7 +853,7 @@ public:
         Database::Row::Iterator col = (*it).begin();
 
         Database::ID domain_historyid = *col;
-        Database::ID domain_id        = *(++col);
+                                         (++col);//Database::ID domain_id
         Database::ID admin_id         = *(++col);
         std::string  admin_handle     = *(++col);
         std::string  admin_name       = *(++col);
@@ -884,7 +885,7 @@ public:
         Database::Row::Iterator col = (*it).begin();
 
         Database::ID domain_historyid = *col;
-        Database::ID domain_id        = *(++col);
+                                         (++col);//Database::ID domain_id
         std::string  nsset_handle     = *(++col);
 
         DomainImpl *domain_ptr = dynamic_cast<DomainImpl *>(findHistoryIDSequence(domain_historyid));
@@ -908,7 +909,7 @@ public:
           Database::Row::Iterator col = (*it).begin();
 
           Database::ID domain_historyid = *col;
-          Database::ID domain_id        = *(++col);
+                                           (++col);//Database::ID domain_id
           std::string  keyset_handle    = *(++col);
 
           DomainImpl *domain_ptr = dynamic_cast<DomainImpl *>(findHistoryIDSequence(domain_historyid));
@@ -930,7 +931,7 @@ public:
         Database::Row::Iterator col = (*it).begin();
 
         Database::ID   domain_historyid = *col;
-        Database::ID   domain_id        = *(++col);
+                                           (++col);//Database::ID   domain_id
         Database::Date validation_date  = *(++col);
         bool           publish          = *(++col);
 
@@ -1269,9 +1270,9 @@ public:
   }
   /// interface method implementation  
   CheckAvailType checkAvail(const std::string& _fqdn,
-  												  NameIdPair& conflictFqdn,
-  												  bool lock,
-  												  bool allowIDN) const throw (SQL_ERROR) {
+                            NameIdPair& conflictFqdn,
+                            bool allowIDN,
+                            bool lock) const throw (SQL_ERROR) {
     std::string fqdn = _fqdn;
     boost::algorithm::to_lower(fqdn);
     // clear output
@@ -1444,6 +1445,41 @@ unsigned long long getRegistrarDomainCount(Database::ID regid, const boost::greg
     return count;
 
 }
+
+std::vector<unsigned long long> getExpiredDomainSummary(const std::string &registrar, const std::vector<date_period> &date_intervals)
+{
+    DBSharedPtr nodb;
+    Fred::Registrar::Manager::AutoPtr regman(
+        Fred::Registrar::Manager::create(nodb));
+
+    if(!regman->checkHandle(registrar)) {
+        throw Fred::NOT_FOUND();
+    }
+
+    Database::Connection conn = Database::Manager::acquire();
+
+    std::vector<unsigned long long> ret;
+    ret.reserve(date_intervals.size());
+
+    for (std::vector<date_period>::const_iterator it = date_intervals.begin(); it != date_intervals.end(); it++) {
+
+        // from included, to is behind the period
+        Database::Result result = conn.exec_params("SELECT count(*) FROM domain d "
+                                        "JOIN object_registry oreg ON oreg.id = d.id AND oreg.erdate IS NULL "
+                                        "JOIN object_history oh ON oh.historyid = oreg.historyid "
+                                        "JOIN registrar r ON r.id = oh.clid "
+                                    "WHERE r.handle = $1::text AND d.exdate >= $2::date AND d.exdate < $3::date ",
+                Database::query_param_list (registrar)
+                                           (it->begin())
+                                           (it->end())
+        );
+
+        ret.push_back(result[0][0]);
+    }
+
+    return ret;
+}
+
 
 }
 }

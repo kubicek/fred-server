@@ -43,7 +43,7 @@ class HostImpl : public virtual Host {
   std::string nameIDN;
 public:
   HostImpl(const std::string& _name, Zone::Manager *zm) : 
-  		name(_name), nameIDN(zm->decodeIDN(name)) {
+  		name(_name), nameIDN(zm->punycode_to_utf8(name)) {
   }
   virtual const std::string getName() const {
 		return name;
@@ -508,7 +508,7 @@ public:
         Database::Row::Iterator col = (*it).begin();
 
         Database::ID nsset_historyid = *col;
-        Database::ID nsset_id        = *(++col);
+                                        (++col);//Database::ID nsset_id
         Database::ID contact_id      = *(++col);
         std::string  contact_handle  = *(++col);
         
@@ -533,7 +533,7 @@ public:
         Database::Row::Iterator col = (*it).begin();
 
         Database::ID nsset_historyid = *col;
-        Database::ID nsset_id        = *(++col);
+                                        (++col);//Database::ID nsset_id
         std::string  host_fqdn       = *(++col);
         std::string  host_ip         = *(++col);
         
@@ -674,13 +674,15 @@ public:
    															 bool glue, 
    															 bool allowIDN) const {
     try {
-      // test according to database limit
-      if (hostname.length()> 255) return 1;
+      // 255 - 2 = 253 (difference between wire and textual representation of fqdn)
+      // fix for #9673, we don't care about possible trailing dot here because it
+      // is forbidden in actual implementation
+      if (hostname.length() > 253) return 1;
       // parse hostname (will throw exception on invalid)
       Zone::DomainName name;
       zm->parseDomainName(hostname,name,allowIDN);
       // if glue is specified, hostname must be under one of managed zones 
-      if (glue && !zm->findApplicableZone(hostname)) return 1;
+      if (glue && !zm->findApplicableZone(hostname)) return 2;
       // if glue is not specified, hostname must be under any valid zone
       if (!glue && !zm->checkTLD(name)) return 1;
       return 0;

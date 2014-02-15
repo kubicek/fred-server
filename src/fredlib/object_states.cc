@@ -1,4 +1,5 @@
 #include "object_states.h"
+#include <memory>
 
 
 namespace Fred {
@@ -8,6 +9,7 @@ bool object_has_state(
         const std::string &_state_name)
 {
     Database::Connection conn = Database::Manager::acquire();
+    lock_object_state_request_lock(_state_name, _object_id);
     Database::Result rcheck = conn.exec_params(
             "SELECT count(*) FROM object_state os"
             " JOIN enum_object_states eos ON eos.id = os.state_id"
@@ -19,24 +21,49 @@ bool object_has_state(
     return static_cast<int>(rcheck[0][0]);
 }
 
+bool object_has_one_of_states(
+        const unsigned long long &_object_id,
+        const std::vector<std::string> & _state_names)
+{
+    for (std::vector<std::string>::const_iterator it = _state_names.begin()
+            ; it != _state_names.end(); ++it)
+    {
+        if(object_has_state(_object_id, *it)) return true;
+    }
+    return false;
+}
 
 
-void insert_object_state(
+bool object_has_all_of_states(
+        const unsigned long long &_object_id,
+        const std::vector<std::string> & _state_names)
+{
+    for (std::vector<std::string>::const_iterator it = _state_names.begin()
+            ; it != _state_names.end(); ++it)
+    {
+        if(!object_has_state(_object_id, *it)) return false;
+    }
+    return true;
+}
+
+
+unsigned long long insert_object_state(
         const unsigned long long &_object_id,
         const std::string &_state_name)
 {
     Database::Connection conn = Database::Manager::acquire();
-    Database::Transaction tx(conn);
-    conn.exec_params(
+    lock_object_state_request_lock(_state_name, _object_id);
+    Database::Result reqid =conn.exec_params(
             "INSERT INTO object_state_request (object_id, state_id)"
             " VALUES ($1::integer, (SELECT id FROM enum_object_states"
-            " WHERE name = $2::text))",
+            " WHERE name = $2::text)) RETURNING id",
             Database::query_param_list
                 (_object_id)
                 (_state_name));
-    // conn.exec_params("SELECT update_object_states($1::integer)",
-    //         Database::query_param_list(_object_id));
-    tx.commit();
+    if(reqid.size() == 0)
+        return 0;
+
+    return static_cast<unsigned long long>(reqid[0][0]);
 }
 
 /**
@@ -91,32 +118,38 @@ bool cancel_object_state(
     /* check if state is active on object */
     if (object_has_state(_object_id, _state_name) == true) {
         Database::Transaction tx(conn);
+
+        lock_object_state_request_lock(_state_name,_object_id);
+
         Database::Result rid_result = conn.exec_params(
-                "SELECT osr.id FROM object_state_request osr"
+                "UPDATE object_state_request SET canceled = CURRENT_TIMESTAMP WHERE id IN ("
+                " SELECT osr.id FROM object_state_request osr"
                 " JOIN enum_object_states eos ON eos.id = osr.state_id"
                 " WHERE eos.name = $1::text AND (osr.valid_to is NULL OR osr.valid_to > CURRENT_TIMESTAMP)"
-                " AND osr.canceled is NULL AND osr.object_id = $2::integer",
+                " AND osr.valid_from <= CURRENT_TIMESTAMP "
+                " AND osr.canceled is NULL AND osr.object_id = $2::integer ) RETURNING id",
                 Database::query_param_list
                     (_state_name)
                     (_object_id));
-        /* cancel this status TODO: or cancel all and dont throw??? */
-        if (rid_result.size() == 1) {
-            conn.exec_params("UPDATE object_state_request"
-                    " SET canceled = CURRENT_TIMESTAMP WHERE id = $1::integer",
-                    Database::query_param_list(
-                            static_cast<unsigned long long>(rid_result[0][0])));
-            // conn.exec_params("SELECT update_object_states($1::integer)",
-            //         Database::query_param_list(_object_id));
-            tx.commit();
-            return true;
+
+        std::string rid;
+        if (rid_result.size() == 0) {
+            throw std::runtime_error("cancel_object_state: object state request not found for object state");
         }
-        throw std::runtime_error(str(boost::format(
-                        "too many opened states (object_id=%1%, state=%2%")
-                        % _object_id % _state_name));
+        else {
+            rid = "cancel_object_state: canceled request id:";
+            for (unsigned i = 0; i < rid_result.size(); ++i) {
+                rid += " " +std::string(rid_result[i][0]);
+            }
+        }
+
+        tx.commit();
+
+        Logging::Manager::instance_ref().get(PACKAGE).debug(rid);
+        return true;
     }
-    else {
-        return false;
-    }
+
+    return false;
 }
 
 void cancel_multiple_object_states(
@@ -150,6 +183,21 @@ void cancel_multiple_object_states(
 
 }
 
+void lock_multiple_object_states(
+    const unsigned long long _object_id
+    , const std::vector<std::string> &_states_names)
+{
+    if(_states_names.empty()) return;
+
+    Database::Connection conn = Database::Manager::acquire();
+
+    for (std::vector<std::string>::const_iterator state_name_it = _states_names.begin()
+            ; state_name_it != _states_names.end(); ++state_name_it)
+    {
+        lock_object_state_request_lock(*state_name_it, _object_id);
+    }
+}
+
 void update_object_states(
         const unsigned long long &_object_id)
 {
@@ -164,8 +212,6 @@ void createObjectStateRequestName(
         , std::vector< std::string > _object_state_name
         , const std::string& valid_from
         , const optional_string& valid_to
-        , DBSharedPtr _m_db
-        , bool _restricted_handles
         , bool update_object_state
         )
 {
@@ -217,6 +263,8 @@ void createObjectStateRequestName(
         throw std::runtime_error("object state not found");
 
     unsigned long long object_state_id = obj_state_res[0][0];
+
+    lock_object_state_request_lock(object_state_id, object_id);
 
     //get existing state requests for object and state
     //assuming requests for different states of the same object may overlay
@@ -307,16 +355,44 @@ void createObjectStateRequestName(
 
     if (update_object_state)
     {
-        std::auto_ptr<Fred::Manager> regMan(
-            Fred::Manager::create( _m_db, _restricted_handles ));
-
-         Logging::Manager::instance_ref().get(PACKAGE).debug(std::string("regMan->updateObjectStates id: ")
-             +boost::lexical_cast<std::string>(object_id));
-         regMan->updateObjectStates(object_id);
+        update_object_states(object_id);
     }//if (update_object_state)
 
     return;
-}//createObjectStateRequest
+}//createObjectStateRequestName
 
+//select for update by state_id from enum_object_states.id and object_id from object_registry.id
+void lock_object_state_request_lock(unsigned long long state_id, unsigned long long object_id)
+{
+    {//insert separately
+        typedef std::auto_ptr<Database::StandaloneConnection> StandaloneConnectionPtr;
+        Database::StandaloneManager sm = Database::StandaloneManager(
+                new Database::StandaloneConnectionFactory(Database::Manager::getConnectionString()));
+        StandaloneConnectionPtr conn_standalone(sm.acquire());
+        conn_standalone->exec_params(
+            "INSERT INTO object_state_request_lock (id, state_id, object_id) "
+            " VALUES (DEFAULT, $1::bigint, $2::bigint)"
+            , Database::query_param_list(state_id)(object_id));
+    }
+
+    Database::Connection conn = Database::Manager::acquire();
+    conn.exec_params("SELECT lock_object_state_request_lock($1::bigint, $2::bigint)"
+        , Database::query_param_list(state_id)(object_id));
+
+}
+
+//select for update by state_name from enum_object_states.name and object_id from object_registry.id
+void lock_object_state_request_lock(const std::string& state_name, unsigned long long object_id)
+{
+    Database::Connection conn = Database::Manager::acquire();
+    Database::Result res_state_id = conn.exec_params("SELECT id FROM enum_object_states "
+        " WHERE name=$1::text ", Database::query_param_list (state_name));
+
+    if(res_state_id.size() == 1)
+    {
+        lock_object_state_request_lock(static_cast<unsigned long long>(res_state_id[0][0])
+                , object_id);
+    }
+}
 
 };

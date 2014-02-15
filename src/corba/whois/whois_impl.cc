@@ -29,8 +29,15 @@
 
 #include "log/logger.h"
 #include "log/context.h"
+#include "util/random.h"
 
 #include "corba/connection_releaser.h"
+
+
+static const std::string create_ctx_name(const std::string &_name)
+{
+    return str(boost::format("%1%-<%2%>")% _name % Random::integer(0, 10000));
+}
 
 
 ccReg_Whois_i::ccReg_Whois_i(const std::string& _database
@@ -40,20 +47,29 @@ ccReg_Whois_i::ccReg_Whois_i(const std::string& _database
 : m_connection_string(_database)
 , server_name_(_server_name)
 , registry_restricted_handles_(_registry_restricted_handles)
-, db_disconnect_guard_ ( connect_DB(m_connection_string
-    , std::runtime_error(
-        std::string("ccReg_Whois_i::ccReg_Whois_i cannot connect to DATABASE ")
-        + m_connection_string)))
-, registry_manager_(Fred::Manager::create(db_disconnect_guard_
-    , registry_restricted_handles_))
+, db_disconnect_guard_ ()
+, registry_manager_()
 {
-  Logging::Context ctx(server_name_);
-  registry_manager_->initStates();
+    Logging::Context ctx(server_name_);
+
+    Database::Connection conn = Database::Manager::acquire();
+    db_disconnect_guard_.reset(new DB(conn));
+
+    registry_manager_.reset(Fred::Manager::create(db_disconnect_guard_
+        , registry_restricted_handles_));
+
+    registry_manager_->initStates();
 }
 
 ccReg_Whois_i::~ccReg_Whois_i()
 {
   TRACE("[CALL] ccReg_Whois_i::~ccReg_Whois_i()");
+}
+
+
+const std::string& ccReg_Whois_i::get_server_name() const
+{
+    return server_name_;
 }
 
 void ccReg_Whois_i::fillRegistrar(ccReg::WhoisRegistrar& creg
@@ -268,19 +284,21 @@ void ccReg_Whois_i::fillDomain(ccReg::DomainDetail* cd,
 
 ccReg::WhoisRegistrar* ccReg_Whois_i::getRegistrarByHandle(const char* handle)
 {
-    Logging::Context ctx(server_name_);
+    Logging::Context ctx_server(create_ctx_name(get_server_name()));
+    Logging::Context ctx("get-registrar-by-handle");
     ConnectionReleaser releaser;
 
     try
     {
         Logging::Manager::instance_ref()
             .get(server_name_.c_str())
-            .message( NOTICE_LOG, "getRegistarByHandle: handle -> %s", handle );
+            .info(boost::format("handle='%1%'") % handle);
 
         if (!handle || !*handle) throw ccReg::Whois::ObjectNotFound();
 
-        DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                , ccReg::Whois::InternalServerError());
+        DBSharedPtr ldb_disconnect_guard;
+        Database::Connection conn = Database::Manager::acquire();
+        ldb_disconnect_guard.reset(new DB(conn));
 
         try {
         std::auto_ptr<Fred::Manager> regm(
@@ -344,13 +362,17 @@ ccReg::WhoisRegistrar* ccReg_Whois_i::getRegistrarByHandle(const char* handle)
 
 ccReg::WhoisRegistrarList* ccReg_Whois_i::getRegistrarsByZone(const char *zone)
 {
-  Logging::Context ctx(server_name_);
+  Logging::Context ctx_server(create_ctx_name(get_server_name()));
+  Logging::Context ctx("get-registrar-by-zone");
   ConnectionReleaser releaser;
 
   try
   {
-    DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                                  , ccReg::Admin::SQL_ERROR());
+
+    DBSharedPtr ldb_disconnect_guard;
+    Database::Connection conn = Database::Manager::acquire();
+    ldb_disconnect_guard.reset(new DB(conn));
+
     std::auto_ptr<Fred::Manager> regm(
         Fred::Manager::create(ldb_disconnect_guard,registry_restricted_handles_)
     );
@@ -411,18 +433,19 @@ ccReg::WhoisRegistrarList* ccReg_Whois_i::getRegistrarsByZone(const char *zone)
 
 ccReg::ContactDetail* ccReg_Whois_i::getContactByHandle(const char* handle)
 {
-    Logging::Context ctx(server_name_);
+    Logging::Context ctx_server(create_ctx_name(get_server_name()));
+    Logging::Context ctx("get-contact-by-handle");
     ConnectionReleaser releaser;
 
     try
     {
         Logging::Manager::instance_ref()
-        .get(server_name_.c_str())
-        .trace(boost::format(
-                "[CALL] ccReg_Whois_i::getContactByHandle('%1%')") % handle);
+            .get(server_name_.c_str())
+            .info(boost::format("handle='%1%')") % handle);
 
-        DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                        , ccReg::Whois::InternalServerError());
+        DBSharedPtr ldb_disconnect_guard;
+        Database::Connection conn = Database::Manager::acquire();
+        ldb_disconnect_guard.reset(new DB(conn));
 
         if (!handle || !*handle)
             throw ccReg::Whois::ObjectNotFound();
@@ -478,21 +501,22 @@ ccReg::ContactDetail* ccReg_Whois_i::getContactByHandle(const char* handle)
 
 ccReg::NSSetDetail* ccReg_Whois_i::getNSSetByHandle(const char* handle)
 {
-    Logging::Context ctx(server_name_);
+    Logging::Context ctx_server(create_ctx_name(get_server_name()));
+    Logging::Context ctx("get-nsset-by-handle");
     ConnectionReleaser releaser;
 
     try
     {
         Logging::Manager::instance_ref()
                 .get(server_name_.c_str())
-                .trace(boost::format(
-                "[CALL] ccReg_Whois_i::getNSSetByHandle('%1%')") % handle);
+                .info(boost::format("handle='%1%'") % handle);
 
         if (!handle || !*handle)
         throw ccReg::Whois::ObjectNotFound();
 
-        DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                , ccReg::Whois::InternalServerError());
+        DBSharedPtr ldb_disconnect_guard;
+        Database::Connection conn = Database::Manager::acquire();
+        ldb_disconnect_guard.reset(new DB(conn));
 
         std::auto_ptr<Fred::Manager>
             r(Fred::Manager::create(ldb_disconnect_guard, registry_restricted_handles_));
@@ -544,21 +568,22 @@ ccReg::NSSetDetail* ccReg_Whois_i::getNSSetByHandle(const char* handle)
 
 ccReg::KeySetDetail * ccReg_Whois_i::getKeySetByHandle(const char *handle)
 {
-    Logging::Context ctx(server_name_);
+    Logging::Context ctx_server(create_ctx_name(get_server_name()));
+    Logging::Context ctx("get-keyset-by-handle");
     ConnectionReleaser releaser;
 
     try
     {
         Logging::Manager::instance_ref()
                 .get(server_name_.c_str())
-                .trace(boost::format(
-                "[CALL] ccReg_Whois_i::getKeySetByHandle('%1%')") % handle);
+                .info(boost::format("handle='%1%'") % handle);
 
         if (!handle || !*handle)
             throw ccReg::Whois::ObjectNotFound();
 
-        DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                , ccReg::Whois::InternalServerError());
+        DBSharedPtr ldb_disconnect_guard;
+        Database::Connection conn = Database::Manager::acquire();
+        ldb_disconnect_guard.reset(new DB(conn));
 
         std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
             ,registry_restricted_handles_));
@@ -617,18 +642,20 @@ ccReg::DomainDetails* ccReg_Whois_i::getDomainsByInverseKey(const char* key,
                                                             ccReg::DomainInvKeyType type,
                                                             CORBA::Long limit)
 {
-    Logging::Context ctx(server_name_);
+    Logging::Context ctx_server(create_ctx_name(get_server_name()));
+    Logging::Context ctx("get-domains-by-inverse-key");
     ConnectionReleaser releaser;
 
     try
     {
         Logging::Manager::instance_ref()
                 .get(server_name_.c_str())
-                .trace(boost::format("[CALL] ccReg_Whois_i::getDomainsByInverseKey('%1%', %2%, %3%)")
-          % key % type % limit);
+                .info(boost::format("key='%1%' type=%2% limit=%3%") % key % type % limit);
 
-        DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                , ccReg::Whois::InternalServerError());
+        DBSharedPtr ldb_disconnect_guard;
+        Database::Connection conn = Database::Manager::acquire();
+        ldb_disconnect_guard.reset(new DB(conn));
+
 
         std::auto_ptr<Fred::Manager> r(Fred::Manager::create(ldb_disconnect_guard
                 , registry_restricted_handles_));
@@ -663,7 +690,7 @@ ccReg::DomainDetails* ccReg_Whois_i::getDomainsByInverseKey(const char* key,
             }
 
             if (dm->isDeletePending(
-                        r->getZoneManager()->encodeIDN(d->getFQDN())) == false)
+                        r->getZoneManager()->utf8_to_punycode(d->getFQDN())) == false)
             {
                 unsigned int l = dlist->length();
                 dlist->length(l + 1);
@@ -708,13 +735,19 @@ ccReg::NSSetDetails* ccReg_Whois_i::getNSSetsByInverseKey(const char* key,
                                                           ccReg::NSSetInvKeyType type,
                                                           CORBA::Long limit)
 {
-    Logging::Context ctx(server_name_);
+    Logging::Context ctx_server(create_ctx_name(get_server_name()));
+    Logging::Context ctx("get-nsset-by-inverse-key");
     ConnectionReleaser releaser;
 
     try
     {
-        DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                , ccReg::Whois::InternalServerError());
+        Logging::Manager::instance_ref()
+                .get(server_name_.c_str())
+                .info(boost::format("key='%1%' type=%2% limit=%3%") % key % type % limit);
+
+        DBSharedPtr ldb_disconnect_guard;
+        Database::Connection conn = Database::Manager::acquire();
+        ldb_disconnect_guard.reset(new DB(conn));
 
         std::auto_ptr<Fred::Manager> r(
                 Fred::Manager::create(ldb_disconnect_guard
@@ -723,7 +756,7 @@ ccReg::NSSetDetails* ccReg_Whois_i::getNSSetsByInverseKey(const char* key,
         Fred::NSSet::Manager *nm = r->getNSSetManager();
         std::auto_ptr<Fred::NSSet::List> nl(nm->createList());
         switch (type) {
-        case ccReg::NIKT_NS : nl->setHostNameFilter(zm->encodeIDN(key)); break;
+        case ccReg::NIKT_NS : nl->setHostNameFilter(zm->utf8_to_punycode(key)); break;
         case ccReg::NIKT_TECH : nl->setAdminFilter(key); break;
         }
         nl->setLimit(limit);
@@ -765,13 +798,19 @@ ccReg::KeySetDetails* ccReg_Whois_i::getKeySetsByInverseKey(
         ccReg::KeySetInvKeyType type,
         CORBA::Long limit)
 {
-    Logging::Context ctx(server_name_);
+    Logging::Context ctx_server(create_ctx_name(get_server_name()));
+    Logging::Context ctx("get-keyset-by-inverse-key");
     ConnectionReleaser releaser;
 
     try
     {
-        DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                , ccReg::Whois::InternalServerError());
+        Logging::Manager::instance_ref()
+                .get(server_name_.c_str())
+                .info(boost::format("key='%1%' type=%2% limit=%3%") % key % type % limit);
+
+        DBSharedPtr ldb_disconnect_guard;
+        Database::Connection conn = Database::Manager::acquire();
+        ldb_disconnect_guard.reset(new DB(conn));
 
         std::auto_ptr<Fred::Manager> r(
                 Fred::Manager::create(ldb_disconnect_guard
@@ -819,28 +858,29 @@ ccReg::KeySetDetails* ccReg_Whois_i::getKeySetsByInverseKey(
 
 ccReg::DomainDetail* ccReg_Whois_i::getDomainByFQDN(const char* fqdn)
 {
-    Logging::Context ctx(server_name_);
+    Logging::Context ctx_server(create_ctx_name(get_server_name()));
+    Logging::Context ctx("get-domain-by-fqdn");
     ConnectionReleaser releaser;
 
     try
     {
         Logging::Manager::instance_ref()
                 .get(server_name_.c_str())
-                .trace(boost::format(
-                "[CALL] ccReg_Whois_i::getDomainByFQDN('%1%')") % fqdn);
+                .info(boost::format("fqdn='%1%'") % fqdn);
 
         if (!fqdn || !*fqdn)
         throw ccReg::Whois::ObjectNotFound();
 
-        DBSharedPtr ldb_disconnect_guard = connect_DB(m_connection_string
-                                , ccReg::Whois::InternalServerError());
+        DBSharedPtr ldb_disconnect_guard;
+        Database::Connection conn = Database::Manager::acquire();
+        ldb_disconnect_guard.reset(new DB(conn));
 
         std::auto_ptr<Fred::Manager>
             r(Fred::Manager::create(ldb_disconnect_guard
                     , registry_restricted_handles_));
         Fred::Domain::Manager *dm = r->getDomainManager();
 
-        if (dm->isDeletePending(r->getZoneManager()->encodeIDN(fqdn)))
+        if (dm->isDeletePending(r->getZoneManager()->utf8_to_punycode(fqdn)))
         {
             const Fred::StatusDesc *dc = registry_manager_->getStatusDesc("deleteCandidate");
             if (!dc) {
@@ -858,7 +898,7 @@ ccReg::DomainDetail* ccReg_Whois_i::getDomainByFQDN(const char* fqdn)
         {
             std::auto_ptr<Fred::Domain::List> dl(dm->createList());
             dl->setWildcardExpansion(false);
-            dl->setFQDNFilter(r->getZoneManager()->encodeIDN(fqdn));
+            dl->setFQDNFilter(r->getZoneManager()->utf8_to_punycode(fqdn));
             dl->reload();
 
             if (dl->getCount() != 1) {
@@ -908,7 +948,8 @@ ccReg::DomainDetail* ccReg_Whois_i::getDomainByFQDN(const char* fqdn)
 
 Registry::ObjectStatusDescSeq* ccReg_Whois_i::getDomainStatusDescList(const char *lang)
 {
-    Logging::Context ctx(server_name_);
+    Logging::Context ctx_server(create_ctx_name(get_server_name()));
+    Logging::Context ctx("get-domain-status-desc-list");
     ConnectionReleaser releaser;
 
     try
@@ -959,7 +1000,8 @@ Registry::ObjectStatusDescSeq* ccReg_Whois_i::getDomainStatusDescList(const char
 
 Registry::ObjectStatusDescSeq* ccReg_Whois_i::getContactStatusDescList(const char *lang)
 {
-  Logging::Context ctx(server_name_);
+  Logging::Context ctx_server(create_ctx_name(get_server_name()));
+  Logging::Context ctx("get-contact-status-desc-list");
   ConnectionReleaser releaser;
     try
     {
@@ -1008,7 +1050,8 @@ Registry::ObjectStatusDescSeq* ccReg_Whois_i::getContactStatusDescList(const cha
 
 Registry::ObjectStatusDescSeq* ccReg_Whois_i::getNSSetStatusDescList(const char *lang)
 {
-  Logging::Context ctx(server_name_);
+  Logging::Context ctx_server(create_ctx_name(get_server_name()));
+  Logging::Context ctx("get-nsset-status-desc-list");
   ConnectionReleaser releaser;
   try
   {
@@ -1057,7 +1100,8 @@ Registry::ObjectStatusDescSeq* ccReg_Whois_i::getNSSetStatusDescList(const char 
 
 Registry::ObjectStatusDescSeq* ccReg_Whois_i::getKeySetStatusDescList(const char *lang)
 {
-  Logging::Context ctx(server_name_);
+  Logging::Context ctx_server(create_ctx_name(get_server_name()));
+  Logging::Context ctx("get-keyset-status-desc-list");
   ConnectionReleaser releaser;
     try
     {

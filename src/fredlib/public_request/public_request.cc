@@ -1,14 +1,11 @@
 #include "public_request.h"
 #include "public_request_impl.h"
-#include "public_request_authinfo_impl.h"
-#include "public_request_block_impl.h"
-#include "public_request_verification_impl.h"
+
+#include "types/stringify.h"
 
 
 namespace Fred {
 namespace PublicRequest {
-
-
 
 class ListImpl : public Fred::CommonListImpl,
                  virtual public List {
@@ -73,13 +70,14 @@ public:
         % getTempTableName() % tmp_table_query.str());
 
     Database::SelectQuery object_info_query;
-    object_info_query.select() << "t_1.request_type, t_1.id, t_1.create_request_id, t_1.resolve_request_id, "
+    object_info_query.select() << "eprt.name, t_1.id, t_1.create_request_id, t_1.resolve_request_id, "
                                << "t_1.create_time, t_1.status, t_1.resolve_time, "
                                << "t_1.reason, t_1.email_to_answer, t_1.answer_email_id, "
                                << "t_4.id, t_4.handle, t_4.name, t_4.url, "
                                << "t_5.identification, t_5.password";
     object_info_query.from() << getTempTableName() << " tmp "
                              << "JOIN public_request t_1 ON (t_1.id = tmp.id) "
+                             << "JOIN enum_public_request_type eprt ON eprt.id = t_1.request_type "
                              << "LEFT JOIN registrar t_4 ON (t_1.registrar_id = t_4.id) "
                              << "LEFT JOIN public_request_auth t_5 ON (t_5.id = t_1.id) ";
     object_info_query.order_by() << "t_1.id DESC";
@@ -92,7 +90,7 @@ public:
       for (Database::Result::Iterator it = r_info.begin(); it != r_info.end(); ++it) {
         Database::Row::Iterator col = (*it).begin();
 
-        Fred::PublicRequest::Type type = (Fred::PublicRequest::Type)(int)*col;
+        Fred::PublicRequest::Type type = static_cast<Fred::PublicRequest::Type>(*col);
         PublicRequest* request = manager_->createRequest(type);
         request->init(++col);
         data_.push_back(request);
@@ -274,44 +272,14 @@ public:
     g->closeInput();
   }
 
-  virtual PublicRequest* createRequest(
-    Type _type
-  ) const {
-    // TRACE("[CALL] Fred::Request::Manager::createRequest()");
-    PublicRequestImpl *request = 0;
-    switch(_type) {
-      case PRT_AUTHINFO_AUTO_RIF :
-        request = new AuthInfoRequestEPPImpl(); break;
-      case PRT_AUTHINFO_AUTO_PIF :
-        request = new AuthInfoRequestPIFAutoImpl(); break;
-      case PRT_AUTHINFO_EMAIL_PIF :
-        request = new AuthInfoRequestPIFEmailImpl(); break;
-      case PRT_AUTHINFO_POST_PIF :
-        request = new AuthInfoRequestPIFPostImpl(); break;
-      case PRT_BLOCK_TRANSFER_EMAIL_PIF :
-        request = new BlockTransferRequestPIFImpl(); break;
-      case PRT_BLOCK_CHANGES_EMAIL_PIF :
-        request = new BlockUpdateRequestPIFImpl(); break;
-      case PRT_UNBLOCK_TRANSFER_EMAIL_PIF :
-        request = new UnBlockTransferRequestPIFImpl(); break;
-      case PRT_UNBLOCK_CHANGES_EMAIL_PIF :
-        request = new UnBlockUpdateRequestPIFImpl(); break;
-      case PRT_BLOCK_TRANSFER_POST_PIF :
-        request = new BlockTransferRequestPIFPostImpl(); break;
-      case PRT_BLOCK_CHANGES_POST_PIF :
-        request = new BlockUpdateRequestPIFPostImpl(); break;
-      case PRT_UNBLOCK_TRANSFER_POST_PIF :
-        request = new UnBlockTransferRequestPIFPostImpl(); break;
-      case PRT_UNBLOCK_CHANGES_POST_PIF :
-        request = new UnBlockUpdateRequestPIFPostImpl(); break;
-      case PRT_CONDITIONAL_CONTACT_IDENTIFICATION:
-        request = new ConditionalContactIdentificationImpl(); break;
-      case PRT_CONTACT_IDENTIFICATION:
-        request = new ContactIdentificationImpl(); break;
-      case PRT_CONTACT_VALIDATION:
-        request = new ValidationRequestImpl(); break;
-      default:
-        throw std::runtime_error("Unknown public request type specified.");
+  virtual PublicRequest* createRequest(Type _type) const
+  {
+    LOGGER(PACKAGE).debug(boost::format("create public request: %1%  (factory keys: %2%)")
+            % _type % Util::container2comma_list(Factory::instance_ref().get_keys()));
+
+    PublicRequestImpl *request = dynamic_cast<PublicRequestImpl*>(Factory::instance_ref().create(_type));
+    if (!request) {
+        throw std::runtime_error("cannot create request");
     }
     request->setType(_type);
     request->setManager((Manager *)this);
@@ -319,6 +287,7 @@ public:
   }
 
   List *loadRequest(Database::ID id) const {
+    lock_public_request_lock(id);
     Database::Filters::PublicRequest *prf = new Database::Filters::PublicRequestImpl();
     prf->addId().setValue(id);
     Database::Filters::Union uf;
@@ -336,8 +305,13 @@ public:
     TRACE(boost::format("[CALL] Fred::Request::Manager::processRequest(%1%, %2%)") %
           _id % _invalidate);
     try {
+        Database::Connection conn = Database::Manager::acquire();
+        Database::Transaction tx(conn);
+
+        lock_public_request_lock(_id);
       std::auto_ptr<List> l(loadRequest(_id));
       l->get(0)->process(_invalidate, check, _request_id);
+      tx.commit();
     }
     catch (Database::Exception) { throw SQL_ERROR(); }
   }
@@ -349,12 +323,12 @@ public:
   {
       Database::Connection conn = Database::Manager::acquire();
       Database::Transaction tx(conn);
+      lock_public_request_lock(_identification);
       Database::Result rid = conn.exec_params(
               "SELECT pr.id FROM public_request_auth pra"
               " JOIN public_request pr ON pr.id = pra.id"
               " WHERE pra.identification = $1::text"
-              " FOR UPDATE",
-              Database::query_param_list(_identification));
+              , Database::query_param_list(_identification));
       if (rid.size() != 1)
           throw NOT_FOUND();
 
@@ -373,16 +347,22 @@ public:
 
   virtual std::string getPublicRequestAuthIdentification(
           unsigned long long &_contact_id,
-          std::vector<unsigned int> &_request_type_list)
+          const std::vector<Type> &_request_type_list)
   {
       Database::Connection conn = Database::Manager::acquire();
+      for(std::vector<Type>::const_iterator cit = _request_type_list.begin(); cit != _request_type_list.end(); ++cit )
+      {
+          lock_public_request_lock(*cit, _contact_id);
+      }
+
       Database::Result rid = conn.exec_params(
               "SELECT identification FROM public_request_auth pra"
               " JOIN public_request pr ON (pra.id=pr.id)"
               " JOIN public_request_objects_map prom ON (prom.request_id=pr.id)"
+              " JOIN enum_public_request_type eprt ON eprt.id = pr.request_type"
               " WHERE pr.resolve_time IS NULL AND pr.status = 0"
               " AND object_id = $1::integer"
-              " AND pr.request_type =ANY ($2::int[])",
+              " AND eprt.name =ANY ($2::varchar[])",
               Database::query_param_list
                 (_contact_id)
                 ("{" + Util::container2comma_list(_request_type_list) + "}"));
@@ -441,5 +421,90 @@ Manager* Manager::create(Domain::Manager    *_domain_manager,
     );
 }
 
+std::vector<std::string> get_enum_public_request_type()
+{
+    Database::Connection conn = Database::Manager::acquire();
+    Database::Result res = conn.exec("select name from enum_public_request_type");
+
+    std::vector<std::string> public_request_types;
+    for(Database::Result::size_type i = 0; i < res.size(); ++i)
+    {
+        public_request_types.push_back(std::string(res[i][0]));
+    }
+    return public_request_types;
+}//enum_public_request_type
+
+//lock public_request for public_request_type_id from enum_public_request_type.id and object_id from object_registry.id
+void lock_public_request_lock(unsigned long long public_request_type_id, unsigned long long object_id)
+{
+
+    {//insert separately
+        typedef std::auto_ptr<Database::StandaloneConnection> StandaloneConnectionPtr;
+        Database::StandaloneManager sm = Database::StandaloneManager(
+                new Database::StandaloneConnectionFactory(Database::Manager::getConnectionString()));
+        StandaloneConnectionPtr conn_standalone(sm.acquire());
+        conn_standalone->exec_params(
+            "INSERT INTO public_request_lock (id, request_type, object_id) "
+            " VALUES (DEFAULT, $1::bigint, $2::bigint)"
+            , Database::query_param_list(public_request_type_id)(object_id));
+    }
+
+    Database::Connection conn = Database::Manager::acquire();
+    //get lock to the end of transaction for given object and request type
+    conn.exec_params("SELECT lock_public_request_lock($1::bigint,$2::bigint)"
+        , Database::query_param_list(public_request_type_id)(object_id));
+
 }
+
+//lock public_request for public_request_type_name from enum_public_request_type.name and object_id from object_registry.id
+void lock_public_request_lock(const std::string& public_request_type_name, unsigned long long object_id)
+{
+    Database::Connection conn = Database::Manager::acquire();
+    //get lock to the end of transaction for given object and request type
+    Database::Result res_prt_id = conn.exec_params(
+            "SELECT id FROM enum_public_request_type WHERE name=$1::text"
+        , Database::query_param_list(public_request_type_name));
+    if(res_prt_id.size() == 1)
+    {
+        lock_public_request_lock(static_cast<unsigned long long>(res_prt_id[0][0]), object_id);
+    }
 }
+
+//lock public_request by public_request_auth.identification
+void lock_public_request_lock(const std::string& identification)
+{
+    Database::Connection conn = Database::Manager::acquire();
+    Database::Result res_req = conn.exec_params(
+    "SELECT eprt.id, prom.object_id FROM public_request pr "
+    " JOIN public_request_objects_map prom ON prom.request_id = pr.id "
+    " JOIN enum_public_request_type eprt ON eprt.id = pr.request_type "
+    " JOIN public_request_auth pra ON pra.id = pr.id "
+    " WHERE pra.identification = $1::text "
+    , Database::query_param_list(identification));
+    if(res_req.size() == 1)
+    {
+        lock_public_request_lock(static_cast<unsigned long long>(res_req[0][0])
+                , static_cast<unsigned long long>(res_req[0][1]));
+    }
+}
+
+//lock public_request by public_request.id
+void lock_public_request_lock(unsigned long long public_request_id)
+{
+    Database::Connection conn = Database::Manager::acquire();
+    Database::Result res_req = conn.exec_params(
+    "SELECT eprt.id, prom.object_id FROM public_request pr "
+    " JOIN public_request_objects_map prom ON prom.request_id = pr.id "
+    " JOIN enum_public_request_type eprt ON eprt.id = pr.request_type "
+    " WHERE pr.id = $1::bigint "
+    , Database::query_param_list(public_request_id));
+    if(res_req.size() == 1)
+    {
+        lock_public_request_lock(static_cast<unsigned long long>(res_req[0][0])
+                , static_cast<unsigned long long>(res_req[0][1]));
+    }
+}
+
+
+}//namespace PublicRequest
+}//namespace Fred

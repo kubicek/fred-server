@@ -12,7 +12,10 @@
 #include "fredlib/registrar.h"
 #include "usertype_conv.h"
 #include "common.h"
-
+#include "fredlib/public_request/public_request_authinfo_impl.h"
+#include "fredlib/public_request/public_request_block_impl.h"
+#include "mojeid/public_request_verification_impl.h"
+#include "src/contact_verification/public_request_contact_verification_impl.h"
 #include "log/logger.h"
 #include "log/context.h"
 #include "util.h"
@@ -44,9 +47,10 @@ ccReg_Session_i::ccReg_Session_i(const std::string& _session_id,
                                  m_mailer_manager(ns),
                                  m_fm_client(ns),
                                  m_last_activity(second_clock::local_time()),
-                                 db_disconnect_guard_ ( connect_DB(database
-                                   , std::runtime_error(std::string("db connection failed: ")+ database)))
+                                 db_disconnect_guard_ ()
 {
+    Database::Connection conn = Database::Manager::acquire();
+    db_disconnect_guard_.reset(new DB(conn));
 
   base_context_ = Logging::Context::get() + "/" + session_id_;
   Logging::Context ctx(session_id_);
@@ -294,14 +298,26 @@ CORBA::Any* ccReg_Session_i::getDetail(ccReg::FilterType _type, ccReg::TID _id) 
       break;
 
 
-    case ccReg::FT_FILTER:
-    case ccReg::FT_OBJ:
+    case ccReg::FT_SESSION:
+      LOGGER(PACKAGE).error("Unimplemented filter type used in getDetail(): FT_SESSION");
+      break;
+    case ccReg::FT_ZONE:
+      LOGGER(PACKAGE).error("Unimplemented filter type used in getDetail(): FT_ZONE");
+      break;
     case ccReg::FT_FILE:
-      LOGGER(PACKAGE).error("Calling method with not implemented parameter!");
-      throw ccReg::Admin::OBJECT_NOT_FOUND();
+      LOGGER(PACKAGE).error("Unimplemented filter type used in getDetail(): FT_FILE");
+      break;
+    case ccReg::FT_FILTER:
+      LOGGER(PACKAGE).error("Unimplemented filter type used in getDetail(): FT_FILTER");
+      break;
+    case ccReg::FT_OBJ:
+      LOGGER(PACKAGE).error("Unimplemented filter type used in getDetail(): FT_OBJ");
+      break;
+    case ccReg::FT_STATEMENTHEAD:
+      LOGGER(PACKAGE).error("Unimplemented filter type used in getDetail(): FT_STATEMENTHEAD");
       break;
     default:
-      throw ccReg::Admin::OBJECT_NOT_FOUND();
+      LOGGER(PACKAGE).error("Invalid filter type used in getDetail()");
       break;
   }
 
@@ -319,7 +335,7 @@ CORBA::Any* ccReg_Session_i::getDetail(ccReg::FilterType _type, ccReg::TID _id) 
     }
     catch(ccReg::Admin::ObjectNotFound& ex)
     {
-        LOGGER(PACKAGE).error("ccReg_Session_i::getDetail ex: ccReg::Admin::ObjectNotFound");
+        LOGGER(PACKAGE).warning("ccReg_Session_i::getDetail ex: ccReg::Admin::ObjectNotFound");
         throw;
     }
     catch (ccReg::Logger::OBJECT_NOT_FOUND) {
@@ -1442,52 +1458,59 @@ Registry::PublicRequest::Detail* ccReg_Session_i::createPublicRequestDetail(Fred
       break;
   }
 
-  switch (_request->getType()) {
-    case Fred::PublicRequest::PRT_AUTHINFO_AUTO_RIF:
+  if (_request->getType() == Fred::PublicRequest::PRT_AUTHINFO_AUTO_RIF) {
       detail->type = Registry::PublicRequest::PRT_AUTHINFO_AUTO_RIF;
-      break;
-    case Fred::PublicRequest::PRT_AUTHINFO_AUTO_PIF:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_AUTHINFO_AUTO_PIF) {
       detail->type = Registry::PublicRequest::PRT_AUTHINFO_AUTO_PIF;
-      break;
-    case Fred::PublicRequest::PRT_AUTHINFO_EMAIL_PIF:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_AUTHINFO_EMAIL_PIF) {
       detail->type = Registry::PublicRequest::PRT_AUTHINFO_EMAIL_PIF;
-      break;
-    case Fred::PublicRequest::PRT_AUTHINFO_POST_PIF:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_AUTHINFO_POST_PIF) {
       detail->type = Registry::PublicRequest::PRT_AUTHINFO_POST_PIF;
-      break;
-    case Fred::PublicRequest::PRT_BLOCK_CHANGES_EMAIL_PIF:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_BLOCK_CHANGES_EMAIL_PIF) {
       detail->type = Registry::PublicRequest::PRT_BLOCK_CHANGES_EMAIL_PIF;
-      break;
-    case Fred::PublicRequest::PRT_BLOCK_CHANGES_POST_PIF:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_BLOCK_CHANGES_POST_PIF) {
       detail->type = Registry::PublicRequest::PRT_BLOCK_CHANGES_POST_PIF;
-      break;
-    case Fred::PublicRequest::PRT_BLOCK_TRANSFER_EMAIL_PIF:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_BLOCK_TRANSFER_EMAIL_PIF) {
       detail->type = Registry::PublicRequest::PRT_BLOCK_TRANSFER_EMAIL_PIF;
-      break;
-    case Fred::PublicRequest::PRT_BLOCK_TRANSFER_POST_PIF:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_BLOCK_TRANSFER_POST_PIF) {
       detail->type = Registry::PublicRequest::PRT_BLOCK_TRANSFER_POST_PIF;
-      break;
-    case Fred::PublicRequest::PRT_UNBLOCK_CHANGES_EMAIL_PIF:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_UNBLOCK_CHANGES_EMAIL_PIF) {
       detail->type = Registry::PublicRequest::PRT_UNBLOCK_CHANGES_EMAIL_PIF;
-      break;
-    case Fred::PublicRequest::PRT_UNBLOCK_CHANGES_POST_PIF:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_UNBLOCK_CHANGES_POST_PIF) {
       detail->type = Registry::PublicRequest::PRT_UNBLOCK_CHANGES_POST_PIF;
-      break;
-    case Fred::PublicRequest::PRT_UNBLOCK_TRANSFER_EMAIL_PIF:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_UNBLOCK_TRANSFER_EMAIL_PIF) {
       detail->type = Registry::PublicRequest::PRT_UNBLOCK_TRANSFER_EMAIL_PIF;
-      break;
-    case Fred::PublicRequest::PRT_UNBLOCK_TRANSFER_POST_PIF:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_UNBLOCK_TRANSFER_POST_PIF) {
       detail->type = Registry::PublicRequest::PRT_UNBLOCK_TRANSFER_POST_PIF;
-      break;
-    case Fred::PublicRequest::PRT_CONDITIONAL_CONTACT_IDENTIFICATION:
-      detail->type = Registry::PublicRequest::PRT_CONDITIONAL_CONTACT_IDENTIFICATION;
-      break;
-    case Fred::PublicRequest::PRT_CONTACT_IDENTIFICATION:
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_MOJEID_CONTACT_CONDITIONAL_IDENTIFICATION) {
+      detail->type = Registry::PublicRequest::PRT_MOJEID_CONTACT_CONDITIONAL_IDENTIFICATION;
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_MOJEID_CONTACT_IDENTIFICATION) {
+      detail->type = Registry::PublicRequest::PRT_MOJEID_CONTACT_IDENTIFICATION;
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_CONTACT_CONDITIONAL_IDENTIFICATION ) {
+      detail->type = Registry::PublicRequest::PRT_CONTACT_CONDITIONAL_IDENTIFICATION ;
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_CONTACT_IDENTIFICATION) {
       detail->type = Registry::PublicRequest::PRT_CONTACT_IDENTIFICATION;
-      break;
-    case Fred::PublicRequest::PRT_CONTACT_VALIDATION:
-      detail->type = Registry::PublicRequest::PRT_CONTACT_VALIDATION;
-      break;
+  }
+  else if (_request->getType() == Fred::PublicRequest::PRT_MOJEID_CONTACT_VALIDATION) {
+      detail->type = Registry::PublicRequest::PRT_MOJEID_CONTACT_VALIDATION;
+  }
+  else {
+      throw std::runtime_error("unknown public request type");
   }
 
   detail->createTime = DUPSTRDATE(_request->getCreateTime);

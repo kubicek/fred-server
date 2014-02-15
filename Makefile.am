@@ -32,7 +32,6 @@ CLEANFILES = \
 		config/server.conf \
 		config/hpmail.conf \
 		init-scripts/fred-server \
-		util/decimal/mpdecimal-2.2/mpdecimal.h \
 		src/corba/MessagesSK.cc \
 		src/corba/MessagesDynSK.cc \
 		src/corba/MessagesSK.h \
@@ -41,6 +40,10 @@ CLEANFILES = \
 		src/corba/MojeIDDynSK.cc \
 		src/corba/MojeIDSK.h \
 		src/corba/MojeID.hh \
+		src/corba/AdministrativeBlockingSK.cc \
+		src/corba/AdministrativeBlockingDynSK.cc \
+		src/corba/AdministrativeBlockingSK.h \
+		src/corba/AdministrativeBlocking.hh \
 		src/corba/FileManagerSK.cc \
 		src/corba/FileManagerDynSK.cc \
 		src/corba/FileManagerSK.h \
@@ -88,7 +91,11 @@ CLEANFILES = \
 		src/corba/ZoneGeneratorSK.cc \
 		src/corba/ZoneGeneratorDynSK.cc \
 		src/corba/ZoneGeneratorSK.h \
-		src/corba/ZoneGenerator.hh
+		src/corba/ZoneGenerator.hh \
+		src/corba/ContactVerificationSK.cc \
+		src/corba/ContactVerificationDynSK.cc \
+		src/corba/ContactVerification.hh
+
 
 
 fredconfdir = $(sysconfdir)/fred
@@ -98,9 +105,7 @@ rcconfdir = $(sysconfdir)/init.d
 EXTRA_DIST = \
 		fred-server.spec \
 		util/sms_send.bash \
-		tests/test-file.pdf \
-		util/decimal/mpdecimal-2.2/README.txt \
-		util/decimal/mpdecimal-2.2/LICENSE.txt
+		tests/test-file.pdf
 
 dist_fredconf_DATA = \
 		config/server.conf \
@@ -149,6 +154,7 @@ noinst_HEADERS = \
 		util/cfg/handle_registry_args.h \
 		util/cfg/config_handler_decl.h \
 		util/cfg/handle_mojeid_args.h \
+		util/cfg/handle_administrativeblocking_args.h \
 		util/cfg/handle_adifd_args.h \
 		util/cfg/handle_logd_args.h \
 		util/cfg/handle_rifd_args.h \
@@ -156,10 +162,18 @@ noinst_HEADERS = \
 		util/cfg/check_args.h \
 		util/cfg/validate_args.h \
 		util/cfg/handle_sms_args.h \
+		util/cfg/handle_contactverification_args.h \
 		util/types/optional.h \
 		util/types/optional_from_program_options.h \
 		util/types/money.h \
-		tests/exception-test.h
+		tests/exception-test.h \
+		util/factory.h \
+		util/factory_check.h \
+		util/map_get.h \
+		src/corba/common_wrappers.h \
+		src/corba/contact_verification/corba_conversion.h \
+		util/optional_value.h \
+		util/output_indenter.h
 
 
 noinst_LIBRARIES = \
@@ -172,7 +186,6 @@ noinst_LIBRARIES = \
 		src/fredlib/libfred.a \
 		src/fredlib/messages/libmessages.a \
 		src/fredlib/requests/librequests.a \
-		src/fredlib/mojeid/libmojeid.a \
 		src/fredlib/banking/libbanking.a \
 		src/corba/libcorba.a \
 		src/corba/libcorbamessages.a \
@@ -182,7 +195,6 @@ noinst_LIBRARIES = \
 		src/corba/libmailer.a \
 		src/corba/admin/libadmin_impl.a \
 		src/corba/whois/libwhois_impl.a \
-		util/decimal/libmpdec.a \
 		src/corba/epp/libepp_impl.a \
 		src/corba/log/liblog_impl.a \
 		util/hp/libhp.a \
@@ -196,7 +208,10 @@ noinst_LIBRARIES = \
 		src/corba/libcorbatechcheck.a \
 		src/corba/libcorbaepp.a \
 		src/corba/libcorbazonegenerator.a \
-		src/fredlib/public_request/libpublic_request.a
+		src/corba/libcorbaadministrativeblocking.a \
+		src/fredlib/public_request/libpublic_request.a \
+		src/fredlib/contact_verification/libcontact_verification.a \
+		src/corba/libcorbacontactverification.a
 
 
 noinst_PROGRAMS = \
@@ -224,7 +239,8 @@ sbin_PROGRAMS = \
 #
 util_libutil_a_SOURCES = \
 		util/random.cc \
-		util/util.cc
+		util/util.cc \
+		util/output_indenter.cc
 #
 # util/libutil.a
 
@@ -260,7 +276,8 @@ util_log_test_log_LDFLAGS = \
 util_log_test_log_LDADD = \
 		util/log/liblog.a \
 		$(BOOST_DATE_TIME_LIB) \
-		$(BOOST_THREAD_LIB)
+		$(BOOST_THREAD_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # util/log/test-log
 
@@ -361,7 +378,8 @@ util_db_test_db_LDADD = \
 		util/db/libdb.a \
 		$(BOOST_DATE_TIME_LIB) \
 		$(BOOST_THREAD_LIB) \
-		$(POSTGRESQL_LIB)
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # util/db/test-db
 
@@ -421,7 +439,8 @@ util_db_test_mockdb_LDADD = \
 		util/log/liblog.a \
 		util/types/libtypes.a \
 		$(BOOST_DATE_TIME_LIB) \
-		$(BOOST_THREAD_LIB)
+		$(BOOST_THREAD_LIB) \
+		$(BOOST_SYSTEM_LIB)
 
 #
 # util/db/mock
@@ -474,60 +493,6 @@ util_hp_crc32_LDADD = \
 		$(BOOST_DATE_TIME_LIB)
 #
 # util/hp/crc32
-
-
-# util/decimal/libmpdec.a
-#
-MPD_HEADER = @MPD_HEADER@
-MPD_WARN = @MPD_WARN@
-MPD_CONFIG = @MPD_CONFIG@
-
-util_decimal_libmpdec_a_CFLAGS = \
-		-I $(top_srcdir)/util/decimal/mpdecimal-2.2 \
-		-I $(top_builddir)/util/decimal/mpdecimal-2.2 \
-		$(CONFIGURE_CFLAGS)
-
-util_decimal_libmpdec_a_SOURCES = \
-		util/decimal/mpdecimal-2.2/basearith.c \
-		util/decimal/mpdecimal-2.2/context.c \
-		util/decimal/mpdecimal-2.2/constants.c \
-		util/decimal/mpdecimal-2.2/convolute.c \
-		util/decimal/mpdecimal-2.2/crt.c \
-		util/decimal/mpdecimal-2.2/mpdecimal.c \
-		util/decimal/mpdecimal-2.2/mpsignal.c \
-		util/decimal/mpdecimal-2.2/difradix2.c \
-		util/decimal/mpdecimal-2.2/fnt.c \
-		util/decimal/mpdecimal-2.2/fourstep.c \
-		util/decimal/mpdecimal-2.2/io.c \
-		util/decimal/mpdecimal-2.2/memory.c \
-		util/decimal/mpdecimal-2.2/numbertheory.c \
-		util/decimal/mpdecimal-2.2/sixstep.c \
-		util/decimal/mpdecimal-2.2/transpose.c \
-		util/decimal/mpdecimal-2.2/mptypes.h \
-		util/decimal/mpdecimal-2.2/umodarith.h \
-		util/decimal/mpdecimal-2.2/basearith.h \
-		util/decimal/mpdecimal-2.2/fnt.h \
-		util/decimal/mpdecimal-2.2/memory.h \
-		util/decimal/mpdecimal-2.2/mpdecimal32vc.h \
-		util/decimal/mpdecimal-2.2/convolute.h \
-		util/decimal/mpdecimal-2.2/difradix2.h \
-		util/decimal/mpdecimal-2.2/io.h \
-		util/decimal/mpdecimal-2.2/mpdecimal64vc.h \
-		util/decimal/mpdecimal-2.2/numbertheory.h \
-		util/decimal/mpdecimal-2.2/vccompat.h \
-		util/decimal/mpdecimal-2.2/constants.h \
-		util/decimal/mpdecimal-2.2/transpose.h \
-		util/decimal/mpdecimal-2.2/bits.h \
-		util/decimal/mpdecimal-2.2/fourstep.h \
-		util/decimal/mpdecimal-2.2/sixstep.h \
-		util/decimal/mpdecimal-2.2/vcstdint.h \
-		util/decimal/mpdecimal-2.2/crt.h \
-		util/decimal/mpdecimal-2.2/docstrings.h \
-		util/decimal/mpdecimal-2.2/mptest.h \
-		util/decimal/mpdecimal-2.2/typearith.h \
-		util/decimal/mpdecimal-2.2/vcdiv64.asm
-#
-# util/decimal/libmpdec.a
 
 
 # src/old_utils/liboldutils.a
@@ -617,7 +582,8 @@ src_model_test_model_LDADD = \
 		$(BOOST_DATE_TIME_LIB) \
 		$(BOOST_THREAD_LIB) \
 		$(BOOST_SERIALIZATION_LIB) \
-		$(POSTGRESQL_LIB)
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # src/model/test-model
 
@@ -710,7 +676,90 @@ src_fredlib_libfred_a_SOURCES = \
 		src/fredlib/common_diff.cc \
 		src/fredlib/common_diff.h \
 		src/fredlib/reminder.cc \
-		src/fredlib/reminder.h
+		src/fredlib/reminder.h \
+		src/fredlib/opcontext.cc \
+		src/fredlib/opcontext.h \
+		src/fredlib/contact/copy_contact.h \
+		src/fredlib/contact/copy_contact.cc \
+		src/fredlib/domain/update_domain.h \
+		src/fredlib/domain/update_domain.cc \
+		src/fredlib/domain/info_domain_data.h \
+		src/fredlib/domain/info_domain_data.cc \
+		src/fredlib/domain/info_domain.h \
+		src/fredlib/domain/info_domain.cc \
+		src/fredlib/domain/info_domain_history.h \
+		src/fredlib/domain/info_domain_history.cc \
+		src/fredlib/domain/info_domain_compare.h \
+		src/fredlib/domain/info_domain_compare.cc \
+		src/fredlib/domain/enum_validation_extension.h \
+		src/fredlib/nsset/update_nsset.h \
+		src/fredlib/nsset/update_nsset.cc \
+		src/fredlib/nsset/info_nsset.h \
+		src/fredlib/nsset/info_nsset.cc \
+		src/fredlib/nsset/info_nsset_history.h \
+		src/fredlib/nsset/info_nsset_history.cc \
+		src/fredlib/nsset/info_nsset_data.h \
+		src/fredlib/nsset/info_nsset_data.cc \
+		src/fredlib/nsset/info_nsset_compare.h \
+		src/fredlib/nsset/info_nsset_compare.cc \
+		src/fredlib/keyset/update_keyset.h \
+		src/fredlib/keyset/keyset_dns_key.h \
+		src/fredlib/keyset/update_keyset.cc \
+		src/fredlib/keyset/create_keyset.cc \
+		src/fredlib/keyset/create_keyset.h \
+		src/fredlib/keyset/info_keyset_data.h \
+		src/fredlib/keyset/info_keyset_data.cc \
+		src/fredlib/keyset/info_keyset.h \
+		src/fredlib/keyset/info_keyset.cc \
+		src/fredlib/keyset/info_keyset_history.h \
+		src/fredlib/keyset/info_keyset_history.cc \
+		src/fredlib/keyset/info_keyset_compare.h \
+		src/fredlib/keyset/info_keyset_compare.cc \
+		src/fredlib/contact/delete_contact.h \
+		src/fredlib/contact/delete_contact.cc \
+		src/fredlib/contact/info_contact_data.h \
+		src/fredlib/contact/info_contact_data.cc \
+		src/fredlib/contact/info_contact.h \
+		src/fredlib/contact/info_contact.cc \
+		src/fredlib/contact/info_contact_history.h \
+		src/fredlib/contact/info_contact_history.cc \
+		src/fredlib/contact/info_contact_compare.h \
+		src/fredlib/contact/info_contact_compare.cc \
+		src/fredlib/object/object.h \
+		src/fredlib/object/object.cc \
+		src/fredlib/poll/create_poll_message.h \
+		src/fredlib/poll/create_poll_message.cc \
+		src/fredlib/poll/create_update_object_poll_message.h \
+		src/fredlib/poll/create_update_object_poll_message.cc \
+		src/fredlib/poll/create_delete_contact_poll_message.h \
+		src/fredlib/poll/create_delete_contact_poll_message.cc \
+		src/fredlib/opexception.h \
+		src/fredlib/contact/merge_contact.h \
+		src/fredlib/contact/merge_contact.cc \
+		src/fredlib/contact/create_contact.cc \
+		src/fredlib/contact/create_contact.h \
+		src/fredlib/nsset/create_nsset.cc \
+		src/fredlib/nsset/create_nsset.h \
+		src/fredlib/nsset/nsset_dns_host.h \
+		src/fredlib/domain/create_domain.cc \
+		src/fredlib/domain/create_domain.h \
+		src/fredlib/contact/merge_contact_selection.cc \
+		src/fredlib/contact/merge_contact_selection.h \
+		src/fredlib/contact/find_contact_duplicates.cc \
+		src/fredlib/contact/find_contact_duplicates.h \
+		src/fredlib/contact/merge_contact_email_notification_data.cc \
+		src/fredlib/contact/merge_contact_email_notification_data.h \
+		src/fredlib/domain/delete_domain.h \
+		src/fredlib/domain/delete_domain.cc \
+		src/fredlib/domain/domain_name.h \
+		src/fredlib/domain/domain_name.cc \
+		src/fredlib/zone/zone.h \
+		src/fredlib/zone/zone.cc \
+		src/fredlib/domain/domain_name.h \
+		src/fredlib/domain/domain_name.cc \
+		src/fredlib/registrar/get_registrar_handles.cc \
+		src/fredlib/registrar/get_registrar_handles.h
+
 #
 # src/fredlib/libfred.a
 
@@ -722,9 +771,10 @@ src_fredlib_public_request_libpublic_request_a_SOURCES = \
 		src/fredlib/public_request/public_request.h \
 		src/fredlib/public_request/public_request_impl.cc \
 		src/fredlib/public_request/public_request_impl.h \
+		src/fredlib/public_request/public_request_authinfo_impl.cc \
 		src/fredlib/public_request/public_request_authinfo_impl.h \
-		src/fredlib/public_request/public_request_block_impl.h \
-		src/fredlib/public_request/public_request_verification_impl.h
+		src/fredlib/public_request/public_request_block_impl.cc \
+		src/fredlib/public_request/public_request_block_impl.h
 #
 # src/fredlib/public_request/libpublic_request.a
 
@@ -794,21 +844,6 @@ src_fredlib_requests_librequests_a_SOURCES = \
 # src/fredlib/requests/librequests.a
 
 
-# src/fredlib/mojeid/libmojeid.a
-#
-src_fredlib_mojeid_libmojeid_a_SOURCES = \
-		src/fredlib/mojeid/contact.h \
-		src/fredlib/mojeid/contact.cc \
-		src/fredlib/mojeid/nullable.h \
-		src/fredlib/mojeid/request.h \
-		src/fredlib/mojeid/mojeid_data_validation.h \
-		src/fredlib/mojeid/mojeid_data_validation.cc \
-		src/fredlib/mojeid/mojeid_contact_states.h \
-		src/fredlib/mojeid/mojeid_disclose_policy.h
-#
-# src/fredlib/mojeid/libmojeid.a
-
-
 # src/fredlib/notifier/libnotifier.a
 #
 src_fredlib_notifier_libnotifier_a_SOURCES = \
@@ -822,9 +857,33 @@ src_fredlib_notifier_libnotifier_a_SOURCES = \
 # src/fredlib/notifier/libnotifier.a
 
 
+# src/fredlib/contact_verification/libcontact_verification.a
+#
+src_fredlib_contact_verification_libcontact_verification_a_SOURCES = \
+		src/contact_verification/public_request_contact_verification_impl.cc \
+		src/contact_verification/public_request_contact_verification_impl.h \
+		util/db/nullable.h \
+		src/fredlib/contact_verification/contact.h \
+		src/fredlib/contact_verification/contact.cc \
+		src/fredlib/contact_verification/contact_verification_checkers.h \
+		src/fredlib/contact_verification/contact_verification_checkers.cc \
+		src/fredlib/contact_verification/contact_conditional_identification_impl.cc \
+		src/fredlib/contact_verification/contact_conditional_identification_impl.h \
+		src/fredlib/contact_verification/contact_identification_impl.cc \
+		src/fredlib/contact_verification/contact_identification_impl.h \
+		src/fredlib/contact_verification/contact_verification_validators.cc \
+		src/fredlib/contact_verification/contact_verification_validators.h \
+		src/fredlib/contact_verification/contact_verification_password.cc \
+		src/fredlib/contact_verification/contact_verification_password.h \
+		src/fredlib/contact_verification/contact_validator.h
+#
+# src/fredlib/contact_verification/libcontact_verification.a
+
+
 BUILT_SOURCES = \
 		src/corba/MessagesSK.cc \
 		src/corba/MojeIDSK.cc \
+		src/corba/AdministrativeBlockingSK.cc \
 		src/corba/FileManagerSK.cc \
 		src/corba/MailerSK.cc \
 		src/corba/ZoneSK.cc \
@@ -835,7 +894,8 @@ BUILT_SOURCES = \
 		src/corba/LoggerSK.cc \
 		src/corba/TechCheckSK.cc \
 		src/corba/EPPSK.cc \
-		src/corba/ZoneGeneratorSK.cc
+		src/corba/ZoneGeneratorSK.cc \
+		src/corba/ContactVerificationSK.cc
 
 
 # src/corba/libcorba.a
@@ -932,6 +992,17 @@ nodist_src_corba_libcorbazonegenerator_a_SOURCES = \
 		src/corba/ZoneGeneratorSK.cc \
 		src/corba/ZoneGeneratorDynSK.cc \
 		src/corba/ZoneGenerator.hh
+
+nodist_src_corba_libcorbacontactverification_a_SOURCES = \
+		src/corba/ContactVerificationSK.cc \
+		src/corba/ContactVerificationDynSK.cc \
+		src/corba/ContactVerification.hh
+
+nodist_src_corba_libcorbaadministrativeblocking_a_SOURCES = \
+		src/corba/AdministrativeBlockingSK.cc \
+		src/corba/AdministrativeBlockingDynSK.cc \
+		src/corba/AdministrativeBlocking.hh
+
 #
 # nodist corba libs
 
@@ -943,6 +1014,9 @@ src/corba/MessagesSK.cc: $(IDLDIR)/Messages.idl
 
 src/corba/MojeIDSK.cc: $(IDLDIR)/MojeID.idl
 		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/MojeID.idl
+
+src/corba/AdministrativeBlockingSK.cc: $(IDLDIR)/AdministrativeBlocking.idl
+		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/AdministrativeBlocking.idl
 
 src/corba/FileManagerSK.cc: $(IDLDIR)/FileManager.idl $(IDLDIR)/_dataTypes.idl
 		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/FileManager.idl
@@ -979,6 +1053,9 @@ src/corba/EPPSK.cc: $(IDLDIR)/EPP.idl $(IDLDIR)/_dataTypes.idl
 
 src/corba/ZoneGeneratorSK.cc: $(IDLDIR)/ZoneGenerator.idl $(IDLDIR)/_dataTypes.idl
 		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/ZoneGenerator.idl
+
+src/corba/ContactVerificationSK.cc: $(IDLDIR)/ContactVerification.idl
+		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/ContactVerification.idl
 #
 # idl build
 
@@ -1052,6 +1129,8 @@ src_corba_whois_libwhois_impl_a_SOURCES = \
 # src/corba/epp/libepp_impl.a
 #
 src_corba_epp_libepp_impl_a_SOURCES = \
+		src/fredlib/contact_verification/cancel_contact_verification.cc \
+		src/fredlib/contact_verification/cancel_contact_verification.h \
 		src/corba/epp/epp_session.h \
 		src/corba/epp/epp_session.cc \
 		src/corba/epp/epp_impl.cc \
@@ -1096,16 +1175,15 @@ src_corba_fred_rifd_LDADD = \
 		src/corba/libcorbadatatypes.a \
 		src/corba/libcorba.a \
 		src/fredlib/public_request/libpublic_request.a \
-		src/fredlib/mojeid/libmojeid.a \
-		src/fredlib/messages/libmessages.a \
 		src/fredlib/libfred.a \
+		src/fredlib/messages/libmessages.a \
 		src/model/libmodel.a \
 		util/db/libdb.a \
 		util/types/libtypes.a \
 		util/log/liblog.a \
 		src/old_utils/liboldutils.a \
 		util/libutil.a \
-		util/decimal/libmpdec.a -lm \
+		-lmpdec -lm \
 		$(OMNIORB4_LIBS) \
 		$(LIBIDN_LIBS) \
 		$(BOOST_PROGRAM_OPTIONS_LIB) \
@@ -1114,7 +1192,8 @@ src_corba_fred_rifd_LDADD = \
 		$(BOOST_THREAD_LIB) \
 		$(BOOST_SERIALIZATION_LIB) \
 		$(XML2_LIBS) \
-		$(POSTGRESQL_LIB)
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # src/corba/fred-rifd
 
@@ -1122,7 +1201,60 @@ src_corba_fred_rifd_LDADD = \
 # src/corba/fred-adifd
 #
 src_corba_fred_adifd_SOURCES = \
-		src/corba/fred-adifd.cc
+		src/mojeid/mojeid_validators.cc \
+		src/mojeid/mojeid_validators.h \
+		src/mojeid/mojeid_contact_transfer_request_impl.cc \
+		src/mojeid/public_request_verification_impl.cc \
+		src/corba/fred-adifd.cc \
+		src/admin_block/administrativeblocking.cc \
+		src/admin_block/administrativeblocking.h \
+		src/fredlib/object_state/get_blocking_status_desc_list.cc \
+		src/fredlib/object_state/get_blocking_status_desc_list.h \
+		src/fredlib/object_state/cancel_object_state_request.cc \
+		src/fredlib/object_state/cancel_object_state_request.h \
+		src/fredlib/object_state/cancel_object_state_request_id.cc \
+		src/fredlib/object_state/cancel_object_state_request_id.h \
+		src/fredlib/object_state/create_object_state_request.cc \
+		src/fredlib/object_state/create_object_state_request.h \
+		src/fredlib/object_state/create_object_state_request_id.cc \
+		src/fredlib/object_state/create_object_state_request_id.h \
+		src/fredlib/object_state/get_object_state_id_map.cc \
+		src/fredlib/object_state/get_object_state_id_map.h \
+		src/fredlib/object_state/create_admin_object_block_request.cc \
+		src/fredlib/object_state/create_admin_object_block_request.h \
+		src/fredlib/object_state/create_admin_object_block_request_id.cc \
+		src/fredlib/object_state/create_admin_object_block_request_id.h \
+		src/fredlib/object_state/create_admin_object_state_restore_request.cc \
+		src/fredlib/object_state/create_admin_object_state_restore_request.h \
+		src/fredlib/object_state/create_admin_object_state_restore_request_id.cc \
+		src/fredlib/object_state/create_admin_object_state_restore_request_id.h \
+		src/fredlib/object_state/clear_admin_object_state_request_id.cc \
+		src/fredlib/object_state/clear_admin_object_state_request_id.h \
+		src/fredlib/object_state/clear_object_state_request.cc \
+		src/fredlib/object_state/clear_object_state_request.h \
+		src/fredlib/object_state/clear_object_state_request_id.cc \
+		src/fredlib/object_state/clear_object_state_request_id.h \
+		src/fredlib/domain/create_domain_name_blacklist.cc \
+		src/fredlib/domain/create_domain_name_blacklist.h \
+		src/fredlib/domain/create_domain_name_blacklist_id.cc \
+		src/fredlib/domain/create_domain_name_blacklist_id.h \
+		src/fredlib/domain/update_domain.cc \
+		src/fredlib/domain/update_domain.h \
+		src/fredlib/contact/copy_contact.cc \
+		src/fredlib/contact/copy_contact.h \
+		src/fredlib/contact/info_contact_data.h \
+		src/fredlib/contact/info_contact_data.cc \
+		src/fredlib/contact/info_contact.h \
+		src/fredlib/contact/info_contact.cc \
+		src/fredlib/contact/create_contact.h \
+		src/fredlib/contact/create_contact.cc \
+		src/fredlib/opcontext.cc \
+		src/fredlib/opcontext.h \
+		src/corba/nameservice.cc \
+		src/corba/mailer_manager.cc \
+		src/corba/admin_block/corba_conversion.h \
+		src/corba/admin_block/server_i.cc \
+		src/corba/admin_block/server_i.h
 
 src_corba_fred_adifd_LDADD = \
 		src/corba/admin/libadmin_impl.a \
@@ -1136,9 +1268,10 @@ src_corba_fred_adifd_LDADD = \
 		src/corba/libcorbalogger.a \
 		src/corba/libcorbaepp.a \
 		src/corba/libfilemanager.a \
+		src/corba/libcorbaadministrativeblocking.a \
 		src/fredlib/requests/librequests.a \
+		src/fredlib/contact_verification/libcontact_verification.a \
 		src/fredlib/public_request/libpublic_request.a \
-		src/fredlib/mojeid/libmojeid.a \
 		src/fredlib/messages/libmessages.a \
 		src/fredlib/banking/libbanking.a \
 		src/fredlib/libfred.a \
@@ -1148,7 +1281,7 @@ src_corba_fred_adifd_LDADD = \
 		util/log/liblog.a \
 		src/old_utils/liboldutils.a \
 		util/libutil.a \
-		util/decimal/libmpdec.a -lm \
+		-lmpdec -lm \
 		$(OMNIORB4_LIBS) \
 		$(LIBIDN_LIBS) \
 		$(BOOST_PROGRAM_OPTIONS_LIB) \
@@ -1157,7 +1290,8 @@ src_corba_fred_adifd_LDADD = \
 		$(BOOST_THREAD_LIB) \
 		$(BOOST_SERIALIZATION_LIB) \
 		$(XML2_LIBS) \
-		$(POSTGRESQL_LIB)
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # src/corba/fred-adifd
 
@@ -1165,6 +1299,15 @@ src_corba_fred_adifd_LDADD = \
 # src/corba/fred-pifd
 #
 src_corba_fred_pifd_SOURCES = \
+		src/mojeid/mojeid_validators.cc \
+		src/mojeid/mojeid_validators.h \
+		src/mojeid/mojeid_contact_transfer_request_impl.cc \
+		src/mojeid/public_request_verification_impl.cc \
+		src/corba/contact_verification/contact_verification_i.cc \
+		src/corba/contact_verification/contact_verification_i.h \
+		src/contact_verification/contact_verification_impl.cc \
+		src/contact_verification/contact_verification_impl.h \
+		src/contact_verification/public_request_contact_verification_wrapper.h \
 		src/corba/fred-pifd.cc
 
 src_corba_fred_pifd_LDADD = \
@@ -1181,11 +1324,12 @@ src_corba_fred_pifd_LDADD = \
 		src/corba/libcorbaepp.a \
 		src/corba/libfilemanager.a \
 		src/corba/libcorbalogger.a \
+		src/fredlib/contact_verification/libcontact_verification.a \
+		src/corba/libcorbacontactverification.a \
 		src/fredlib/requests/librequests.a \
 		src/fredlib/banking/libbanking.a \
 		src/fredlib/messages/libmessages.a \
 		src/fredlib/public_request/libpublic_request.a \
-		src/fredlib/mojeid/libmojeid.a \
 		src/fredlib/libfred.a \
 		src/model/libmodel.a \
 		util/db/libdb.a \
@@ -1193,7 +1337,7 @@ src_corba_fred_pifd_LDADD = \
 		src/old_utils/liboldutils.a \
 		util/log/liblog.a \
 		util/libutil.a \
-		util/decimal/libmpdec.a -lm \
+		-lmpdec -lm \
 		$(OMNIORB4_LIBS) \
 		$(LIBIDN_LIBS) \
 		$(BOOST_PROGRAM_OPTIONS_LIB) \
@@ -1202,7 +1346,8 @@ src_corba_fred_pifd_LDADD = \
 		$(BOOST_THREAD_LIB) \
 		$(BOOST_SERIALIZATION_LIB) \
 		$(XML2_LIBS) \
-		$(POSTGRESQL_LIB)
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # src/corba/fred-pifd
 
@@ -1231,7 +1376,7 @@ src_corba_fred_logd_LDADD = \
 		util/log/liblog.a \
 		util/libutil.a \
 		src/old_utils/liboldutils.a \
-		util/decimal/libmpdec.a -lm \
+		-lmpdec -lm \
 		$(OMNIORB4_LIBS) \
 		$(LIBIDN_LIBS) \
 		$(BOOST_PROGRAM_OPTIONS_LIB) \
@@ -1240,7 +1385,8 @@ src_corba_fred_logd_LDADD = \
 		$(BOOST_THREAD_LIB) \
 		$(BOOST_SERIALIZATION_LIB) \
 		$(XML2_LIBS) \
-		$(POSTGRESQL_LIB)
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # src/corba/fred-logd
 
@@ -1279,7 +1425,8 @@ src_corba_messages_fred_msgd_LDADD = \
 		$(BOOST_DATE_TIME_LIB) \
 		$(BOOST_REGEX_LIB) \
 		$(BOOST_THREAD_LIB) \
-		$(POSTGRESQL_LIB)
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # src/corba/messages/fred-msgd
 
@@ -1287,14 +1434,26 @@ src_corba_messages_fred_msgd_LDADD = \
 # src/corba/mojeid/fred-mifd
 #
 src_corba_mojeid_fred_mifd_SOURCES = \
+		src/mojeid/mojeid_validators.cc \
+		src/mojeid/mojeid_validators.h \
+		src/mojeid/request.h \
+		src/mojeid/mojeid_contact_transfer_request_impl.h \
+		src/mojeid/mojeid_contact_transfer_request_impl.cc \
+		src/mojeid/public_request_verification_impl.cc \
+		src/mojeid/public_request_verification_impl.h \
+		src/mojeid/mojeid_notifier.cc \
+		src/mojeid/mojeid_notifier.h \
+		src/mojeid/mojeid_contact_states.h \
+		src/mojeid/mojeid_disclose_policy.h \
+		src/mojeid/mojeid_identification.h \
+		src/mojeid/mojeid.cc \
+		src/mojeid/mojeid.h \
 		src/corba/nameservice.cc \
 		src/corba/mailer_manager.cc \
-		src/corba/mojeid/mojeid_impl.h \
-		src/corba/mojeid/mojeid_impl.cc \
-		src/corba/mojeid/mojeid_identification.h \
-		src/corba/mojeid/mojeid_notifier.cc \
-		src/corba/mojeid/mojeid_notifier.h \
+		src/corba/corba_auto_garbaged_list.h \
 		src/corba/mojeid/corba_conversion.h \
+		src/corba/mojeid/server_i.cc \
+		src/corba/mojeid/server_i.h \
 		src/corba/mojeid/fred-mifd.cc
 
 nodist_src_corba_mojeid_fred_mifd_SOURCES = \
@@ -1311,15 +1470,15 @@ src_corba_mojeid_fred_mifd_LDADD = \
 		src/fredlib/notifier/libnotifier.a \
 		src/fredlib/libfred.a \
 		src/model/libmodel.a \
+		src/fredlib/contact_verification/libcontact_verification.a \
 		src/fredlib/public_request/libpublic_request.a \
-		src/fredlib/mojeid/libmojeid.a \
 		src/fredlib/messages/libmessages.a \
 		util/libutil.a \
 		util/log/liblog.a \
 		util/types/libtypes.a \
 		util/db/libdb.a \
 		src/old_utils/liboldutils.a \
-		util/decimal/libmpdec.a -lm \
+		-lmpdec -lm \
 		$(LIBIDN_LIBS) \
 		$(BOOST_PROGRAM_OPTIONS_LIB) \
 		$(OMNIORB4_LIBS) \
@@ -1327,7 +1486,8 @@ src_corba_mojeid_fred_mifd_LDADD = \
 		$(BOOST_REGEX_LIB) \
 		$(BOOST_THREAD_LIB) \
 		$(BOOST_SERIALIZATION_LIB) \
-		$(POSTGRESQL_LIB)
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # src/corba/mojeid/fred-mifd
 
@@ -1390,7 +1550,17 @@ src_cli_admin_fred_admin_SOURCES = \
 		src/cli_admin/charge_params.h \
 		src/cli_admin/chargeclient.cc \
 		src/cli_admin/chargeclient.h \
-		src/cli_admin/charge_client_impl.h
+		src/cli_admin/charge_client_impl.h \
+		src/admin/contact/merge_contact.cc \
+		src/admin/contact/merge_contact.h \
+		src/admin/contact/merge_contact_logger.cc \
+		src/admin/contact/merge_contact_logger.h \
+		src/admin/contact/merge_contact_auto_procedure.cc \
+		src/admin/contact/merge_contact_auto_procedure.h \
+		src/admin/contact/merge_contact_reporting.cc \
+		src/admin/contact/merge_contact_reporting.h \
+		src/cli_admin/domain_name_validation_params.h \
+		src/cli_admin/domain_name_validation_init.h
 
 src_cli_admin_fred_admin_LDFLAGS = \
 		$(POSTGRESQL_LDFLAGS)
@@ -1416,7 +1586,7 @@ src_cli_admin_fred_admin_LDADD = \
 		src/old_utils/liboldutils.a \
 		util/libutil.a \
 		util/hp/libhp.a \
-		util/decimal/libmpdec.a -lm \
+		-lmpdec -lm \
 		$(BOOST_PROGRAM_OPTIONS_LIB) \
 		$(BOOST_DATE_TIME_LIB) \
 		$(BOOST_REGEX_LIB) \
@@ -1426,7 +1596,8 @@ src_cli_admin_fred_admin_LDADD = \
 		$(LIBIDN_LIBS) \
 		$(BOOST_THREAD_LIB) \
 		$(BOOST_SERIALIZATION_LIB) \
-		$(POSTGRESQL_LIB)
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # src/cli_admin/fred-admin
 
@@ -1462,7 +1633,8 @@ tools_logd_migration_migrate_log_LDADD = \
 		$(BOOST_THREAD_LIB) \
 		$(XML2_LIBS) \
 		$(LIBIDN_LIBS) \
-		$(POSTGRESQL_LIB)
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # tools/logd_migration
 
@@ -1471,7 +1643,8 @@ tools_logd_migration_migrate_log_LDADD = \
 #
 SERVER_TESTS = \
 		tests/test-server \
-		tests/test-exception
+		tests/test-exception \
+		tests/test-blocking
 
 
 # tests/test_server
@@ -1514,8 +1687,40 @@ tests_test_server_SOURCES = \
 		tests/test-invoice2.cc \
 		tests/test-decimal.cc \
 		tests/test-shellcmd.cc \
+		tests/test-contact-verification.cc \
+		tests/test-locking-trigger.cc \
+		tests/test-mojeid.cc \
 		src/corba/epp_corba_client_impl.cc \
-		src/corba/epp_corba_client_impl.h
+		src/corba/epp_corba_client_impl.h \
+		src/contact_verification/contact_verification_impl.cc \
+		src/contact_verification/contact_verification_impl.h \
+		src/fredlib/contact_verification/cancel_contact_verification.cc \
+		src/fredlib/contact_verification/cancel_contact_verification.h \
+		src/mojeid/mojeid_validators.cc \
+		src/mojeid/mojeid_validators.h \
+		src/mojeid/request.h \
+		src/mojeid/mojeid_contact_transfer_request_impl.h \
+		src/mojeid/mojeid_contact_transfer_request_impl.cc \
+		src/mojeid/public_request_verification_impl.cc \
+		src/mojeid/public_request_verification_impl.h \
+		src/mojeid/mojeid.cc \
+		src/mojeid/mojeid.h \
+		src/mojeid/mojeid_notifier.cc \
+		src/mojeid/mojeid_notifier.h \
+		tests/checks.h \
+		tests/test-utils.cc \
+		tests/test-update-nsset.cc \
+		tests/test-update-keyset.cc \
+		tests/test-update-domain.cc \
+		tests/test-delete-contact.cc \
+		tests/test-info-domain.cc \
+		tests/test-merge-contact.cc \
+		tests/test-opexception.cc \
+		tests/test-create-contact.cc \
+		tests/test-info-contact.cc \
+		tests/test-delete-domain.cc \
+		tests/test-create-domain.cc \
+		tests/test-domain-name.cc
 
 tests_test_server_LDFLAGS = \
 		$(POSTGRESQL_LDFLAGS) \
@@ -1523,6 +1728,8 @@ tests_test_server_LDFLAGS = \
 		$(AM_LDFLAGS)
 
 tests_test_server_LDADD = \
+		src/fredlib/notifier/libnotifier.a \
+		src/fredlib/contact_verification/libcontact_verification.a \
 		src/corba/admin/libadmin_impl.a \
 		src/corba/epp/libepp_impl.a \
 		src/corba/libcorba.a \
@@ -1535,7 +1742,6 @@ tests_test_server_LDADD = \
 		util/types/libtypes.a \
 		src/old_utils/liboldutils.a \
 		src/fredlib/requests/librequests.a \
-		src/fredlib/mojeid/libmojeid.a \
 		src/fredlib/banking/libbanking.a \
 		util/log/liblog.a \
 		util/libutil.a \
@@ -1546,6 +1752,7 @@ tests_test_server_LDADD = \
 		src/corba/libfilemanager.a \
 		src/corba/libmailer.a \
 		src/corba/libcorbazonegenerator.a \
+		src/corba/libcorbaadministrativeblocking.a \
 		src/corba/libcorbaepp.a \
 		src/corba/libcorbatechcheck.a \
 		src/corba/libcorbalogger.a \
@@ -1555,7 +1762,7 @@ tests_test_server_LDADD = \
 		src/corba/libcorbafilters.a \
 		src/corba/libcorbadatatypes.a \
 		src/corba/libmailer.a \
-		util/decimal/libmpdec.a -lm \
+		-lmpdec -lm \
 		$(BOOST_PROGRAM_OPTIONS_LIB) \
 		$(BOOST_DATE_TIME_LIB) \
 		$(BOOST_REGEX_LIB) \
@@ -1565,9 +1772,111 @@ tests_test_server_LDADD = \
 		$(BOOST_THREAD_LIB) \
 		$(BOOST_SERIALIZATION_LIB) \
 		$(XML2_LIBS) \
-		$(POSTGRESQL_LIB)
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
 #
 # tests/test_server
+
+
+# tests/test_blocking
+#
+tests_test_blocking_SOURCES = \
+		tests/test-server.cc \
+		tests/test-server.h \
+		src/corba/admin/filter_impl.cc \
+		src/corba/admin/filter_impl.h \
+		tests/tests-common.cc \
+		tests/tests-common.h \
+		src/corba/epp_corba_client_impl.cc \
+		src/corba/epp_corba_client_impl.h \
+		src/contact_verification/contact_verification_impl.cc \
+		src/contact_verification/contact_verification_impl.h \
+		src/fredlib/contact_verification/cancel_contact_verification.cc \
+		src/fredlib/contact_verification/cancel_contact_verification.h \
+		src/mojeid/mojeid_validators.cc \
+		src/mojeid/mojeid_validators.h \
+		src/mojeid/request.h \
+		src/mojeid/mojeid_contact_transfer_request_impl.h \
+		src/mojeid/mojeid_contact_transfer_request_impl.cc \
+		src/mojeid/public_request_verification_impl.cc \
+		src/mojeid/public_request_verification_impl.h \
+		src/mojeid/mojeid.cc \
+		src/mojeid/mojeid.h \
+		src/mojeid/mojeid_notifier.cc \
+		src/mojeid/mojeid_notifier.h \
+		src/fredlib/object_state/clear_admin_object_state_request_id.cc \
+		src/fredlib/object_state/clear_object_state_request_id.cc \
+		src/fredlib/object_state/create_object_state_request_id.cc \
+		src/fredlib/object_state/create_object_state_request.cc \
+		src/fredlib/object_state/create_admin_object_block_request_id.cc \
+		src/fredlib/object_state/create_admin_object_state_restore_request_id.cc \
+		src/fredlib/object_state/cancel_object_state_request_id.cc \
+		src/fredlib/object_state/get_object_state_id_map.cc \
+		src/fredlib/object_state/get_blocking_status_desc_list.cc \
+		src/fredlib/domain/create_domain_name_blacklist_id.cc \
+		tests/checks.h \
+		tests/test-copy-contact.cc \
+		tests/test-create-object-state-request-id.cc \
+		tests/test-create-admin-object-block-request-id.cc \
+		tests/test-create-admin-object-state-restore-request-id.cc \
+		tests/test-cancel-object-state-request-id.cc \
+		tests/test-clear-admin-object-state-request-id.cc \
+		tests/test-create-domain-name-blacklist-id.cc
+
+tests_test_blocking_LDFLAGS = \
+		$(POSTGRESQL_LDFLAGS) \
+		$(BOOST_LDFLAGS) \
+		$(AM_LDFLAGS)
+
+tests_test_blocking_LDADD = \
+		src/fredlib/notifier/libnotifier.a \
+		src/fredlib/contact_verification/libcontact_verification.a \
+		src/corba/admin/libadmin_impl.a \
+		src/corba/epp/libepp_impl.a \
+		src/corba/libcorba.a \
+		src/corba/whois/libwhois_impl.a \
+		src/fredlib/public_request/libpublic_request.a \
+		src/fredlib/libfred.a \
+		src/fredlib/messages/libmessages.a \
+		src/model/libmodel.a \
+		util/db/libdb.a \
+		util/types/libtypes.a \
+		src/old_utils/liboldutils.a \
+		src/fredlib/requests/librequests.a \
+		src/fredlib/banking/libbanking.a \
+		util/log/liblog.a \
+		util/libutil.a \
+		src/corba/libcorbamessages.a \
+		src/corba/libcorbamessages.a \
+		src/corba/libcorbamojeid.a \
+		src/corba/libcorbazone.a \
+		src/corba/libfilemanager.a \
+		src/corba/libmailer.a \
+		src/corba/libcorbazonegenerator.a \
+		src/corba/libcorbaadministrativeblocking.a \
+		src/corba/libcorbaepp.a \
+		src/corba/libcorbatechcheck.a \
+		src/corba/libcorbalogger.a \
+		src/corba/libcorbaadmin.a \
+		src/corba/libcorbawhois.a \
+		src/corba/libcorbaregistry.a \
+		src/corba/libcorbafilters.a \
+		src/corba/libcorbadatatypes.a \
+		src/corba/libmailer.a \
+		-lmpdec -lm \
+		$(BOOST_PROGRAM_OPTIONS_LIB) \
+		$(BOOST_DATE_TIME_LIB) \
+		$(BOOST_REGEX_LIB) \
+		$(OMNIORB4_LIBS) \
+		$(LIBIDN_CFLAGS) \
+		$(LIBIDN_LIBS) \
+		$(BOOST_THREAD_LIB) \
+		$(BOOST_SERIALIZATION_LIB) \
+		$(XML2_LIBS) \
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
+#
+# tests/test_blocking
 
 
 # non-corba tests with overloaded global operator new
@@ -1580,7 +1889,7 @@ tests_test_exception_LDFLAGS = \
 		$(AM_LDFLAGS)
 
 tests_test_exception_LDADD = \
-		util/decimal/libmpdec.a -lm \
+		-lmpdec -lm \
 		$(BOOST_PROGRAM_OPTIONS_LIB) \
 		$(BOOST_DATE_TIME_LIB) \
 		$(BOOST_REGEX_LIB) \
@@ -1588,7 +1897,8 @@ tests_test_exception_LDADD = \
 		$(LIBIDN_LIBS) \
 		$(BOOST_THREAD_LIB) \
 		$(BOOST_SERIALIZATION_LIB) \
-		$(XML2_LIBS)
+		$(XML2_LIBS) \
+		$(BOOST_SYSTEM_LIB)
 #
 # non-corba tests with overloaded global operator new
 

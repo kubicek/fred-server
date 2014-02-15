@@ -2,9 +2,10 @@
 #define CORBA_CONVERT_H_
 
 #include "corba/MojeID.hh"
-#include "fredlib/mojeid/nullable.h"
-#include "fredlib/mojeid/contact.h"
-#include "fredlib/mojeid/mojeid_data_validation.h"
+#include "corba/common_wrappers.h"
+
+#include "fredlib/contact_verification/contact.h"
+#include "fredlib/contact_verification/contact_validator.h"
 
 #include <string>
 #include <boost/algorithm/string.hpp>
@@ -12,19 +13,6 @@
 
 
 using namespace Registry::MojeID;
-
-
-char* corba_wrap_string(const char* _s)
-{
-    return CORBA::string_dup(_s);
-}
-
-
-char* corba_wrap_string(const std::string &_s)
-{
-    return corba_wrap_string(_s.c_str());
-}
-
 
 Date corba_wrap_date(const boost::gregorian::date &_v)
 {
@@ -41,7 +29,6 @@ Date corba_wrap_date(const boost::gregorian::date &_v)
     }
     return d;
 }
-
 
 NullableString* corba_wrap_nullable_string(const Nullable<std::string> &_v)
 {
@@ -99,12 +86,6 @@ NullableDate* corba_wrap_nullable_date(const Nullable<std::string> &_v)
             return new NullableDate(d);
         }
     }
-}
-
-
-std::string corba_unwrap_string(const CORBA::String_member &_s)
-{
-    return static_cast<std::string>(_s);
 }
 
 
@@ -187,9 +168,9 @@ Nullable<std::string> corba_unwrap_nullable_date(const NullableDate *_v)
 }
 
 
-MojeID::Contact corba_unwrap_contact(const Contact &_contact)
+Fred::Contact::Verification::Contact corba_unwrap_contact(const Contact &_contact)
 {
-    MojeID::Contact data;
+    Fred::Contact::Verification::Contact data;
 
     for (unsigned int i = 0; i < _contact.phones.length(); ++i) {
         std::string type = corba_unwrap_string(_contact.phones[i].type);
@@ -239,21 +220,11 @@ MojeID::Contact corba_unwrap_contact(const Contact &_contact)
     data.handle = corba_unwrap_string(_contact.username);
     data.organization = corba_unwrap_nullable_string(_contact.organization);
     data.vat = corba_unwrap_nullable_string(_contact.vat_reg_num);
-    data.auth_info = corba_unwrap_normalize_nullable_string(_contact.auth_info);
-    data.disclosename = true;
-    data.discloseorganization = true;
-    data.discloseaddress = corba_unwrap_nullable_boolean(_contact.disclose_address, true);
-    data.disclosetelephone = corba_unwrap_nullable_boolean(_contact.disclose_phone, false);
-    data.disclosefax = corba_unwrap_nullable_boolean(_contact.disclose_fax, false);
-    data.discloseemail = corba_unwrap_nullable_boolean(_contact.disclose_email, false);
-    data.disclosenotifyemail = corba_unwrap_nullable_boolean(_contact.disclose_notify_email, false);
-    data.disclosevat = corba_unwrap_nullable_boolean(_contact.disclose_vat, false);
-    data.discloseident = corba_unwrap_nullable_boolean(_contact.disclose_ident, false);
 
     return data;
 }
 
-Contact* corba_wrap_contact(const MojeID::Contact &_contact)
+Contact* corba_wrap_contact(const Fred::Contact::Verification::Contact &_contact)
 {
     Contact *data = new Contact();
     data->id           = corba_wrap_nullable_ulonglong(_contact.id);
@@ -268,7 +239,6 @@ Contact* corba_wrap_contact(const MojeID::Contact &_contact)
     data->organization = corba_wrap_nullable_string(_contact.organization);
     data->vat_reg_num  = corba_wrap_nullable_string(_contact.vat);
     data->ssn_type     = corba_wrap_nullable_string(_contact.ssntype);
-    data->auth_info    = corba_wrap_nullable_string(_contact.auth_info);
 
     std::string type = static_cast<std::string>(_contact.ssntype);
     data->id_card_num  = type == "OP"       ? corba_wrap_nullable_string(_contact.ssn) : 0;
@@ -276,16 +246,6 @@ Contact* corba_wrap_contact(const MojeID::Contact &_contact)
     data->vat_id_num   = type == "ICO"      ? corba_wrap_nullable_string(_contact.ssn) : 0;
     data->ssn_id_num   = type == "MPSV"     ? corba_wrap_nullable_string(_contact.ssn) : 0;
     data->birth_date   = type == "BIRTHDAY" ? corba_wrap_nullable_date(_contact.ssn) : 0;
-
-    data->disclose_name         = corba_wrap_nullable_boolean(_contact.disclosename);
-    data->disclose_organization = corba_wrap_nullable_boolean(_contact.discloseorganization);
-    data->disclose_vat          = corba_wrap_nullable_boolean(_contact.disclosevat);
-    data->disclose_ident        = corba_wrap_nullable_boolean(_contact.discloseident);
-    data->disclose_email        = corba_wrap_nullable_boolean(_contact.discloseemail);
-    data->disclose_notify_email = corba_wrap_nullable_boolean(_contact.disclosenotifyemail);
-    data->disclose_address      = corba_wrap_nullable_boolean(_contact.discloseaddress);
-    data->disclose_phone        = corba_wrap_nullable_boolean(_contact.disclosetelephone);
-    data->disclose_fax          = corba_wrap_nullable_boolean(_contact.disclosefax);
 
     data->addresses.length(1);
     data->addresses[0].type         = "DEFAULT";
@@ -326,30 +286,30 @@ Contact* corba_wrap_contact(const MojeID::Contact &_contact)
 
 
 Registry::MojeID::Server::ValidationError corba_wrap_validation_error(
-        const ::MojeID::ValidationError &_value)
+        const Fred::Contact::Verification::ValidationError &_value)
 {
     switch (_value) {
-        case ::MojeID::NOT_AVAILABLE:
+        case Fred::Contact::Verification::NOT_AVAILABLE:
             return Registry::MojeID::Server::NOT_AVAILABLE;
-        case ::MojeID::INVALID:
+        case Fred::Contact::Verification::INVALID:
             return Registry::MojeID::Server::INVALID;
-        case ::MojeID::REQUIRED:
+        case Fred::Contact::Verification::REQUIRED:
             return Registry::MojeID::Server::REQUIRED;
         default:
-            throw Registry::MojeID::Server::INTERNAL_SERVER_ERROR("corba_wrap_validation_error failed");
+            throw std::runtime_error("unknown validation error type");
     }
 }
 
 
 Registry::MojeID::Server::ValidationErrorList_var corba_wrap_validation_error_list(
-        const ::MojeID::FieldErrorMap &_errors)
+        const Fred::Contact::Verification::FieldErrorMap &_errors)
 {
     Registry::MojeID::Server::ValidationErrorList_var cerrors
         = new Registry::MojeID::Server::ValidationErrorList;
     cerrors->length(_errors.size());
 
-    ::MojeID::FieldErrorMap::const_iterator it = _errors.begin();
-    ::MojeID::FieldErrorMap::size_type i = 0;
+    Fred::Contact::Verification::FieldErrorMap::const_iterator it = _errors.begin();
+    Fred::Contact::Verification::FieldErrorMap::size_type i = 0;
     for (; it != _errors.end(); ++it, ++i) {
         cerrors[i].name = corba_wrap_string(it->first);
         cerrors[i].error = corba_wrap_validation_error(it->second);

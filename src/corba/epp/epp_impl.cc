@@ -51,15 +51,21 @@
 #include "old_utils/log.h"
 
 // MailerManager is connected in constructor
+#include "fredlib/common_diff.h"
 #include "fredlib/domain.h"
 #include "fredlib/contact.h"
 #include "fredlib/nsset.h"
 #include "fredlib/keyset.h"
 #include "fredlib/info_buffer.h"
 #include "fredlib/poll.h"
+#include "fredlib/zone.h"
 #include "fredlib/invoicing/invoice.h"
 #include <memory>
 #include "tech_check.h"
+
+#include "util/factory_check.h"
+#include "fredlib/public_request/public_request.h"
+#include "fredlib/public_request/public_request_authinfo_impl.h"
 
 // Notifier
 #include "notifier.h"
@@ -68,6 +74,11 @@
 #include "log/logger.h"
 #include "log/context.h"
 
+//cancel contact verification
+#include "fredlib/contact_verification/cancel_contact_verification.h"
+
+//object states
+#include "object_states.h"
 
 #define FLAG_serverDeleteProhibited 1
 #define FLAG_serverRenewProhibited 2
@@ -106,19 +117,6 @@ static bool testObjectHasState(
 }
 
 
-Database::Connection wrapped_acquire(ccReg_EPP_i *epp)
-{
-
-    try {
-        return Database::Manager::acquire();
-    } catch(...) {
-        epp->ServerInternalError("Cannot connect to DB");
-    }
-
-    /* unreachable code - only for suppress gcc warning */
-    return Database::Manager::acquire();
-}
-
 
 class EPPAction
 {
@@ -131,6 +129,9 @@ class EPPAction
   int code; ///< needed for destructor where Response is invalidated
   EPPNotifier *notifier;
   std::string cltrid;
+  Database::Connection conn_;
+  std::auto_ptr<Database::Transaction> tx_;
+
 public:
   struct ACTION_START_ERROR
   {
@@ -141,16 +142,18 @@ public:
   ) :
     ret(new ccReg::Response()), errors(new ccReg::Errors()), epp(_epp),
     regID(_epp->GetRegistrarID(_clientID)), clientID(_clientID),
-    notifier(0), cltrid(clTRID)
+    notifier(0), cltrid(clTRID), conn_(Database::Manager::acquire()), tx_()
   {
     Logging::Context::push(str(boost::format("action-%1%") % action));
-
-    DBAutoPtr _db( new DB);
-    if (!_db->OpenDatabase(epp->getDatabaseString())) {
-        epp->ServerInternalError("Cannot connect to DB");
+    try {
+        tx_.reset(new Database::Transaction(conn_));
     }
-    db = DBDisconnectPtr(_db.release());
+    catch (...) {
+        db->EndAction(COMMAND_FAILED);
+        epp->ServerInternalError("Cannot start transaction");
+    }
 
+    db.reset(new DB(conn_));
     if (!db->BeginAction(clientID, action, clTRID, xml, requestId)) {
       epp->ServerInternalError("Cannot beginAction");
     }
@@ -160,58 +163,26 @@ public:
       db->EndAction(r->code);
       epp->EppError(r->code, r->msg, r->svTRID, errors);
     }
-    if (!db->BeginTransaction()) {
-      db->EndAction(COMMAND_FAILED);
-      epp->ServerInternalError("Cannot start transaction",
-          CORBA::string_dup(db->GetsvTRID()) );
-    }
+
     code = ret->code = COMMAND_OK;
 
     Logging::Context::push(str(boost::format("%1%") % db->GetsvTRID()));
   }
 
-  ///// TODO hack for new invoicing
-  EPPAction(
-      ccReg_EPP_i *_epp, unsigned long long _clientID, int action, const char *clTRID,
-      const char *xml, Database::Connection conn, unsigned long long requestId
-    ) :
-      ret(new ccReg::Response()), errors(new ccReg::Errors()), epp(_epp),
-      regID(_epp->GetRegistrarID(_clientID)), clientID(_clientID),
-      notifier(0), cltrid(clTRID)
-    {
-      Logging::Context::push(str(boost::format("action-inv-%1%") % action));
-
-      /*
-      DBAutoPtr _db( new DB(conn));
-      db = DBDisconnectPtr(_db.release());
-      */
-      // ConnectionReleaser will take care of disconnect
-      db.reset(new DB(conn));
-
-      if (!db->BeginAction(clientID, action, clTRID, xml, requestId)) {
-        epp->ServerInternalError("Cannot beginAction");
-      }
-      if (!regID) {
-        ret->code = COMMAND_MAX_SESSION_LIMIT;
-        ccReg::Response_var& r(getRet());
-        db->EndAction(r->code);
-        epp->EppError(r->code, r->msg, r->svTRID, errors);
-      }
-      if (!db->BeginTransaction()) {
-        db->EndAction(COMMAND_FAILED);
-        epp->ServerInternalError("Cannot start transaction",
-            CORBA::string_dup(db->GetsvTRID()) );
-      }
-      code = ret->code = COMMAND_OK;
-
-      Logging::Context::push(str(boost::format("%1%") % db->GetsvTRID()));
-    }
 
   ~EPPAction()
   {
     try
     {
-        db->QuitTransaction(code);
+        if (tx_.get()) {
+            /* OMG: insane macro naming condition style */
+            if (CMD_FAILED(code)) {
+                tx_->commit();
+            }
+            else {
+                tx_->rollback();
+            }
+        }
         db->EndAction(code);
 
         if (notifier && (code == COMMAND_OK)) {
@@ -405,7 +376,7 @@ getIdOfKeySet(DBSharedPtr db, const char *handle, bool restricted_handles
 /// replace GetDomainID
 static long int getIdOfDomain(
 DBSharedPtr db, const char *handle, bool lock_epp_commands
-    , bool lock = false, int* zone = NULL)
+    , bool allow_idn, bool lock = false, int* zone = NULL)
 {
   if (lock && !lock_epp_commands) lock = false;
   std::auto_ptr<Fred::Zone::Manager> zm(
@@ -417,7 +388,7 @@ DBSharedPtr db, const char *handle, bool lock_epp_commands
   Fred::NameIdPair nameId;
   long int ret = -1;
   try {
-    switch (dman->checkAvail(handle, nameId, lock)) {
+    switch (dman->checkAvail(handle, nameId, allow_idn, lock )) {
       case Fred::Domain::CA_REGISTRED :
         ret = nameId.id;
         break;
@@ -441,6 +412,244 @@ DBSharedPtr db, const char *handle, bool lock_epp_commands
   return ret;
 }
 
+
+/*
+ * common function to copy domain data to corba structure
+ *
+ * \param a        action data (transaction and registrar info - authinfo fill check)
+ * \param regMan   registry manager - to get object states description
+ * \param d        destination corba domain structure to fill data into
+ * \param dom      source domain data
+ */
+void corba_domain_data_copy(
+        EPPAction &a,
+        const Fred::Manager * const regMan,
+        ccReg::Domain *d,
+        const Fred::Domain::Domain * const dom)
+{
+  std::auto_ptr<Fred::Zone::Manager>
+      zman(Fred::Zone::Manager::create() );
+  std::auto_ptr<Fred::Domain::Manager>
+      dman(Fred::Domain::Manager::create(a.getDB(), zman.get()) );
+
+  // fill common object data
+  d->ROID = CORBA::string_dup(dom->getROID().c_str());
+  d->name = CORBA::string_dup(dom->getFQDN().c_str());
+  d->CrDate = CORBA::string_dup(formatTime(dom->getCreateDate()).c_str());
+  d->UpDate = CORBA::string_dup(formatTime(dom->getUpdateDate()).c_str());
+  d->TrDate = CORBA::string_dup(formatTime(dom->getTransferDate()).c_str());
+  d->ClID = CORBA::string_dup(dom->getRegistrarHandle().c_str());
+  d->CrID = CORBA::string_dup(dom->getCreateRegistrarHandle().c_str());
+  d->UpID = CORBA::string_dup(dom->getUpdateRegistrarHandle().c_str());
+  // authinfo is filled only if session registar is ownering registrar
+  d->AuthInfoPw = CORBA::string_dup(
+    a.getRegistrar() == (int)dom->getRegistrarId() ? dom->getAuthPw().c_str()
+          : ""
+  );
+  // states
+  for (unsigned i=0; i<dom->getStatusCount(); i++) {
+    Fred::TID stateId = dom->getStatusByIdx(i)->getStatusId();
+    const Fred::StatusDesc* sd = regMan->getStatusDesc(stateId);
+    if (!sd || !sd->getExternal())
+      continue;
+    d->stat.length(d->stat.length()+1);
+    d->stat[d->stat.length()-1].value = CORBA::string_dup(sd->getName().c_str() );
+    d->stat[d->stat.length()-1].text = CORBA::string_dup(sd->getDesc(
+        a.getLang() == LANG_CS ? "CS" : "EN"
+    ).c_str());
+  }
+  if (!d->stat.length()) {
+    const Fred::StatusDesc* sd = regMan->getStatusDesc(0);
+    if (sd) {
+      d->stat.length(1);
+      d->stat[0].value = CORBA::string_dup(sd->getName().c_str());
+      d->stat[0].text = CORBA::string_dup(sd->getDesc(
+          a.getLang() == LANG_CS ? "CS" : "EN"
+      ).c_str());
+    }
+  }
+  // fill domain specific data
+  d->nsset = CORBA::string_dup(dom->getNSSetHandle().c_str());
+  d->keyset = CORBA::string_dup(dom->getKeySetHandle().c_str());
+  d->ExDate = CORBA::string_dup(to_iso_extended_string(dom->getExpirationDate()).c_str() );
+  // registrant and contacts are disabled for other registrars
+  // in case of enum domain
+  bool disabled = a.getRegistrar() != (int)dom->getRegistrarId()
+      && zman->findApplicableZone(dom->getFQDN())->isEnumZone();
+  // registrant
+  d->Registrant = CORBA::string_dup(disabled ? "" : dom->getRegistrantHandle().c_str() );
+  // admin
+  unsigned adminCount = disabled ? 0 : dom->getAdminCount(1);
+  d->admin.length(adminCount);
+  for (unsigned i=0; i<adminCount; i++)
+    d->admin[i] = CORBA::string_dup(dom->getAdminHandleByIdx(i,1).c_str());
+  // temps
+  unsigned tempCount = disabled ? 0 : dom->getAdminCount(2);
+  d->tmpcontact.length(tempCount);
+  for (unsigned i=0; i<tempCount; i++)
+    d->tmpcontact[i] = CORBA::string_dup(dom->getAdminHandleByIdx(i,2).c_str());
+  // validation
+  if (!dom->getValExDate().is_special()) {
+    ccReg::ENUMValidationExtension *enumVal =
+        new ccReg::ENUMValidationExtension();
+    enumVal->valExDate = CORBA::string_dup(to_iso_extended_string(dom->getValExDate()).c_str() );
+    enumVal->publish = dom->getPublish() ? ccReg::DISCL_DISPLAY : ccReg::DISCL_HIDE;
+    d->ext.length(1);
+    d->ext[0] <<= enumVal;
+  }
+}
+
+
+/*
+ * common function to copy nsset data to corba structure
+ *
+ * \param a        action data (transaction and registrar info - authinfo fill check)
+ * \param regMan   registry manager - to get object states description
+ * \param n        destination corba nsset structure to fill data into
+ * \param nss      source nsset data
+ */
+void corba_nsset_data_copy(
+        EPPAction &a,
+        const Fred::Manager * const regMan,
+        ccReg::NSSet *n,
+        const Fred::NSSet::NSSet * const nss)
+{
+  // fill common object data
+  n->ROID = CORBA::string_dup(nss->getROID().c_str());
+  n->CrDate = CORBA::string_dup(formatTime(nss->getCreateDate()).c_str());
+  n->UpDate = CORBA::string_dup(formatTime(nss->getUpdateDate()).c_str());
+  n->TrDate = CORBA::string_dup(formatTime(nss->getTransferDate()).c_str());
+  n->ClID = CORBA::string_dup(nss->getRegistrarHandle().c_str());
+  n->CrID = CORBA::string_dup(nss->getCreateRegistrarHandle().c_str());
+  n->UpID = CORBA::string_dup(nss->getUpdateRegistrarHandle().c_str());
+  // authinfo is filled only if session registar is ownering registrar
+  n->AuthInfoPw = CORBA::string_dup(
+    a.getRegistrar() == (int)nss->getRegistrarId() ? nss->getAuthPw().c_str()
+          : ""
+  );
+  // states
+  for (unsigned i=0; i<nss->getStatusCount(); i++) {
+    Fred::TID stateId = nss->getStatusByIdx(i)->getStatusId();
+    const Fred::StatusDesc* sd = regMan->getStatusDesc(stateId);
+    if (!sd || !sd->getExternal())
+      continue;
+    n->stat.length(n->stat.length()+1);
+    n->stat[n->stat.length()-1].value = CORBA::string_dup(sd->getName().c_str() );
+    n->stat[n->stat.length()-1].text = CORBA::string_dup(sd->getDesc(
+        a.getLang() == LANG_CS ? "CS" : "EN"
+    ).c_str());
+  }
+  if (!n->stat.length()) {
+    const Fred::StatusDesc* sd = regMan->getStatusDesc(0);
+    if (sd) {
+      n->stat.length(1);
+      n->stat[0].value = CORBA::string_dup(sd->getName().c_str());
+      n->stat[0].text = CORBA::string_dup(sd->getDesc(
+          a.getLang() == LANG_CS ? "CS" : "EN"
+      ).c_str());
+    }
+  }
+  // nsset specific data
+  n->handle = CORBA::string_dup(nss->getHandle().c_str());
+  n->level = nss->getCheckLevel();
+  n->tech.length(nss->getAdminCount());
+  for (unsigned i=0; i<nss->getAdminCount(); i++)
+    n->tech[i] = CORBA::string_dup(nss->getAdminByIdx(i).c_str());
+  n->dns.length(nss->getHostCount());
+  for (unsigned i=0; i<nss->getHostCount(); i++) {
+    const Fred::NSSet::Host *h = nss->getHostByIdx(i);
+    n->dns[i].fqdn = CORBA::string_dup(h->getName().c_str());
+    n->dns[i].inet.length(h->getAddrCount());
+    for (unsigned j=0; j<h->getAddrCount(); j++)
+      n->dns[i].inet[j] = CORBA::string_dup(h->getAddrByIdx(j).c_str());
+  }
+}
+
+
+/*
+ * common function to copy keyset data to corba structure
+ *
+ * \param a        action data (transaction and registrar info - authinfo fill check)
+ * \param regMan   registry manager - to get object states description
+ * \param n        destination corba keyset structure to fill data into
+ * \param nss      source keyset data
+ */
+void corba_keyset_data_copy(
+        EPPAction &a,
+        const Fred::Manager * const regMan,
+        ccReg::KeySet *k,
+        const Fred::KeySet::KeySet * const kss)
+{
+    //fill common object data
+    k->ROID = CORBA::string_dup(kss->getROID().c_str());
+    k->CrDate = CORBA::string_dup(formatTime(kss->getCreateDate()).c_str());
+    k->UpDate = CORBA::string_dup(formatTime(kss->getUpdateDate()).c_str());
+    k->TrDate = CORBA::string_dup(formatTime(kss->getTransferDate()).c_str());
+    k->ClID = CORBA::string_dup(kss->getRegistrarHandle().c_str());
+    k->CrID = CORBA::string_dup(kss->getCreateRegistrarHandle().c_str());
+    k->UpID = CORBA::string_dup(kss->getUpdateRegistrarHandle().c_str());
+    //authinfo is filled only if session registrar is also owner
+    k->AuthInfoPw = CORBA::string_dup(
+            a.getRegistrar() == (int)kss->getRegistrarId() ?
+            kss->getAuthPw().c_str() : "");
+
+
+    // states
+    for (unsigned int i = 0; i < kss->getStatusCount(); i++) {
+        Fred::TID stateId = kss->getStatusByIdx(i)->getStatusId();
+        const Fred::StatusDesc *sd = regMan->getStatusDesc(stateId);
+        if (!sd || !sd->getExternal())
+            continue;
+        k->stat.length(k->stat.length() + 1);
+        k->stat[k->stat.length()-1].value =
+            CORBA::string_dup(sd->getName().c_str());
+        k->stat[k->stat.length()-1].text =
+            CORBA::string_dup(sd->getDesc(
+                        a.getLang() == LANG_CS ? "CS" : "EN").c_str()
+                    );
+    }
+
+    if (!k->stat.length()) {
+        const Fred::StatusDesc *sd = regMan->getStatusDesc(0);
+        if (sd) {
+            k->stat.length(1);
+            k->stat[0].value = CORBA::string_dup(sd->getName().c_str());
+            k->stat[0].text = CORBA::string_dup(
+                    sd->getDesc(a.getLang() == LANG_CS ? "CS" : "EN").c_str());
+        }
+    }
+
+    // keyset specific data
+    k->handle = CORBA::string_dup(kss->getHandle().c_str());
+    k->tech.length(kss->getAdminCount());
+    for (unsigned int i = 0; i < kss->getAdminCount(); i++)
+        k->tech[i] = CORBA::string_dup(kss->getAdminByIdx(i).c_str());
+
+
+    // dsrecord
+    k->dsrec.length(kss->getDSRecordCount());
+    for (unsigned int i = 0; i < kss->getDSRecordCount(); i++) {
+        const Fred::KeySet::DSRecord *dsr = kss->getDSRecordByIdx(i);
+        k->dsrec[i].keyTag = dsr->getKeyTag();
+        k->dsrec[i].alg = dsr->getAlg();
+        k->dsrec[i].digestType = dsr->getDigestType();
+        k->dsrec[i].digest = CORBA::string_dup(dsr->getDigest().c_str());
+        k->dsrec[i].maxSigLife = dsr->getMaxSigLife();
+    }
+
+    // dnskey record
+    k->dnsk.length(kss->getDNSKeyCount());
+    for (unsigned int i = 0; i < kss->getDNSKeyCount(); i++) {
+        const Fred::KeySet::DNSKey *dnsk = kss->getDNSKeyByIdx(i);
+        k->dnsk[i].flags = dnsk->getFlags();
+        k->dnsk[i].protocol = dnsk->getProtocol();
+        k->dnsk[i].alg = dnsk->getAlg();
+        k->dnsk[i].key = CORBA::string_dup(dnsk->getKey().c_str());
+    }
+}
+
+
+
 //
 // Example implementational code for IDL interface ccReg::EPP
 //
@@ -458,6 +667,8 @@ ccReg_EPP_i::ccReg_EPP_i(
     , unsigned rifd_session_timeout
     , unsigned rifd_session_registrar_max
     , bool rifd_epp_update_domain_keyset_clear
+    , bool rifd_epp_operations_charging
+    , bool _allow_idn
 )
 
     : database(_db),
@@ -476,9 +687,10 @@ ccReg_EPP_i::ccReg_EPP_i(
     , rifd_session_max_(rifd_session_max)
     , rifd_session_timeout_(rifd_session_timeout)
     , rifd_session_registrar_max_(rifd_session_registrar_max)
-    , rifd_epp_update_domain_keyset_clear_(rifd_epp_update_domain_keyset_clear) ,
-
-    db_disconnect_guard_(DBDisconnectPtr(0)),
+    , rifd_epp_update_domain_keyset_clear_(rifd_epp_update_domain_keyset_clear)
+    , rifd_epp_operations_charging_(rifd_epp_operations_charging),
+    allow_idn_(_allow_idn),
+    db_disconnect_guard_(),
     regMan(),
     epp_sessions(rifd_session_max, rifd_session_registrar_max, rifd_session_timeout),
     ErrorMsg(),
@@ -489,10 +701,24 @@ ccReg_EPP_i::ccReg_EPP_i(
   Logging::Context::clear();
   Logging::Context ctx("rifd");
 
+  // factory_check - required keys are in factory
+  FactoryHaveSupersetOfKeysChecker<Fred::PublicRequest::Factory>
+  ::KeyVector required_keys = boost::assign::list_of
+   (Fred::PublicRequest::PRT_AUTHINFO_AUTO_RIF);
+
+  FactoryHaveSupersetOfKeysChecker<Fred::PublicRequest::Factory>
+      (required_keys).check();
+
+  // factory_check - factory keys are in database
+  FactoryHaveSubsetOfKeysChecker<Fred::PublicRequest::Factory>
+      (Fred::PublicRequest::get_enum_public_request_type()).check();
+
   // objects are shared between threads!!!
   // init at the beginning and do not change
 
-  db_disconnect_guard_ = connect_DB(database , DB_CONNECT_FAILED());
+  Database::Connection conn = Database::Manager::acquire();
+  db_disconnect_guard_.reset(new DB(conn));
+
 
   LOG(NOTICE_LOG, "successfully  connect to DATABASE %s", database.c_str());
   regMan.reset(Fred::Manager::create(db_disconnect_guard_, false)); //TODO: replace 'false'
@@ -555,30 +781,42 @@ int ccReg_EPP_i::GetRegistrarLang(
   return epp_sessions.get_registrar_lang(clientID);
 }
 
-// Load table to memory for speed
+bool ccReg_EPP_i::idn_allowed(EPPAction& action) const {
+    DBSharedPtr db = action.getDB();
+    if (!db.get()) {
+        throw Fred::SQL_ERROR();
+    }
 
+    // system registrar has IDN always allowed
+    if (db->GetRegistrarSystem(action.getRegistrar())) {
+        return true;
+    } else {
+        return this->allow_idn_;
+    }
+}
+
+// Load table to memory for speed
 int ccReg_EPP_i::LoadReasonMessages()
 {
   Logging::Context::clear();
   Logging::Context ctx("rifd");
 
-  DB DBsql;
+  Database::Connection conn = Database::Manager::acquire();
+  DBSharedPtr DBsql (new DB(conn));
+
   int i, rows;
 
-  if (DBsql.OpenDatabase(database) ) {
+  {
     rows=0;
-    if (DBsql.ExecSelect("SELECT id , reason , reason_cs FROM enum_reason order by id;") ) {
-      rows = DBsql.GetSelectRows();
+    if (DBsql->ExecSelect("SELECT id , reason , reason_cs FROM enum_reason order by id;") ) {
+      rows = DBsql->GetSelectRows();
       ReasonMsg = new Mesg();
       for (i = 0; i < rows; i ++)
-        ReasonMsg->AddMesg(atoi(DBsql.GetFieldValue(i, 0) ),
-            DBsql.GetFieldValue(i, 1) , DBsql.GetFieldValue(i, 2) );
-      DBsql.FreeSelect();
+        ReasonMsg->AddMesg(atoi(DBsql->GetFieldValue(i, 0) ),
+            DBsql->GetFieldValue(i, 1) , DBsql->GetFieldValue(i, 2) );
+      DBsql->FreeSelect();
     }
-
-    DBsql.Disconnect();
-  } else
-    return -1;
+  }
 
   return rows;
 }
@@ -588,23 +826,22 @@ int ccReg_EPP_i::LoadErrorMessages()
   Logging::Context::clear();
   Logging::Context ctx("rifd");
 
-  DB DBsql;
+  Database::Connection conn = Database::Manager::acquire();
+  DBSharedPtr DBsql (new DB(conn));
+
   int i, rows;
 
-  if (DBsql.OpenDatabase(database) ) {
+  {
     rows=0;
-    if (DBsql.ExecSelect("SELECT id , status , status_cs FROM enum_error order by id;") ) {
-      rows = DBsql.GetSelectRows();
+    if (DBsql->ExecSelect("SELECT id , status , status_cs FROM enum_error order by id;") ) {
+      rows = DBsql->GetSelectRows();
       ErrorMsg = new Mesg();
       for (i = 0; i < rows; i ++)
-        ErrorMsg->AddMesg(atoi(DBsql.GetFieldValue(i, 0) ) ,
-            DBsql.GetFieldValue(i, 1) , DBsql.GetFieldValue(i, 2));
-      DBsql.FreeSelect();
+        ErrorMsg->AddMesg(atoi(DBsql->GetFieldValue(i, 0) ) ,
+            DBsql->GetFieldValue(i, 1) , DBsql->GetFieldValue(i, 2));
+      DBsql->FreeSelect();
     }
-
-    DBsql.Disconnect();
-  } else
-    return -1;
+  }
 
   return rows;
 }
@@ -1210,7 +1447,9 @@ ccReg::Response* ccReg_EPP_i::GetTransaction(
   Logging::Context ctx2(str(boost::format("clid-%1%") % clientID));
   ConnectionReleaser releaser;
 
-  DB DBsql;
+  Database::Connection conn = Database::Manager::acquire();
+  DBSharedPtr DBsql (new DB(conn));
+
   ccReg::Response_var ret;
   ret = new ccReg::Response;
   int i, len;
@@ -1252,21 +1491,19 @@ ccReg::Response* ccReg_EPP_i::GetTransaction(
     LOG( NOTICE_LOG, "return reason msg: errors[%d] code %d  message %s\n" , i , errorCodes[i] , ( char * ) (*errStrings)[i] );
   }
 
-  if (DBsql.OpenDatabase(database) ) {
+  {
     if (errCode > 0) {
-      if (DBsql.BeginAction(clientID, EPP_UnknowAction, clTRID, "", requestId)) {
+      if (DBsql->BeginAction(clientID, EPP_UnknowAction, clTRID, "", requestId)) {
           // error code
           ret->code = errCode;
           // write to the  action table
-          ret->svTRID = CORBA::string_dup(DBsql.EndAction(ret->code) );
+          ret->svTRID = CORBA::string_dup(DBsql->EndAction(ret->code) );
           ret->msg = CORBA::string_dup(GetErrorMessage(ret->code,
               GetRegistrarLang(clientID) ) );
 
           LOG( NOTICE_LOG, "GetTransaction: svTRID [%s] errCode -> %d msg [%s] ", ( char * ) ret->svTRID, ret->code, ( char * ) ret->msg );
       }
     }
-
-    DBsql.Disconnect();
   }
 
   if (ret->code == 0)
@@ -1293,7 +1530,7 @@ ccReg::Response* ccReg_EPP_i::GetTransaction(
  ***********************************************************************/
 
 ccReg::Response* ccReg_EPP_i::PollAcknowledgement(
-  const char* msgID, CORBA::Short& count, CORBA::String_out newmsgID,
+  const char* msgID, CORBA::ULongLong& count, CORBA::String_out newmsgID,
   const ccReg::EppParams &params)
 {
   Logging::Context::clear();
@@ -1355,7 +1592,7 @@ ccReg::Response* ccReg_EPP_i::PollAcknowledgement(
  ***********************************************************************/
 
 ccReg::Response* ccReg_EPP_i::PollRequest(
-  CORBA::String_out msgID, CORBA::Short& count, ccReg::timestamp_out qDate,
+  CORBA::String_out msgID, CORBA::ULongLong& count, ccReg::timestamp_out qDate,
   ccReg::PollType& type, CORBA::Any_OUT_arg msg, const ccReg::EppParams &params
   )
 {
@@ -1427,16 +1664,17 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
       dynamic_cast<Fred::Poll::MessageEvent *>(m.get());
   if (me) {
     switch (m->getType()) {
+      case Fred::Poll::MT_IDLE_DELETE_CONTACT:
       case Fred::Poll::MT_DELETE_CONTACT:
         type = ccReg::polltype_delete_contact;
         break;
-      case Fred::Poll::MT_DELETE_NSSET:
+      case Fred::Poll::MT_IDLE_DELETE_NSSET:
         type = ccReg::polltype_delete_nsset;
         break;
-      case Fred::Poll::MT_DELETE_DOMAIN:
+      case Fred::Poll::MT_IDLE_DELETE_DOMAIN:
         type = ccReg::polltype_delete_domain;
         break;
-      case Fred::Poll::MT_DELETE_KEYSET:
+      case Fred::Poll::MT_IDLE_DELETE_KEYSET:
         type = ccReg::polltype_delete_keyset;
         break;
       case Fred::Poll::MT_IMP_EXPIRATION:
@@ -1469,8 +1707,8 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
     type = ccReg::polltype_lowcredit;
     ccReg::PollMsg_LowCredit *hdm = new ccReg::PollMsg_LowCredit;
     hdm->zone = CORBA::string_dup(mlc->getZone().c_str());
-    hdm->limit = mlc->getLimit();
-    hdm->credit = mlc->getCredit();
+    hdm->limit = CORBA::string_dup((mlc->getLimit()).get_string(".2f").c_str());
+    hdm->credit = CORBA::string_dup((mlc->getCredit()).get_string(".2f").c_str());
     *msg <<= hdm;
     return a.getRet()._retn();
   }
@@ -1508,11 +1746,245 @@ ccReg::Response* ccReg_EPP_i::PollRequest(
       LOGGER(PACKAGE).debug("poll message request_fee_info packed");
       return a.getRet()._retn();
   }
+  Fred::Poll::MessageUpdateObject *muo =
+      dynamic_cast<Fred::Poll::MessageUpdateObject*>(m.get());
+  if (muo)
+  {
+      switch (muo->getType())
+      {
+          case Fred::Poll::MT_UPDATE_DOMAIN:
+              type = ccReg::polltype_update_domain;
+              break;
+          case Fred::Poll::MT_UPDATE_NSSET:
+              type = ccReg::polltype_update_nsset;
+              break;
+          case Fred::Poll::MT_UPDATE_KEYSET:
+              type = ccReg::polltype_update_keyset;
+              break;
+      }
+      ccReg::PollMsg_Update *hdm = new ccReg::PollMsg_Update;
+      hdm->opTRID = CORBA::string_dup(muo->getOpTRID().c_str());
+      hdm->pollID = muo->getId();
+      *msg <<= hdm;
+      LOGGER(PACKAGE).debug("poll message update_domain packed");
+      return a.getRet()._retn();
+  }
   a.failedInternal("Invalid message structure");
   // previous command throw exception in any case so this code
   // will never be called
   return NULL;
 }
+
+
+/*
+ * idl method for retrieving old and new data of updated domain
+ *
+ * \param _poll_id        database id of poll message where is stored
+ *                        historyid of object we want details about
+ * \param _old_data       output parameter - data of object before update
+ * \param _new_data       output parameter - data of object after update
+ * \param params          common epp parameters
+ *
+ */
+void
+ccReg_EPP_i::PollRequestGetUpdateDomainDetails(
+        CORBA::ULongLong _poll_id,
+        ccReg::Domain_out _old_data,
+        ccReg::Domain_out _new_data,
+        const ccReg::EppParams &params)
+{
+    try {
+        Logging::Context::clear();
+        Logging::Context ctx("rifd");
+        Logging::Context ctx2(str(boost::format("clid-%1%") % params.loginID));
+        Logging::Context ctx3("poll-req-update-domain-details");
+        ConnectionReleaser releaser;
+
+        LOGGER(PACKAGE).debug(boost::format("poll_id=%1%") % _poll_id);
+
+        EPPAction a(this, params.loginID, EPP_PollResponse, static_cast<const char*>(params.clTRID), params.XML, params.requestID);
+
+        _old_data = new ccReg::Domain;
+        _new_data = new ccReg::Domain;
+
+        Database::Connection conn = Database::Manager::acquire();
+        Database::Result hids = conn.exec_params(
+                "SELECT h1.id as old_hid, h1.next as new_hid"
+                " FROM poll_eppaction pea"
+                " JOIN domain_history dh ON dh.historyid = pea.objid"
+                " JOIN history h1 ON h1.next = pea.objid"
+                " WHERE pea.msgid = $1::bigint",
+                Database::query_param_list(_poll_id));
+
+        if (hids.size() != 1) {
+            throw std::runtime_error("unable to get poll message data");
+        }
+
+        std::auto_ptr<Fred::Manager> rmgr(Fred::Manager::create(a.getDB(), false));
+        rmgr->initStates();
+        std::auto_ptr<const Fred::Domain::Domain> old_data = Fred::get_object_by_hid<
+            Fred::Domain::Domain, Fred::Domain::Manager, Fred::Domain::List, Database::Filters::DomainHistoryImpl>(
+                    rmgr->getDomainManager(), static_cast<unsigned long long>(hids[0][0]));
+        std::auto_ptr<const Fred::Domain::Domain> new_data = Fred::get_object_by_hid<
+            Fred::Domain::Domain, Fred::Domain::Manager, Fred::Domain::List, Database::Filters::DomainHistoryImpl>(
+                    rmgr->getDomainManager(), static_cast<unsigned long long>(hids[0][1]));
+
+        corba_domain_data_copy(a, rmgr.get(), _old_data, old_data.get());
+        corba_domain_data_copy(a, rmgr.get(), _new_data, new_data.get());
+
+        return;
+    }
+    catch (std::exception &ex)
+    {
+        LOGGER(PACKAGE).error(ex.what());
+    }
+    catch (...)
+    {
+        LOGGER(PACKAGE).error("unknown error");
+    }
+    this->ServerInternalError(">> PollRequestGetUpdateDomainDetails - failed internal");
+}
+
+
+/*
+ * idl method for retrieving old and new data of updated nsset
+ *
+ * \param _poll_id        database id of poll message where is stored
+ *                        historyid of object we want details about
+ * \param _old_data       output parameter - data of object before update
+ * \param _new_data       output parameter - data of object after update
+ * \param params          common epp parameters
+ *
+ */
+void
+ccReg_EPP_i::PollRequestGetUpdateNSSetDetails(
+        CORBA::ULongLong _poll_id,
+        ccReg::NSSet_out _old_data,
+        ccReg::NSSet_out _new_data,
+        const ccReg::EppParams &params)
+{
+    try {
+        Logging::Context::clear();
+        Logging::Context ctx("rifd");
+        Logging::Context ctx2(str(boost::format("clid-%1%") % params.loginID));
+        Logging::Context ctx3("poll-req-update-nsset-details");
+        ConnectionReleaser releaser;
+
+        LOGGER(PACKAGE).debug(boost::format("poll_id=%1%") % _poll_id);
+
+        EPPAction a(this, params.loginID, EPP_PollResponse, static_cast<const char*>(params.clTRID), params.XML, params.requestID);
+
+        _old_data = new ccReg::NSSet;
+        _new_data = new ccReg::NSSet;
+
+        Database::Connection conn = Database::Manager::acquire();
+        Database::Result hids = conn.exec_params(
+                "SELECT h1.id as old_hid, h1.next as new_hid"
+                " FROM poll_eppaction pea"
+                " JOIN nsset_history dh ON dh.historyid = pea.objid"
+                " JOIN history h1 ON h1.next = pea.objid"
+                " WHERE pea.msgid = $1::bigint",
+                Database::query_param_list(_poll_id));
+
+        if (hids.size() != 1) {
+            throw std::runtime_error("unable to get poll message data");
+        }
+
+        std::auto_ptr<Fred::Manager> rmgr(Fred::Manager::create(a.getDB(), false));
+        rmgr->initStates();
+        std::auto_ptr<const Fred::NSSet::NSSet> old_data = Fred::get_object_by_hid<
+            Fred::NSSet::NSSet, Fred::NSSet::Manager, Fred::NSSet::List, Database::Filters::NSSetHistoryImpl>(
+                    rmgr->getNSSetManager(), static_cast<unsigned long long>(hids[0][0]));
+        std::auto_ptr<const Fred::NSSet::NSSet> new_data = Fred::get_object_by_hid<
+            Fred::NSSet::NSSet, Fred::NSSet::Manager, Fred::NSSet::List, Database::Filters::NSSetHistoryImpl>(
+                    rmgr->getNSSetManager(), static_cast<unsigned long long>(hids[0][1]));
+
+        corba_nsset_data_copy(a, rmgr.get(), _old_data, old_data.get());
+        corba_nsset_data_copy(a, rmgr.get(), _new_data, new_data.get());
+
+        return;
+    }
+    catch (std::exception &ex)
+    {
+        LOGGER(PACKAGE).error(ex.what());
+    }
+    catch (...)
+    {
+        LOGGER(PACKAGE).error("unknown error");
+    }
+    this->ServerInternalError(">> PollRequestGetUpdateNSSetDetails - failed internal");
+}
+
+
+/*
+ * idl method for retrieving old and new data of updated keyset
+ *
+ * \param _poll_id        database id of poll message where is stored
+ *                        historyid of object we want details about
+ * \param _old_data       output parameter - data of object before update
+ * \param _new_data       output parameter - data of object after update
+ * \param params          common epp parameters
+ *
+ */
+void
+ccReg_EPP_i::PollRequestGetUpdateKeySetDetails(
+        CORBA::ULongLong _poll_id,
+        ccReg::KeySet_out _old_data,
+        ccReg::KeySet_out _new_data,
+        const ccReg::EppParams &params)
+{
+    try {
+        Logging::Context::clear();
+        Logging::Context ctx("rifd");
+        Logging::Context ctx2(str(boost::format("clid-%1%") % params.loginID));
+        Logging::Context ctx3("poll-req-update-keyset-details");
+        ConnectionReleaser releaser;
+
+        LOGGER(PACKAGE).debug(boost::format("poll_id=%1%") % _poll_id);
+
+        EPPAction a(this, params.loginID, EPP_PollResponse, static_cast<const char*>(params.clTRID), params.XML, params.requestID);
+
+        _old_data = new ccReg::KeySet;
+        _new_data = new ccReg::KeySet;
+
+        Database::Connection conn = Database::Manager::acquire();
+        Database::Result hids = conn.exec_params(
+                "SELECT h1.id as old_hid, h1.next as new_hid"
+                " FROM poll_eppaction pea"
+                " JOIN keyset_history dh ON dh.historyid = pea.objid"
+                " JOIN history h1 ON h1.next = pea.objid"
+                " WHERE pea.msgid = $1::bigint",
+                Database::query_param_list(_poll_id));
+
+        if (hids.size() != 1) {
+            throw std::runtime_error("unable to get poll message data");
+        }
+
+        std::auto_ptr<Fred::Manager> rmgr(Fred::Manager::create(a.getDB(), false));
+        rmgr->initStates();
+        std::auto_ptr<const Fred::KeySet::KeySet> old_data = Fred::get_object_by_hid<
+            Fred::KeySet::KeySet, Fred::KeySet::Manager, Fred::KeySet::List, Database::Filters::KeySetHistoryImpl>(
+                    rmgr->getKeySetManager(), static_cast<unsigned long long>(hids[0][0]));
+        std::auto_ptr<const Fred::KeySet::KeySet> new_data = Fred::get_object_by_hid<
+            Fred::KeySet::KeySet, Fred::KeySet::Manager, Fred::KeySet::List, Database::Filters::KeySetHistoryImpl>(
+                    rmgr->getKeySetManager(), static_cast<unsigned long long>(hids[0][1]));
+
+        corba_keyset_data_copy(a, rmgr.get(), _old_data, old_data.get());
+        corba_keyset_data_copy(a, rmgr.get(), _new_data, new_data.get());
+
+        return;
+    }
+    catch (std::exception &ex)
+    {
+        LOGGER(PACKAGE).error(ex.what());
+    }
+    catch (...)
+    {
+        LOGGER(PACKAGE).error("unknown error");
+    }
+    this->ServerInternalError(">> PollRequestGetUpdateKeySetDetails - failed internal");
+}
+
 
 /***********************************************************************
  *
@@ -1638,7 +2110,6 @@ ccReg::Response * ccReg_EPP_i::ClientLogin(
   Logging::Context ctx("rifd");
   ConnectionReleaser releaser;
 
-  DBAutoPtr db_connect(new DB());
   int regID=0;
   int language=0;
   ccReg::Response_var ret;
@@ -1651,11 +2122,14 @@ ccReg::Response * ccReg_EPP_i::ClientLogin(
   LOG( NOTICE_LOG, "ClientLogin: username-> [%s] clTRID [%s] passwd [%s]  newpass [%s] ", ClID, static_cast<const char*>(clTRID), passwd, newpass );
   LOG( NOTICE_LOG, "ClientLogin:  certID  [%s] language  [%d] ", certID, lang );
 
-  if (db_connect->OpenDatabase(database)) {
-    DBSharedPtr DBsql = DBDisconnectPtr(db_connect.release());
+  Database::Connection conn = Database::Manager::acquire();
+
+   {
+    DBSharedPtr nodb;
+    DBSharedPtr DBsql (new DB(conn));
 
     std::auto_ptr<Fred::Registrar::Manager> regman(
-         Fred::Registrar::Manager::create(DBDisconnectPtr(NULL)));
+         Fred::Registrar::Manager::create(nodb));
     try {
         // get ID of registrar by handle
         if ((regID = DBsql->GetNumericFromTable("REGISTRAR", "id", "handle",
@@ -1671,14 +2145,19 @@ ccReg::Response * ccReg_EPP_i::ClientLogin(
             // test password and certificate fingerprint in the table RegistrarACL
             LOG( NOTICE_LOG, "password [%s]  or certID [%s]  not accept", passwd , certID );
             ret->code = COMMAND_AUTH_ERROR;
-        } else if (DBsql->BeginTransaction() ) {
+        }
+        else
+        {
+            //get db connection and start transaction
+            Database::Connection conn = Database::Manager::acquire();
+            Database::Transaction tx(conn);
+
 
                 // change language
                 if (lang == ccReg::CS) {
                     LOG( NOTICE_LOG, "SET LANG to CS" );
-
-          language=1;
-        }
+                    language=1;
+                    }
 
                 // change password if set new
                 if (strlen(newpass) ) {
@@ -1702,7 +2181,7 @@ ccReg::Response * ccReg_EPP_i::ClientLogin(
                         ret->code = COMMAND_OK;
                     } catch (const NumberSessionLimit &ex) {
 
-                        LOGGER(PACKAGE).error(boost::format("ClientLogin: username %1%, regID %2% clTRID %3%, lang %4% login FAILED, reason %5% ")
+                        LOGGER(PACKAGE).warning(boost::format("ClientLogin: username %1%, regID %2% clTRID %3%, lang %4% login FAILED, reason %5% ")
                                                     % ClID % regID % static_cast<const char*>(clTRID) % language % ex.what());
                         out_clientID=0; //  not login
                         ret->code =COMMAND_MAX_SESSION_LIMIT; // maximal limit of connection sessions
@@ -1710,7 +2189,8 @@ ccReg::Response * ccReg_EPP_i::ClientLogin(
                 }
 
             // end of transaction
-            DBsql->QuitTransaction(ret->code);
+            if (CMD_FAILED((ret->code))) tx.commit();
+            //else rollback
         }
 
     } catch(std::exception &ex) {
@@ -1935,7 +2415,7 @@ ccReg_EPP_i::ObjectCheck(short act, const char * table, const char *fname,
 
                     LOG( NOTICE_LOG , "domain checkAvail fqdn [%s]" , (const char * ) chck[i] );
 
-                    caType = dman->checkAvail( ( const char * ) chck[i] , caConflict);
+                    caType = dman->checkAvail( ( const char * ) chck[i] , caConflict, idn_allowed(action) );
                     LOG( NOTICE_LOG , "domain type %d" , caType );
                     switch (caType) {
                         case Fred::Domain::CA_INVALID_HANDLE:
@@ -2337,7 +2817,7 @@ ccReg::Response * ccReg_EPP_i::ContactUpdate(
 
     LOGGER(PACKAGE).notice(boost::format("ContactUpdate: clientID -> %1% clTRID [%2%] handle [%3%] ") % (int ) params.loginID % (const char*)params.clTRID % handle );
     LOGGER(PACKAGE).notice(boost::format("Discloseflag %1%: Disclose Name %2% Org %3% Add %4% Tel %5% Fax %6% Email %7% VAT %8% Ident %9% NotifyEmail %10%") % c.DiscloseFlag % c.DiscloseName % c.DiscloseOrganization % c.DiscloseAddress % c.DiscloseTelephone % c.DiscloseFax % c.DiscloseEmail % c.DiscloseVAT % c.DiscloseIdent % c.DiscloseNotifyEmail );
-            
+
 
     id = getIdOfContact(action.getDB(), handle, restricted_handles_
             , lock_epp_commands_, true);
@@ -2372,6 +2852,33 @@ ccReg::Response * ccReg_EPP_i::ContactUpdate(
     } catch (...) {
         code = COMMAND_FAILED;
     }
+
+    //discloseaddress conditions #7493
+    bool hidden_address_allowed_by_contact_state
+        = Fred::object_has_state(id, Fred::ObjectState::IDENTIFIED_CONTACT)
+            || Fred::object_has_state(id, Fred::ObjectState::VALIDATED_CONTACT);
+
+    bool hidden_address_allowed_by_organization = false;
+    if(c.Organization.in()[0] =='\b')//mod_eppd hack when organization n/a for update
+    {
+        Database::Connection conn = Database::Manager::acquire();
+        Database::Result result = conn.exec_params(
+            "SELECT c.organization FROM contact c WHERE c.id = $1::bigint "
+            , Database::query_param_list(id));
+        if (result.size() == 1) hidden_address_allowed_by_organization = std::string(result[0][0]).empty();
+    }
+    else
+    {
+        hidden_address_allowed_by_organization = std::string(c.Organization.in()).empty();
+    }
+
+    //if not allowed to hide but set to hide address return epp error
+    if(!(hidden_address_allowed_by_contact_state && hidden_address_allowed_by_organization)
+        && ((c.DiscloseAddress == true) && (c.DiscloseFlag == ccReg::DISCL_HIDE)))
+    {
+        code = COMMAND_STATUS_PROHIBITS_OPERATION;
+    }
+
     if (!code) {
         if ( !TestCountryCode(c.CC) ) {
             LOG(WARNING_LOG, "Reason: unknown country code: %s", (const char *)c.CC);
@@ -2380,7 +2887,6 @@ ccReg::Response * ccReg_EPP_i::ContactUpdate(
                     REASON_MSG_COUNTRY_NOTEXIST);
         } else if (action.getDB()->ObjectUpdate(id, action.getRegistrar(), c.AuthInfoPw) ) // update OBJECT table
         {
-
             // begin update
             action.getDB()->UPDATE("Contact");
 
@@ -2446,8 +2952,18 @@ ccReg::Response * ccReg_EPP_i::ContactUpdate(
                         c.DiscloseFlag) );
             action.getDB()->SETBOOL("DiscloseOrganization", update_DISCLOSE(
                         c.DiscloseOrganization, c.DiscloseFlag) );
-            action.getDB()->SETBOOL("DiscloseAddress", update_DISCLOSE(
+
+            //if hidden address not allowed then disclose address
+            if(!(hidden_address_allowed_by_contact_state && hidden_address_allowed_by_organization))
+            {
+                action.getDB()->SETBOOL("DiscloseAddress", 't');
+            }
+            else //ok
+            {
+                action.getDB()->SETBOOL("DiscloseAddress", update_DISCLOSE(
                         c.DiscloseAddress, c.DiscloseFlag) );
+            }
+
             action.getDB()->SETBOOL("DiscloseTelephone", update_DISCLOSE(
                         c.DiscloseTelephone, c.DiscloseFlag) );
             action.getDB()->SETBOOL("DiscloseFax", update_DISCLOSE(c.DiscloseFax,
@@ -2467,7 +2983,28 @@ ccReg::Response * ccReg_EPP_i::ContactUpdate(
             // make update and save to history
             if (action.getDB()->EXEC() )
                 if (action.getDB()->SaveContactHistory(id, params.requestID) )
+                {
                     code = COMMAND_OK;
+
+                    try
+                    {
+                        //conditional cancel verification
+                        if(Fred::Contact::Verification::check_contact_change_for_cancel_verification(handle))
+                        {
+                            Fred::Contact::Verification::contact_cancel_verification(handle);
+                        }
+                    }
+                    catch(std::exception & ex)
+                    {
+                        LOGGER(PACKAGE).error(boost::format("ContactUpdate: contact_cancel_verification [%1%] ") % ex.what());
+                        code =2400;
+                    }
+                    catch(...)
+                    {
+                        LOGGER(PACKAGE).error("ContactUpdate: contact_cancel_verification unknown exception");
+                        code =2400;
+                    }
+                }
 
         }
     }
@@ -2772,7 +3309,7 @@ ccReg::Response* ccReg_EPP_i::ObjectTransfer(
 
         case EPP_DomainTransfer:
             if ( (id = getIdOfDomain(action.getDB(), name, lock_epp_commands_
-                    , true, &zone) ) <= 0) {
+                    , idn_allowed(action), true, &zone ) ) <= 0) {
                 code=COMMAND_OBJECT_NOT_EXIST;
             }
             if (action.getDB()->TestRegistrarZone(action.getRegistrar(), zone) == false) {
@@ -3034,55 +3571,7 @@ ccReg::Response* ccReg_EPP_i::NSSetInfo(
   // start filling output nsset structure
   Fred::NSSet::NSSet *nss = nlist->getNSSet(0);
   n = new ccReg::NSSet;
-  // fill common object data
-  n->ROID = CORBA::string_dup(nss->getROID().c_str());
-  n->CrDate = CORBA::string_dup(formatTime(nss->getCreateDate()).c_str());
-  n->UpDate = CORBA::string_dup(formatTime(nss->getUpdateDate()).c_str());
-  n->TrDate = CORBA::string_dup(formatTime(nss->getTransferDate()).c_str());
-  n->ClID = CORBA::string_dup(nss->getRegistrarHandle().c_str());
-  n->CrID = CORBA::string_dup(nss->getCreateRegistrarHandle().c_str());
-  n->UpID = CORBA::string_dup(nss->getUpdateRegistrarHandle().c_str());
-  // authinfo is filled only if session registar is ownering registrar
-  n->AuthInfoPw = CORBA::string_dup(
-    a.getRegistrar() == (int)nss->getRegistrarId() ? nss->getAuthPw().c_str()
-          : ""
-  );
-  // states
-  for (unsigned i=0; i<nss->getStatusCount(); i++) {
-    Fred::TID stateId = nss->getStatusByIdx(i)->getStatusId();
-    const Fred::StatusDesc* sd = regMan->getStatusDesc(stateId);
-    if (!sd || !sd->getExternal())
-      continue;
-    n->stat.length(n->stat.length()+1);
-    n->stat[n->stat.length()-1].value = CORBA::string_dup(sd->getName().c_str() );
-    n->stat[n->stat.length()-1].text = CORBA::string_dup(sd->getDesc(
-        a.getLang() == LANG_CS ? "CS" : "EN"
-    ).c_str());
-  }
-  if (!n->stat.length()) {
-    const Fred::StatusDesc* sd = regMan->getStatusDesc(0);
-    if (sd) {
-      n->stat.length(1);
-      n->stat[0].value = CORBA::string_dup(sd->getName().c_str());
-      n->stat[0].text = CORBA::string_dup(sd->getDesc(
-          a.getLang() == LANG_CS ? "CS" : "EN"
-      ).c_str());
-    }
-  }
-  // nsset specific data
-  n->handle = CORBA::string_dup(nss->getHandle().c_str());
-  n->level = nss->getCheckLevel();
-  n->tech.length(nss->getAdminCount());
-  for (unsigned i=0; i<nss->getAdminCount(); i++)
-    n->tech[i] = CORBA::string_dup(nss->getAdminByIdx(i).c_str());
-  n->dns.length(nss->getHostCount());
-  for (unsigned i=0; i<nss->getHostCount(); i++) {
-    const Fred::NSSet::Host *h = nss->getHostByIdx(i);
-    n->dns[i].fqdn = CORBA::string_dup(h->getName().c_str());
-    n->dns[i].inet.length(h->getAddrCount());
-    for (unsigned j=0; j<h->getAddrCount(); j++)
-      n->dns[i].inet[j] = CORBA::string_dup(h->getAddrByIdx(j).c_str());
-  }
+  corba_nsset_data_copy(a, regMan.get(), n, nss);
   return a.getRet()._retn();
 }
 
@@ -4024,7 +4513,8 @@ ccReg::Response* ccReg_EPP_i::DomainInfo(
   std::auto_ptr<Fred::Domain::Manager>
       dman(Fred::Domain::Manager::create(a.getDB(), zman.get()) );
   // first check handle for proper format
-  Fred::Domain::CheckAvailType caType = dman->checkHandle(fqdn);
+
+  Fred::Domain::CheckAvailType caType = dman->checkHandle(fqdn, idn_allowed(a));
   if (caType != Fred::Domain::CA_AVAILABLE) {
     // failure in FQDN check, throw exception
     a.failed(SetReasonDomainFQDN(a.getErrors(), fqdn, caType
@@ -4041,71 +4531,7 @@ ccReg::Response* ccReg_EPP_i::DomainInfo(
   // start filling output domain structure
   Fred::Domain::Domain *dom = dlist->getDomain(0);
   d = new ccReg::Domain;
-  // fill common object data
-  d->ROID = CORBA::string_dup(dom->getROID().c_str());
-  d->name = CORBA::string_dup(dom->getFQDN().c_str());
-  d->CrDate = CORBA::string_dup(formatTime(dom->getCreateDate()).c_str());
-  d->UpDate = CORBA::string_dup(formatTime(dom->getUpdateDate()).c_str());
-  d->TrDate = CORBA::string_dup(formatTime(dom->getTransferDate()).c_str());
-  d->ClID = CORBA::string_dup(dom->getRegistrarHandle().c_str());
-  d->CrID = CORBA::string_dup(dom->getCreateRegistrarHandle().c_str());
-  d->UpID = CORBA::string_dup(dom->getUpdateRegistrarHandle().c_str());
-  // authinfo is filled only if session registar is ownering registrar
-  d->AuthInfoPw = CORBA::string_dup(
-    a.getRegistrar() == (int)dom->getRegistrarId() ? dom->getAuthPw().c_str()
-          : ""
-  );
-  // states
-  for (unsigned i=0; i<dom->getStatusCount(); i++) {
-    Fred::TID stateId = dom->getStatusByIdx(i)->getStatusId();
-    const Fred::StatusDesc* sd = regMan->getStatusDesc(stateId);
-    if (!sd || !sd->getExternal())
-      continue;
-    d->stat.length(d->stat.length()+1);
-    d->stat[d->stat.length()-1].value = CORBA::string_dup(sd->getName().c_str() );
-    d->stat[d->stat.length()-1].text = CORBA::string_dup(sd->getDesc(
-        a.getLang() == LANG_CS ? "CS" : "EN"
-    ).c_str());
-  }
-  if (!d->stat.length()) {
-    const Fred::StatusDesc* sd = regMan->getStatusDesc(0);
-    if (sd) {
-      d->stat.length(1);
-      d->stat[0].value = CORBA::string_dup(sd->getName().c_str());
-      d->stat[0].text = CORBA::string_dup(sd->getDesc(
-          a.getLang() == LANG_CS ? "CS" : "EN"
-      ).c_str());
-    }
-  }
-  // fill domain specific data
-  d->nsset = CORBA::string_dup(dom->getNSSetHandle().c_str());
-  d->keyset = CORBA::string_dup(dom->getKeySetHandle().c_str());
-  d->ExDate = CORBA::string_dup(to_iso_extended_string(dom->getExpirationDate()).c_str() );
-  // registrant and contacts are disabled for other registrars
-  // in case of enum domain
-  bool disabled = a.getRegistrar() != (int)dom->getRegistrarId()
-      && zman->findApplicableZone(fqdn)->isEnumZone();
-  // registrant
-  d->Registrant = CORBA::string_dup(disabled ? "" : dom->getRegistrantHandle().c_str() );
-  // admin
-  unsigned adminCount = disabled ? 0 : dom->getAdminCount(1);
-  d->admin.length(adminCount);
-  for (unsigned i=0; i<adminCount; i++)
-    d->admin[i] = CORBA::string_dup(dom->getAdminHandleByIdx(i,1).c_str());
-  // temps
-  unsigned tempCount = disabled ? 0 : dom->getAdminCount(2);
-  d->tmpcontact.length(tempCount);
-  for (unsigned i=0; i<tempCount; i++)
-    d->tmpcontact[i] = CORBA::string_dup(dom->getAdminHandleByIdx(i,2).c_str());
-  // validation
-  if (!dom->getValExDate().is_special()) {
-    ccReg::ENUMValidationExtension *enumVal =
-        new ccReg::ENUMValidationExtension();
-    enumVal->valExDate = CORBA::string_dup(to_iso_extended_string(dom->getValExDate()).c_str() );
-    enumVal->publish = dom->getPublish() ? ccReg::DISCL_DISPLAY : ccReg::DISCL_HIDE;
-    d->ext.length(1);
-    d->ext[0] <<= enumVal;
-  }
+  corba_domain_data_copy(a, regMan.get(), d, dom);
   return a.getRet()._retn();
 }
 
@@ -4139,7 +4565,7 @@ ccReg::Response* ccReg_EPP_i::DomainDelete(
     LOGGER(PACKAGE).notice(boost::format("DomainDelete: clientID -> %1% clTRID [%2%] fqdn  [%3%] ") % (int ) params.loginID % static_cast<const char*>(params.clTRID) % fqdn );
 
     if ( (id = getIdOfDomain(action.getDB(), fqdn, lock_epp_commands_
-            , true, &zone) ) <= 0) {
+            , idn_allowed(action), true,  &zone) ) <= 0) {
         LOG( WARNING_LOG, "domain  [%s] NOT_EXIST", fqdn );
         code=COMMAND_OBJECT_NOT_EXIST;
     }
@@ -4225,12 +4651,10 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
     std::string valexdate;
     ccReg::Disclose publish;
     int id, nssetid, contactid, adminid, keysetid;
-    int seq, zone;
+    int zone;
     std::vector<int> ac_add, ac_rem, tc_rem;
     unsigned int i, j;
     short int code = 0;
-
-    seq=0;
 
     EPPAction action(this, params.loginID, EPP_DomainUpdate, static_cast<const char*>(params.clTRID), params.XML, params.requestID);
 
@@ -4245,7 +4669,7 @@ ccReg::Response * ccReg_EPP_i::DomainUpdate(
     extractEnumDomainExtension(valexdate, publish, ext);
 
     if ( (id = getIdOfDomain(action.getDB(), fqdn, lock_epp_commands_
-            , true, &zone) ) <= 0) {
+            , idn_allowed(action), true, &zone) ) <= 0) {
         LOG( WARNING_LOG, "domain  [%s] NOT_EXIST", fqdn );
         code=COMMAND_OBJECT_NOT_EXIST;
     }
@@ -4701,7 +5125,9 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
     std::auto_ptr<EPPNotifier> ntf;
     std::string valexdate;
     ccReg::Disclose publish;
-    char FQDN[164];
+    std::string FQDN(fqdn);
+    boost::to_lower(FQDN);
+
     int contactid, nssetid, adminid, id, keysetid;
     int zone =0;
     unsigned int i, j;
@@ -4715,8 +5141,7 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
     crDate = CORBA::string_dup("");
     exDate = CORBA::string_dup("");
 
-    Database::Connection conn = wrapped_acquire(this);
-    EPPAction action(this, params.loginID, EPP_DomainCreate, static_cast<const char*>(params.clTRID), params.XML, conn, params.requestID);
+    EPPAction action(this, params.loginID, EPP_DomainCreate, static_cast<const char*>(params.clTRID), params.XML, params.requestID);
 
     ad.resize(admin.length());
 
@@ -4751,7 +5176,9 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
 
         LOG( NOTICE_LOG , "Domain::checkAvail  fqdn [%s]" , (const char * ) fqdn );
 
-        dType = dman->checkAvail( ( const char * ) fqdn , dConflict);
+        dType = dman->checkAvail( FQDN , dConflict, idn_allowed(action));
+        const Fred::Zone::Zone* temp_zone = NULL;
+
         LOG( NOTICE_LOG , "domain type %d" , dType );
         switch (dType) {
             case Fred::Domain::CA_INVALID_HANDLE:
@@ -4771,14 +5198,20 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
                 code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
                         ccReg::domain_fqdn, 1, REASON_MSG_BLACKLISTED_DOMAIN);
                 break;
-            case Fred::Domain::CA_AVAILABLE: // if is free
-                // conver fqdn to lower case and get zone
-                zone = getFQDN(action.getDB(), FQDN, fqdn);
-                LOG( NOTICE_LOG , "domain %s avail zone %d" ,(const char * ) FQDN , zone );
+            case Fred::Domain::CA_AVAILABLE: // if fqdn has valid format
+                temp_zone = zm->findApplicableZone(FQDN);
+                if(temp_zone != NULL) {
+                    zone = temp_zone->getId();
+                } else {
+                    zone = -1;
+                }
+                temp_zone = NULL;
+
+                LOG( NOTICE_LOG , "domain %s avail zone %d" ,(const char * ) FQDN.c_str(), zone );
                 break;
             case Fred::Domain::CA_BAD_ZONE:
                 // domain not in zone
-                LOG( NOTICE_LOG , "NOn in zone not applicable %s" , (const char * ) fqdn );
+                LOG( NOTICE_LOG , "NOn in zone not applicable %s" , (const char * ) FQDN.c_str() );
                 code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
                         ccReg::domain_fqdn, 1, REASON_MSG_NOT_APPLICABLE_DOMAIN);
                 break;
@@ -4929,7 +5362,7 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
                 if (code == 0) // if not error
                 {
 
-                    id= action.getDB()->CreateObject("D", action.getRegistrar(), FQDN, AuthInfoPw);
+                    id= action.getDB()->CreateObject("D", action.getRegistrar(), FQDN.c_str(), AuthInfoPw);
                     if (id<=0) {
                         if (id == 0) {
                             LOG( WARNING_LOG, "domain fqdn [%s] EXIST", fqdn );
@@ -5023,26 +5456,39 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
                                 }
 
                             }
-                            std::auto_ptr<Fred::Invoicing::Manager> invMan(
-                                    Fred::Invoicing::Manager::create());
-                            if (invMan->chargeDomainCreate(zone, action.getRegistrar(),
-                                        id, Database::Date(std::string(exDate)), period_count)) {
 
-                                if(!invMan->chargeDomainRenew(zone, action.getRegistrar(),
-                                        id, Database::Date(std::string(exDate)), period_count)) {
+                            if(rifd_epp_operations_charging_)
+                            {
+                                std::auto_ptr<Fred::Invoicing::Manager> invMan(
+                                        Fred::Invoicing::Manager::create());
+                                if (invMan->chargeDomainCreate(zone, action.getRegistrar(),
+                                            id, Database::Date(std::string(exDate)), period_count)) {
+
+                                    if(!invMan->chargeDomainRenew(zone, action.getRegistrar(),
+                                            id, Database::Date(std::string(exDate)), period_count)) {
+                                        code = COMMAND_BILLING_FAILURE;
+                                    }
+
+                                    else if (action.getDB()->SaveDomainHistory(id, params.requestID)) {
+                                        if (action.getDB()->SaveObjectCreate(id)) {
+                                            code = COMMAND_OK;
+                                        }
+                                    } else {
+                                        code = COMMAND_FAILED;
+                                    }
+                                } else {
                                     code = COMMAND_BILLING_FAILURE;
                                 }
 
-                                else if (action.getDB()->SaveDomainHistory(id, params.requestID)) {
-                                    if (action.getDB()->SaveObjectCreate(id)) {
-                                        code = COMMAND_OK;
-                                    }
-                                } else {
-                                    code = COMMAND_FAILED;
+                            }
+                            else if (action.getDB()->SaveDomainHistory(id, params.requestID)) {
+                                if (action.getDB()->SaveObjectCreate(id)) {
+                                    code = COMMAND_OK;
                                 }
                             } else {
-                                code = COMMAND_BILLING_FAILURE;
+                                code = COMMAND_FAILED;
                             }
+
 
                         } else
                             code = COMMAND_FAILED;
@@ -5054,7 +5500,6 @@ ccReg::Response * ccReg_EPP_i::DomainCreate(
                                             mm , action.getDB(), action.getRegistrar(), id ));
                                 action.setNotifier(ntf.get());
                             }
-
                     }
                 }
 
@@ -5116,8 +5561,7 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
     short int code = 0;
 
 
-    Database::Connection conn = wrapped_acquire(this);
-    EPPAction action(this, params.loginID, EPP_DomainRenew, static_cast<const char*>(params.clTRID), params.XML, conn, params.requestID);
+    EPPAction action(this, params.loginID, EPP_DomainRenew, static_cast<const char*>(params.clTRID), params.XML, params.requestID);
 
     // default
     exDate = CORBA::string_dup("");
@@ -5140,7 +5584,7 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
     extractEnumDomainExtension(valexdate, publish, ext);
 
     if ((id = getIdOfDomain(action.getDB(), fqdn, lock_epp_commands_
-            , true, &zone) ) <= 0) {
+            , idn_allowed(action), true, &zone) ) <= 0) {
         LOG( WARNING_LOG, "domain  [%s] NOT_EXIST", fqdn );
         code=COMMAND_OBJECT_NOT_EXIST;
     }
@@ -5272,12 +5716,15 @@ ccReg_EPP_i::DomainRenew(const char *fqdn, const char* curExpDate,
                         CORBA::string_free(exDate);
                         exDate = CORBA::string_dup(action.getDB()->GetDomainExDate(id) );
 
-
-
-                        std::auto_ptr<Fred::Invoicing::Manager> invMan(Fred::Invoicing::Manager::create());
-                        if (invMan->chargeDomainRenew(zone, action.getRegistrar(),
-                                    id, Database::Date(std::string(exDate)), period_count) == false ) {
-                            code = COMMAND_BILLING_FAILURE;
+                        if(rifd_epp_operations_charging_)
+                        {
+                            std::auto_ptr<Fred::Invoicing::Manager> invMan(Fred::Invoicing::Manager::create());
+                            if (invMan->chargeDomainRenew(zone, action.getRegistrar(),
+                                        id, Database::Date(std::string(exDate)), period_count) == false ) {
+                                code = COMMAND_BILLING_FAILURE;
+                            } else if (action.getDB()->SaveDomainHistory(id, params.requestID)) {
+                                code = COMMAND_OK;
+                            }
                         } else if (action.getDB()->SaveDomainHistory(id, params.requestID)) {
                             code = COMMAND_OK;
                         }
@@ -5361,74 +5808,7 @@ ccReg_EPP_i::KeySetInfo(
 
     Fred::KeySet::KeySet *kss = klist->getKeySet(0);
     k = new ccReg::KeySet;
-
-    //fill common object data
-    k->ROID = CORBA::string_dup(kss->getROID().c_str());
-    k->CrDate = CORBA::string_dup(formatTime(kss->getCreateDate()).c_str());
-    k->UpDate = CORBA::string_dup(formatTime(kss->getUpdateDate()).c_str());
-    k->TrDate = CORBA::string_dup(formatTime(kss->getTransferDate()).c_str());
-    k->ClID = CORBA::string_dup(kss->getRegistrarHandle().c_str());
-    k->CrID = CORBA::string_dup(kss->getCreateRegistrarHandle().c_str());
-    k->UpID = CORBA::string_dup(kss->getUpdateRegistrarHandle().c_str());
-    //authinfo is filled only if session registrar is also owner
-    k->AuthInfoPw = CORBA::string_dup(
-            a.getRegistrar() == (int)kss->getRegistrarId() ?
-            kss->getAuthPw().c_str() : "");
-
-
-    // states
-    for (unsigned int i = 0; i < kss->getStatusCount(); i++) {
-        Fred::TID stateId = kss->getStatusByIdx(i)->getStatusId();
-        const Fred::StatusDesc *sd = regMan->getStatusDesc(stateId);
-        if (!sd || !sd->getExternal())
-            continue;
-        k->stat.length(k->stat.length() + 1);
-        k->stat[k->stat.length()-1].value =
-            CORBA::string_dup(sd->getName().c_str());
-        k->stat[k->stat.length()-1].text =
-            CORBA::string_dup(sd->getDesc(
-                        a.getLang() == LANG_CS ? "CS" : "EN").c_str()
-                    );
-    }
-
-    if (!k->stat.length()) {
-        const Fred::StatusDesc *sd = regMan->getStatusDesc(0);
-        if (sd) {
-            k->stat.length(1);
-            k->stat[0].value = CORBA::string_dup(sd->getName().c_str());
-            k->stat[0].text = CORBA::string_dup(
-                    sd->getDesc(a.getLang() == LANG_CS ? "CS" : "EN").c_str());
-        }
-    }
-
-    // keyset specific data
-    k->handle = CORBA::string_dup(kss->getHandle().c_str());
-    k->tech.length(kss->getAdminCount());
-    for (unsigned int i = 0; i < kss->getAdminCount(); i++)
-        k->tech[i] = CORBA::string_dup(kss->getAdminByIdx(i).c_str());
-
-
-    // dsrecord
-    k->dsrec.length(kss->getDSRecordCount());
-    for (unsigned int i = 0; i < kss->getDSRecordCount(); i++) {
-        const Fred::KeySet::DSRecord *dsr = kss->getDSRecordByIdx(i);
-        k->dsrec[i].keyTag = dsr->getKeyTag();
-        k->dsrec[i].alg = dsr->getAlg();
-        k->dsrec[i].digestType = dsr->getDigestType();
-        k->dsrec[i].digest = CORBA::string_dup(dsr->getDigest().c_str());
-        k->dsrec[i].maxSigLife = dsr->getMaxSigLife();
-    }
-
-    // dnskey record
-    k->dnsk.length(kss->getDNSKeyCount());
-    for (unsigned int i = 0; i < kss->getDNSKeyCount(); i++) {
-        const Fred::KeySet::DNSKey *dnsk = kss->getDNSKeyByIdx(i);
-        k->dnsk[i].flags = dnsk->getFlags();
-        k->dnsk[i].protocol = dnsk->getProtocol();
-        k->dnsk[i].alg = dnsk->getAlg();
-        k->dnsk[i].key = CORBA::string_dup(dnsk->getKey().c_str());
-    }
-
+    corba_keyset_data_copy(a, regMan.get(), k, kss);
     return a.getRet()._retn();
 }
 
@@ -6184,7 +6564,6 @@ ccReg_EPP_i::KeySetUpdate(
     // dnsk_add tests - if exact same exist for this keyset
     if (!code) {
         for (int ii = 0; ii < (int)dnsk_add.length(); ii++) {
-            bool pass = true;
             int id;
             char *key;
             // keys are inserted into database without whitespaces
@@ -6192,7 +6571,6 @@ ccReg_EPP_i::KeySetUpdate(
                 code = COMMAND_FAILED;
                 LOG(WARNING_LOG, "removeWhitespaces failed");
                 free(key);
-                pass = false;
                 break;
             }
             id = action.getDB()->GetDNSKeyId(
@@ -6209,7 +6587,6 @@ ccReg_EPP_i::KeySetUpdate(
                 code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
                         ccReg::keyset_dnskey_add, ii,
                         REASON_MSG_DNSKEY_EXIST);
-                pass = false;
                 break;
             }
         }
@@ -6901,12 +7278,11 @@ ccReg::Response* ccReg_EPP_i::nssetTest(
 
   LOG( NOTICE_LOG , "nssetTest nsset %s  clientID -> %llu clTRID [%s] \n" , handle, params.loginID, static_cast<const char*>(params.clTRID) );
 
-  DBAutoPtr _db( new DB);
-  bool db_connected_ = _db->OpenDatabase(database);
-  DBSharedPtr DBsql = DBDisconnectPtr(_db.release());
+  Database::Connection conn = Database::Manager::acquire();
+  DBSharedPtr DBsql (new DB(conn));
 
   if ( (regID = GetRegistrarID(params.loginID) ))
-    if (db_connected_) {
+    {
 
       if ( (DBsql->BeginAction(params.loginID, EPP_NSsetTest, static_cast<const char*>(params.clTRID), params.XML, params.requestID) )) {
 
@@ -6961,9 +7337,10 @@ ccReg_EPP_i::ObjectSendAuthInfo(
         short act, const char * table, const char *fname, const char *name,
         const ccReg::EppParams &params)
 {
-    int zone;
+    int zone = 0;
     int id = 0;
-    char FQDN[164];
+    std::string FQDN(name);
+    boost::to_lower(FQDN);
     short int code = 0;
 
     EPPAction action(this, params.loginID, act, static_cast<const char*>(params.clTRID), params.XML, params.requestID);
@@ -6973,6 +7350,11 @@ ccReg_EPP_i::ObjectSendAuthInfo(
     // try { conn.reset(db.getConnection()); } catch (...) {}
 
     LOG( NOTICE_LOG , "ObjectSendAuthInfo type %d  object [%s]  clientID -> %llu clTRID [%s] " , act , name , params.loginID , static_cast<const char*>(params.clTRID) );
+
+    std::auto_ptr<Fred::Zone::Manager> zm( Fred::Zone::Manager::create() );
+    std::vector<std::string> dev_null;
+
+    const Fred::Zone::Zone* temp_zone = NULL;
 
     switch (act) {
         case EPP_ContactSendAuthInfo:
@@ -6996,23 +7378,44 @@ ccReg_EPP_i::ObjectSendAuthInfo(
                 code=COMMAND_OBJECT_NOT_EXIST;
             break;
         case EPP_DomainSendAuthInfo:
-            if ( (zone = getFQDN(action.getDB(), FQDN, name) ) <= 0) {
-                LOG(WARNING_LOG, "domain in zone %s", name);
-                if (zone == 0) {
-                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
-                            ccReg::domain_fqdn, 1,
-                            REASON_MSG_NOT_APPLICABLE_DOMAIN);
-                } else if (zone < 0) {
-                    code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
-                            ccReg::domain_fqdn, 1,
-                            REASON_MSG_BAD_FORMAT_FQDN);
-                }
+
+            // static check of fqdn format (no db)
+            try {
+                zm->parseDomainName(FQDN, dev_null, idn_allowed(action));
+            } catch(Fred::Zone::INVALID_DOMAIN_NAME&) {
+                zone = -1;
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_fqdn, 1,
+                        REASON_MSG_BAD_FORMAT_FQDN);
+            }
+
+            // if fqdn is ok (see catch block above) ...
+            if(zone != -1) {
+                temp_zone = zm->findApplicableZone(FQDN);
+            }
+            // no zone was found for given fqdn
+            if(temp_zone == NULL) {
+                zone = 0;
+                code = action.setErrorReason(COMMAND_PARAMETR_ERROR,
+                        ccReg::domain_fqdn, 1,
+                        REASON_MSG_NOT_APPLICABLE_DOMAIN);
+
+            // bingo, we got the zone
             } else {
-                if ( (id = action.getDB()->GetDomainID(FQDN, GetZoneEnum(action.getDB(), zone) ) ) == 0) {
+                zone = temp_zone->getId();
+                // safety measure
+                temp_zone = NULL;
+                LOG(WARNING_LOG, "domain in zone %s", name);
+            }
+
+            // we still don't know whether the name is actually in register
+            if(zone > 0) {
+                if ( (id = action.getDB()->GetDomainID(FQDN.c_str(), GetZoneEnum(action.getDB(), zone) ) ) == 0) {
                     LOG( WARNING_LOG , "domain [%s] NOT_EXIST" , name );
                     code= COMMAND_OBJECT_NOT_EXIST;
                 }
             }
+
             break;
         case EPP_KeySetSendAuthInfo:
             if ((id = getIdOfKeySet(action.getDB(), name, restricted_handles_

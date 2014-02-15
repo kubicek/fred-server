@@ -1,5 +1,5 @@
 Name:           fred-server
-Version:        2.11.2
+Version:        2.16.1
 Release:        1%{?dist}
 Summary:        FRED - CORBA backend C++ server
 

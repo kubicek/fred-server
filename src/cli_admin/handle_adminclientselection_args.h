@@ -1,17 +1,17 @@
-/*  
+/*
  * Copyright (C) 2010  CZ.NIC, z.s.p.o.
- * 
+ *
  * This file is part of FRED.
- * 
+ *
  * FRED is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 2 of the License.
- * 
+ *
  * FRED is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU General Public License
  * along with FRED.  If not, see <http://www.gnu.org/licenses/>.
  */
@@ -50,6 +50,8 @@
 #include "file_params.h"
 #include "regblock_params.h"
 #include "charge_params.h"
+#include "domain_name_validation_params.h"
+
 
 /**
  * \class HandleAdminClientDomainListArgsGrp
@@ -336,6 +338,110 @@ public:
         return option_group_index;
     }//handle
 };//class HandleAdminClientContactReminderArgsGrp
+
+/**
+ * \class HandleAdminClientContactMergeDuplicateAutoArgsGrp
+ * \brief admin client contact_merge_duplicate_auto options handler
+ */
+class HandleAdminClientContactMergeDuplicateAutoArgsGrp : public HandleCommandGrpArgs
+{
+public:
+    ContactMergeDuplicateAutoArgs params;
+
+    CommandDescription get_command_option()
+    {
+        return CommandDescription("contact_merge_duplicate_auto");
+    }
+
+    boost::shared_ptr<boost::program_options::options_description>
+    get_options_description()
+    {
+        boost::shared_ptr<boost::program_options::options_description> cfg_opts(
+                new boost::program_options::options_description(
+                        std::string("contact_merge_duplicate_auto options")));
+        cfg_opts->add_options()
+            ("contact_merge_duplicate_auto",
+                "contact merge, if further unspecified for all registrars")
+            ("registrar", boost::program_options::value<std::vector<std::string> >()->multitoken()
+                ->notifier(save_arg<std::vector<std::string> >(params.registrar)),
+                "registrar handles to run merge for, don't use with --except_registrar option")
+            ("except_registrar", boost::program_options::value<std::vector<std::string> >()->multitoken()
+                ->notifier(save_arg<std::vector<std::string> >(params.except_registrar)),
+                "run merge contact for all registrars except of these, don't use with --registrar option")
+            ("dry_run", boost::program_options::value<bool>()
+                ->default_value(false)->zero_tokens()
+                ->notifier(save_arg<bool>(params.dry_run)),
+                "just write what could be done; don't actually touch data")
+            ("selection_filter_order",
+                boost::program_options::value<std::vector<std::string> >()->multitoken()
+                    ->notifier(save_arg<std::vector<std::string> >(params.selection_filter_order)),
+                "specify custom order of filters for best contact selection; available values are:\n"
+                "\tmcs_filter_identified_contact\n"
+                "\tmcs_filter_conditionally_identified_contact\n"
+                "\tmcs_filter_handle_mojeid_syntax\n"
+                "\tmcs_filter_max_domains_bound\n"
+                "\tmcs_filter_max_objects_bound\n"
+                "\tmcs_filter_recently_updated\n"
+                "\tmcs_filter_not_regcznic\n"
+                "\tmcs_filter_recently_created")
+            ("verbose", boost::program_options::value<Checked::ushort>()
+                ->notifier(save_optional_ushort(params.verbose)),
+                "specify output verbosity level");
+        /* list of contact selection filters could be done by listing keys of ContactSelectionFilterFactory */
+        return cfg_opts;
+    }//get_options_description
+    std::size_t handle( int argc, char* argv[],  FakedArgs &fa
+            , std::size_t option_group_index)
+    {
+        boost::program_options::variables_map vm;
+        handler_parse_args(get_options_description(), vm, argc, argv, fa);
+        return option_group_index;
+    }//handle
+};//class HandleAdminClientContactMergeDuplicateAutoArgsGrp
+
+class HandleAdminClientContactMergeArgsGrp : public HandleCommandGrpArgs
+{
+public:
+    ContactMergeArgs params;
+
+    CommandDescription get_command_option()
+    {
+        return CommandDescription("contact_merge");
+    }
+
+    boost::shared_ptr<boost::program_options::options_description>
+    get_options_description()
+    {
+        boost::shared_ptr<boost::program_options::options_description> cfg_opts(
+                new boost::program_options::options_description(
+                        std::string("contact_merge options")));
+        cfg_opts->add_options()
+            ("contact_merge",
+                "command to merge two contacts")
+            ("src", boost::program_options::value<Checked::string>()
+                ->notifier(save_arg<std::string>(params.src)),
+                "source contact handle to be merge (this one will be deleted)")
+            ("dst", boost::program_options::value<Checked::string>()
+                ->notifier(save_arg<std::string>(params.dst)),
+                "destination contact handle to be merge onto")
+            ("dry_run", boost::program_options::value<bool>()
+                ->default_value(false)->zero_tokens()
+                ->notifier(save_arg<bool>(params.dry_run)),
+                "just write what could be done; don't actually touch data")
+            ("verbose", boost::program_options::value<Checked::ushort>()
+                ->notifier(save_optional_ushort(params.verbose)),
+                "specify output verbosity level");
+        return cfg_opts;
+    }//get_options_description
+    std::size_t handle( int argc, char* argv[],  FakedArgs &fa
+            , std::size_t option_group_index)
+    {
+        boost::program_options::variables_map vm;
+        handler_parse_args(get_options_description(), vm, argc, argv, fa);
+        return option_group_index;
+    }//handle
+};
+
 
 /**
  * \class HandleAdminClientContactListArgsGrp
@@ -827,6 +933,7 @@ class HandleAdminClientBankPaymentListArgsGrp : public HandleCommandGrpArgs
 public:
 
     optional_ulong bank_payment_type;
+    bool show_details;
 
     CommandDescription get_command_option()
     {
@@ -845,6 +952,9 @@ public:
             ("bank_payment_type", boost::program_options
                 ::value<Checked::ulong>()->notifier(save_optional_ulong(bank_payment_type))
                 , "payment type is  1 - 6")
+            ("show_details", boost::program_options
+                ::value<bool>()->zero_tokens()->notifier(save_arg<bool>(show_details)),
+                    "instead of payment id list print more info about payments")
             ;
         return cfg_opts;
     }//get_options_description
@@ -1691,10 +1801,10 @@ public:
             ("price_add", "add price")
             ("valid_from", boost::program_options
                 ::value<Checked::string>()->notifier(save_optional_string(params.valid_from))
-                , "price valid from datetime")
+                , "price valid from UTC datetime e.g. '2006-09-09 19:15:56'")
             ("valid_to", boost::program_options
                 ::value<Checked::string>()->notifier(save_optional_string(params.valid_to))
-                , "price valid to datetime")
+                , "price valid to UTC datetime e.g. '2007-09-29 19:15:56'")
             ("operation_price", boost::program_options
                 ::value<Checked::string_fpnumber>()->notifier(save_optional_string(params.operation_price))
                 , "operation price like: 140.00")
@@ -1972,43 +2082,6 @@ public:
     }//handle
 };//class HandleAdminClientEnumParameterChangeArgsGrp
 
-/**
- * \class HandleAdminClientObjectNewStateRequestArgsGrp
- * \brief admin client object_new_state_request options handler
- */
-class HandleAdminClientObjectNewStateRequestArgsGrp : public HandleCommandGrpArgs
-{
-public:
-    ObjectNewStateRequestArgs params;
-    CommandDescription get_command_option()
-    {
-        return CommandDescription("object_new_state_request",true);
-    }
-    boost::shared_ptr<boost::program_options::options_description>
-    get_options_description()
-    {
-        boost::shared_ptr<boost::program_options::options_description> cfg_opts(
-                new boost::program_options::options_description(
-                        std::string("object_new_state_request options")));
-        cfg_opts->add_options()
-            ("object_new_state_request",boost::program_options
-                    ::value<Checked::ulong>()->notifier(save_arg<unsigned long>(params.object_new_state_request))
-                    ,"set request for object state with specified state id")
-            ("object_id",boost::program_options
-                    ::value<Checked::id>()->notifier(save_arg<unsigned long long>(params.object_id))
-                     ,"object id")
-                ;
-        return cfg_opts;
-    }//get_options_description
-    std::size_t handle( int argc, char* argv[],  FakedArgs &fa
-            , std::size_t option_group_index)
-    {
-        boost::program_options::variables_map vm;
-        handler_parse_args(get_options_description(), vm, argc, argv, fa);
-        return option_group_index;
-    }//handle
-};//class HandleAdminClientObjectNewStateRequestArgsGrp
-
 
 /**
  * \class HandleAdminClientObjectNewStateRequestNameArgsGrp
@@ -2062,6 +2135,7 @@ public:
                    "conditionallyIdentifiedContact "
                    "identifiedContact "
                    "validatedContact "
+                   "mojeidContact "
                    )
                    ("valid_from,f",boost::program_options
                        ::value<Checked::string>()->notifier(save_optional_string(params.valid_from))
@@ -2276,6 +2350,86 @@ public:
         return option_group_index;
     }//handle
 };//class HandleAdminClientFileListArgsGrp
+
+/**
+ * \class HandleInitDomainNameValidationArgsGrp
+ * \brief admin client init_domain_name_validation options handler
+ */
+class HandleInitDomainNameValidationCheckersArgsGrp : public HandleCommandGrpArgs
+{
+public:
+    DomainNameValidationCheckersInitArgs params;
+    CommandDescription get_command_option()
+    {
+        return CommandDescription("init_domain_name_validation");
+    }
+    boost::shared_ptr<boost::program_options::options_description>
+    get_options_description()
+    {
+        boost::shared_ptr<boost::program_options::options_description> cfg_opts(
+                new boost::program_options::options_description(
+                        std::string("init_domain_name_validation options")));
+        cfg_opts->add_options()
+            ("init_domain_name_validation","save domain name syntax checker names into database")
+            ("auto,a", boost::program_options
+                                 ::value<bool>()->zero_tokens()->notifier(save_arg<bool>(params.serch_checkers_by_prefix))
+                                 , "get checker names to save from searching selfregistered implementations using checker name prefix")
+            ("checker_name_prefix,p",boost::program_options
+                ::value<Checked::string>()->default_value("dncheck_")->notifier(save_optional_string(params.checker_name_prefix))
+                 ,"prefix of checker implementation name used for searching")
+            ("checker_name,c",boost::program_options
+                  ::value<std::vector<std::string> >()->notifier(insert_arg< std::vector<std::string> >(params.checker_names))
+                   ,"explicit specification of checker name to save, may appear multiple times like \" -c dncheck_single_digit_labels -c dncheck_no_consecutive_hyphens \""
+                   "checker names are defined in implementation and are used for selfregistration of the checker into factory")
+                ;
+        return cfg_opts;
+    }//get_options_description
+    std::size_t handle( int argc, char* argv[],  FakedArgs &fa
+            , std::size_t option_group_index)
+    {
+        boost::program_options::variables_map vm;
+        handler_parse_args(get_options_description(), vm, argc, argv, fa);
+        return option_group_index;
+    }//handle
+};//class HandleInitDomainNameValidationCheckersArgsGrp
+
+/**
+ * \class HandleDomainNameValidationByZoneArgsGrp
+ * \brief admin client set_zone_domain_name_validation options handler
+ */
+class HandleDomainNameValidationByZoneArgsGrp : public HandleCommandGrpArgs
+{
+public:
+    ZoneDomainNameValidationCheckersArgs params;
+    CommandDescription get_command_option()
+    {
+        return CommandDescription("set_zone_domain_name_validation");
+    }
+    boost::shared_ptr<boost::program_options::options_description>
+    get_options_description()
+    {
+        boost::shared_ptr<boost::program_options::options_description> cfg_opts(
+                new boost::program_options::options_description(
+                        std::string("set_zone_domain_name_validation options")));
+        cfg_opts->add_options()
+            ("set_zone_domain_name_validation","set checkers applied to domain names per zone")
+            ("zone_name,z",boost::program_options
+                ::value<Checked::string>()->notifier(save_optional_string(params.zone_name))
+                 ,"name of the zone to configure checkers")
+            ("checker_name,c",boost::program_options
+                  ::value<std::vector<std::string> >()->notifier(insert_arg< std::vector<std::string> >(params.checker_names))
+                   ,"checker names to apply per zone to domain name e.g. \" -c dncheck_rfc1035_preferred_syntax -c dncheck_no_consecutive_hyphens \"")
+                ;
+        return cfg_opts;
+    }//get_options_description
+    std::size_t handle( int argc, char* argv[],  FakedArgs &fa
+            , std::size_t option_group_index)
+    {
+        boost::program_options::variables_map vm;
+        handler_parse_args(get_options_description(), vm, argc, argv, fa);
+        return option_group_index;
+    }//handle
+};//class HandleDomainNameValidationByZoneArgsGrp
 
 
 #endif //HANDLE_ADMINCLIENTSELECTION_ARGS_H_

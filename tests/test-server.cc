@@ -32,6 +32,8 @@ boost::assign::list_of
 (HandleArgsPtr(new HandleThreadGroupArgs))
 (HandleArgsPtr(new HandleRegistryArgs))
 (HandleArgsPtr(new HandleRifdArgs))
+(HandleArgsPtr(new HandleContactVerificationArgs))
+(HandleArgsPtr(new HandleMojeIDArgs))
 ;
 
 #include "cfg/test_custom_main.h"

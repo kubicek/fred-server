@@ -23,6 +23,7 @@ void ccReg_PublicRequests_i::reload_worker() {
 
   TRACE("[CALL] ccReg_PublicRequests_i::reload_worker()");
   request_list_->setTimeout(query_timeout);
+  request_list_->setLimit(limit_);
   request_list_->reload(uf);
 }
 
@@ -50,7 +51,7 @@ Registry::TableRow* ccReg_PublicRequests_i::getRow(CORBA::UShort _row)
   row->length(4);
   (*row)[0] <<= C_STR(request->getCreateTime());
   (*row)[1] <<= C_STR(request->getResolveTime());
-  (*row)[2] <<= C_STR(Fred::PublicRequest::Type2Str(request->getType()));
+  (*row)[2] <<= C_STR(request->getType());
   (*row)[3] <<= C_STR(Fred::PublicRequest::Status2Str(request->getStatus()));
   return row;
 }

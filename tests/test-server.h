@@ -55,6 +55,8 @@
 #include "cfg/handle_threadgroup_args.h"
 #include "cfg/handle_registry_args.h"
 #include "cfg/handle_rifd_args.h"
+#include "cfg/handle_contactverification_args.h"
+#include "cfg/handle_mojeid_args.h"
 
 
 #endif // TESTSERVER_H_

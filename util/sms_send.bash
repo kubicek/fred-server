@@ -18,6 +18,16 @@ if [ -z "$LOGFILE" ]; then
     LOGFILE=/tmp/fred_sms_tomato.log
 fi
 
+BLACKLIST=/etc/fred/sms_send_blacklist.conf
+if [ -r $BLACKLIST ]; then
+    if [ "$(grep $PHONE_NUMBER $BLACKLIST)"x == "$PHONE_NUMBER"x ]; then
+        echo "-=-=-=-=-=-=-=-= $(date) =-=-=-=-=-=-=-=-" >> $LOGFILE
+        echo "$PHONE_NUMBER found in blacklist - not sending" >> $LOGFILE
+        echo "-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-" >> $LOGFILE
+        exit 2;
+    fi
+fi
+
 echo "-=-=-=-=-=-=-=-= $(date) =-=-=-=-=-=-=-=-" >> $LOGFILE
 # prepare request data
 TEXTMESSAGEAUTHSUBSTR=${TEXTMESSAGE:0:31}
@@ -26,7 +36,13 @@ ACTION=send
 AUTHTEXT=$PASSWORDMD5$LOGIN$ACTION$TEXTMESSAGEAUTHSUBSTR
 AUTHTEXTMD5=`echo -ne $AUTHTEXT | openssl dgst -md5 | cut -d' ' -f2`
 TEXTMESSAGE2=$(python -c "import urllib; print urllib.quote('$TEXTMESSAGE');")
-REQUEST_DATA=" -d action=$ACTION -d login=$LOGIN -d auth=$AUTHTEXTMD5 --data-urlencode msisdn=$PHONE_NUMBER -d msg=$TEXTMESSAGE2 -d recack=1 -d sendermsisdn=mojeID"
+
+SENDERMSISDN="CZ.NIC"
+if [[ "$TEXTMESSAGE" == *"mojeID"* ]] ; then
+    SENDERMSISDN="mojeID"
+fi
+
+REQUEST_DATA=" -d action=$ACTION -d login=$LOGIN -d auth=$AUTHTEXTMD5 --data-urlencode msisdn=$PHONE_NUMBER -d msg=$TEXTMESSAGE2 -d recack=1 -d sendermsisdn=$SENDERMSISDN"
 
 # log and process request
 echo "QUERY" >> $LOGFILE

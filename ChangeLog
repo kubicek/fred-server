@@ -1,3 +1,160 @@
+2014-02-10 Michal Strnad (2.16.1)
+
+  * bugfix in mojeid interface (wrong exception translation at corba wrapper)
+
+2013-11-11 Jan Zima, Michal Strnad, Jan Korous, Jiri Sadek (2.16.0)
+
+  * new interface for administrative blocking/unblocking domains (and holders)
+
+  * epp operation charging has now configuration option
+
+  * serveral idn support fixes/enhancements (still mostly for experimental purpose due to lack of
+    definition of allowed character sets)
+      - configuration option
+      - enabled for system registrar
+
+  * fix logger object references filter
+
+  * fix epp poll req/ack commands - overflow of count values
+
+2013-11-15 Jiri Sadek (2.15.3)
+
+  * contact merge - generate new authinfo for destination contact
+
+2013-10-25 Jan Korous, Jiri Sadek (2.15.2)
+
+  * fix zone name resolution
+
+  * fix nsset host fqdn length
+
+  * fix epp keyset command input value escaping in sql
+
+2013-09-25 Jiri Sadek (2.15.1)
+
+  * whois (contact) reminder - fix sql for postgresql >= 8.4
+
+2013-08-07 Jiri Sadek (2.15.0)
+
+  * mojeid - managing of disclose flags removed from interface
+
+2013-06-05 Jiri Sadek (2.14.1)
+
+  * mojeid - implementation of getUnregistrableHandlesIter() idl method
+             transfer contact handles to client by small chunks
+
+2013-04-02 Jiri Sadek, Jan Zima (2.14.0)
+
+  * automatic procedure for duplicate contacts merging
+
+2013-04-17 Jiri Sadek (2.13.5)
+
+  * removed fix pagetable filter sort in database which caused problem with
+    selection object history
+
+2013-04-02 Jiri Sadek (2.13.4)
+
+  * fix pagetable limit settings (didn't work at all)
+
+  * fix pagetable filter sort in database
+
+2013-01-11 Jiri Sadek (2.13.3)
+
+  * notification letters send (postservis upload) is done in two batches (domestic and foreign)
+
+  * fix save of recipient postal address and contact reference into letter archive
+
+2012-12-18 Jan Zima (2.13.2)
+
+  * epp - fix update contact (cancel contact verification status check)
+
+2012-12-06 Jan Zima (2.13.1)
+
+  * reverted logging for document generator (Bad file descriptor error when
+    using ShellCmd)
+
+2012-11-20 Jiri Sadek, Jan Zima, Juraj Vicenik (2.13.0)
+
+  * fix/improvement in cancel state function
+
+  * fix compilation issues with boost >=1.50
+
+  * more detailed error logging for document generator external command
+
+  * epp
+      - allow to set discloseaddress flag in update contact command
+      - fix check for glue ip in create/update nsset commands
+      - fix display of contact states (schemas corrected)
+
+  * mojeid
+      - contact status condition changed for setting discloseaddress flag
+        (validatedContact -> identifiedContact)
+      - contactUnidentifyPrepare(..) method removed
+      - fix sms message
+      - fix logging messages severity
+
+  * logger - fix logging boost format string
+
+2012-10-17 Jan Zima (2.12.4)
+
+  * mojeid/contact verification - fix pin3 message type (registered_letter -> letter)
+
+2012-10-10 Jiri Sadek, Jan Zima (2.12.3)
+
+  * mojeid
+      - fix logging messages severity
+      - updated phone check regex
+
+  * whois
+      - add log context
+      - add method call identificator
+
+  * disabled logging of sql result
+
+2012-10-04 Jan Zima (2.12.2)
+
+  * adifd - fix processing of public request (locking)
+
+2012-10-03 Jan Zima (2.12.1)
+
+  * mojeid
+      - cancel account fix (missing lock)
+      - logging of wrong password (pin1/2) exception
+
+2012-09-06 Jiri Sadek, Juraj Vicenik, Jan Zima (2.12.0)
+
+  * contact verification implementation
+      - mojeid, public request appropriate changes
+      - epp - identification states handling in contact update
+
+  * mojeid
+      - implementation separated from corba layer
+      - mostly separated from registry code
+      - add method for canceling mojeid account (preserve identification state)
+      - fix conditional contact update
+      - removed identification method from create/transfer contact interface
+      - contact checks speedup
+
+  * public request / manual object state locking feature to serialize requests
+
+  * logger
+      - removed output flag from properties interface
+      - fix usage of connection releaser
+
+  * epp
+      - fix low credit poll message
+      - fix domain renew for maximum period
+      - fix technical_test command to load default domain set
+
+  * banking - fix payment processing for registrar with no access to zone to pay debt
+
+  * request fee
+      - fix request count within one day + tests
+      - fix registrar zone access check in request charging
+
+  * adifd
+      - method for getting summary of expiring domains (performance issues fix)
+      - fix method for object detail
+
 2012-06-11 Juraj Vicenik (2.11.2)
 
   * mojeid - fixed validated contact update checks (birthday change bug)
