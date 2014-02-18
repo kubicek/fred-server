@@ -15,8 +15,8 @@ fi
 
 PATH=$PATH:/sbin # to find pidof on redhat
 
-FRED_PATH=/home/jara/nic/fred//root/sbin
-VARRUN_PATH=/home/jara/nic/fred//root/var/run/
+FRED_PATH=/home/jara/fred/trunk//root/sbin
+VARRUN_PATH=/home/jara/fred/trunk//root/var/run/
 RIFD_PORT=41003
 PIFD_PORT=41004
 ADIFD_PORT=41005
@@ -31,7 +31,7 @@ MSG_STOP="Stopping FRED central registry CORBA servers..."
 # set DB_INIT=0 if you have your own database setup (database name,
 # database user, access rules..etc)
 DB_INIT=1
-DB_MANAGER=/home/jara/nic/fred//root/sbin/fred-dbmanager
+DB_MANAGER=/home/jara/fred/trunk//root/sbin/fred-dbmanager
 
 check_pidfile() {
     ps -p $(cat $1 2>/dev/null) >/dev/null 2>&1
@@ -79,7 +79,7 @@ fred_start() {
     fi
     NUM=0
     if check_pidfile ${VARRUN_PATH}/pyfred.pid; then NUM=$(($NUM+1)); else
-        /home/jara/nic/fred//root/bin/pyfredctl start >/dev/null 2>&1
+        /home/jara/fred/trunk//root/bin/pyfredctl start >/dev/null 2>&1
 	if [ $? -eq 0 ]; then
 	    NUM=$(($NUM+1))
 	fi
@@ -195,7 +195,7 @@ fred_stop() {
     fi
 
 
-    /home/jara/nic/fred//root/bin/pyfredctl stop > /dev/null
+    /home/jara/fred/trunk//root/bin/pyfredctl stop > /dev/null
     STOP_SUCCEDED=$(($STOP_SUCCEDED * $?))
     if [ $STOP_SUCCEDED -eq 0 ]
     then
@@ -366,7 +366,7 @@ case "$1" in
         init_cz
         ;;
     *)
-	echo -n "Usage: /home/jara/nic/fred//root/etc/init.d/fred-server "
+	echo -n "Usage: /home/jara/fred/trunk//root/etc/init.d/fred-server "
 	echo "{start|stop|restart|status|init_cz}"
 	exit 1
 esac
