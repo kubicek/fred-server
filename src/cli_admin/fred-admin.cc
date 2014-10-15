@@ -36,33 +36,33 @@
 #include <boost/date_time.hpp>
 #include <boost/assign/list_of.hpp>
 
-#include "fredlib/db_settings.h"
-#include "corba_wrapper.h"
+#include "src/fredlib/db_settings.h"
+#include "util/corba_wrapper.h"
 #include "log/logger.h"
 #include "log/context.h"
-#include "corba/connection_releaser.h"
+#include "src/corba/connection_releaser.h"
 
-#include "cli_admin/domain_client_impl.h"
-#include "cli_admin/keyset_client_impl.h"
-#include "cli_admin/contact_client_impl.h"
-#include "cli_admin/invoice_client_impl.h"
-#include "cli_admin/bank_client_impl.h"
-#include "cli_admin/poll_client_impl.h"
-#include "cli_admin/registrar_client_impl.h"
-#include "cli_admin/notify_client_impl.h"
-#include "cli_admin/enumparam_client_impl.h"
-#include "cli_admin/object_client_impl.h"
-#include "cli_admin/file_client_impl.h"
-#include "cli_admin/regblock_client.h"
-#include "cli_admin/charge_client_impl.h"
-#include "cli_admin/domain_name_validation_init.h"
+#include "domain_client_impl.h"
+#include "keyset_client_impl.h"
+#include "contact_client_impl.h"
+#include "invoice_client_impl.h"
+#include "bank_client_impl.h"
+#include "poll_client_impl.h"
+#include "registrar_client_impl.h"
+#include "notify_client_impl.h"
+#include "enumparam_client_impl.h"
+#include "object_client_impl.h"
+#include "file_client_impl.h"
+#include "regblock_client.h"
+#include "charge_client_impl.h"
+#include "domain_name_validation_init.h"
 
 #include "cfg/handle_general_args.h"
 #include "cfg/handle_logging_args.h"
 #include "cfg/handle_database_args.h"
 #include "cfg/handle_threadgroup_args.h"
 #include "cfg/handle_corbanameservice_args.h"
-#include "cli_admin/handle_adminclientselection_args.h"
+#include "handle_adminclientselection_args.h"
 #include "cfg/handle_registry_args.h"
 #include "cfg/handle_sms_args.h"
 #include "cfg/check_args.h"
@@ -79,7 +79,7 @@ const string prog_name = "fred-admin";
 //print help if required
 HandlerGrpVector help_gv = boost::assign::list_of
     (HandleGrpArgsPtr(
-            new HandleHelpArgGrp("\nUsage: " + prog_name + " <switches>\n")));
+            new HandleHelpGrpArg("\nUsage: " + prog_name + " <switches>\n")));
 
 //print help on dates if required
 HandlerGrpVector help_dates_gv = boost::assign::list_of
@@ -126,6 +126,7 @@ CommandHandlerPtrVector chpv = boost::assign::list_of
     (CommandHandlerParam(HandleCommandArgsPtr(new HandleAdminClientNotifyLettersPostservisSendArgsGrp),notify_letters_postservis_send_impl()))
     (CommandHandlerParam(HandleCommandArgsPtr(new HandleAdminClientNotifyRegisteredLettersManualSendArgsGrp),notify_registered_letters_manual_send_impl()))
     (CommandHandlerParam(HandleCommandArgsPtr(new HandleAdminClientNotifySmsSendArgsGrp),notify_sms_send_impl()))
+    (CommandHandlerParam(HandleCommandArgsPtr(new HandleAdminClientNotifyLettersOptysSendArgsGrp),notify_letters_optys_send_impl()))
     (CommandHandlerParam(HandleCommandArgsPtr(new HandleAdminClientEnumParameterChangeArgsGrp),enum_parameter_change_impl()))
     (CommandHandlerParam(HandleCommandArgsPtr(new HandleAdminClientObjectNewStateRequestNameArgsGrp),object_new_state_request_name_impl()))
     (CommandHandlerParam(HandleCommandArgsPtr(new HandleAdminClientObjectUpdateStatesArgsGrp),object_update_states_impl()))
@@ -134,15 +135,17 @@ CommandHandlerPtrVector chpv = boost::assign::list_of
     (CommandHandlerParam(HandleCommandArgsPtr(new HandleAdminClientFileListArgsGrp),file_list_impl()))
     (CommandHandlerParam(HandleCommandArgsPtr(new HandleInitDomainNameValidationCheckersArgsGrp),init_domain_name_validation_impl()))
     (CommandHandlerParam(HandleCommandArgsPtr(new HandleDomainNameValidationByZoneArgsGrp),set_zone_domain_name_validation_impl()))
-
- ;
+    (CommandHandlerParam(HandleCommandArgsPtr(new HandleContactVerificationFillQueueArgsGrp), contact_verification_fill_queue_impl()))
+    (CommandHandlerParam(HandleCommandArgsPtr(new HandleContactVerificationEnqueueCheckArgsGrp), contact_verification_enqueue_check_impl()))
+    (CommandHandlerParam(HandleCommandArgsPtr(new HandleContactVerificationStartEnqueuedChecksArgsGrp), contact_verification_start_enqueued_checks_impl()))
+    ;
 
 CommandOptionGroups cog(chpv);
 
 //common config file processing in path 0
 HandlerGrpVector config_gv = boost::assign::list_of
     (HandleGrpArgsPtr(
-            new HandleConfigFileArgsGrp(CONFIG_FILE))) ;
+            new HandleConfigFileGrpArgs(CONFIG_FILE))) ;
 HandlerGrpVector loging_gv = boost::assign::list_of
     (HandleGrpArgsPtr(
             new HandleLoggingArgsGrp));
@@ -161,7 +164,7 @@ HandlerGrpVector sms_gv = boost::assign::list_of
 
 HandlerPtrGrid global_hpg = gv_list
     (help_gv)(help_dates_gv)
-    (cog)
+    .addCommandOptions(cog)
     (config_gv)(loging_gv)(database_gv)(corbans_gv)(registry_gv)(sms_gv)
     ;
 
@@ -201,7 +204,7 @@ int main(int argc, char* argv[])
     try
     {
         //config
-        fa = CfgArgGroups::instance<HandleHelpArgGrp>(global_hpg)->handle(argc, argv);
+        fa = CfgArgGroups::init<HandleHelpGrpArg>(global_hpg)->handle(argc, argv);
 
         // setting up logger
         setup_admin_logging(CfgArgGroups::instance());

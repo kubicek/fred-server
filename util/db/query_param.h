@@ -35,16 +35,11 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/date_time/gregorian/gregorian.hpp>
 
+#include "nullable.h"
+#include "util/uuid.h"
 
 namespace Database
 {
-
-//compile time check - OK condition is true
-template <bool B> struct TAssert{};
-template <> struct TAssert<true>
-{
-    static void check() {};
-};
 
 //buffer type
 typedef std::string QueryParamData;
@@ -130,21 +125,34 @@ public:
     , buffer_( boost::gregorian::to_iso_extended_string(value))
     {}
 
+    //uuid
+    QueryParam(const uuid& value )
+    : binary_(false)
+    , null_(false)
+    , buffer_(value)
+    {}
+
+    template <class T> QueryParam( const Nullable<T>& t )
+    : binary_(false)
+    , null_(t.isnull())
+    {
+        if(!t.isnull())
+        {
+            buffer_ = boost::lexical_cast<std::string>(t.get_value());
+        }
+    }
+
     //all others
     template <class T> QueryParam( T t )
     : binary_(false)
     , null_(false)
     {
-        const std::size_t size_of_t = sizeof(t);
-
-        //QueryParam usage check: use only for basic types up to 8 bytes
-        TAssert<( ((size_of_t==1) || (size_of_t%2 == 0) || (size_of_t <= 8)) )>::check();
 
         //TODO: check valid combinations of basic param types with database types in query
         buffer_ = boost::lexical_cast<std::string>(t);
     }
 
-   std::string print_buffer() const
+    std::string print_buffer() const
     {
         std::string ret = "not set";
         if (null_)
@@ -177,6 +185,11 @@ public:
         return ret;
     }//print_buffer
 
+    std::string to_string() const
+    {
+        return print_buffer();
+    }
+
     //getters
     const QueryParamData& get_data() const
     {
@@ -202,6 +215,9 @@ template <typename CONTAINER_TYPE > struct list_of_params
     : public CONTAINER_TYPE
 {
     typedef typename CONTAINER_TYPE::value_type ELEMENT_TYPE;
+    list_of_params()
+    { }
+
     list_of_params(const ELEMENT_TYPE& t)
     {
         (*this)(t);
@@ -210,6 +226,15 @@ template <typename CONTAINER_TYPE > struct list_of_params
     {
         this->push_back(t);
         return *this;
+    }
+
+    /***
+     * @returns size of container AFTER new element has been pushed back
+     * (i. e. number for parameter in sql query)
+     */
+    std::string add(const ELEMENT_TYPE& t) {
+        this->push_back(t);
+        return boost::lexical_cast<std::string>( CONTAINER_TYPE::size() );
     }
 };
 

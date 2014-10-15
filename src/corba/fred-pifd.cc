@@ -22,9 +22,10 @@
  */
 
 #include "config.h"
-#include "Admin.hh"
+#include "src/corba/Admin.hh"
 #include "admin/admin_impl.h"
 #include "whois/whois_impl.h"
+#include "whois/whois2_impl.h"
 #include "contact_verification/contact_verification_i.h"
 
 #include <iostream>
@@ -39,11 +40,11 @@
 #include <boost/date_time.hpp>
 #include <boost/assign/list_of.hpp>
 
-#include "fredlib/db_settings.h"
-#include "corba_wrapper.h"
+#include "src/fredlib/db_settings.h"
+#include "util/corba_wrapper.h"
 #include "log/logger.h"
 #include "log/context.h"
-#include "corba/connection_releaser.h"
+#include "src/corba/connection_releaser.h"
 #include "setup_server.h"
 
 #include "cfg/config_handler.h"
@@ -80,7 +81,7 @@ int main(int argc, char *argv[])
     FakedArgs fa; //producing faked args with unrecognized ones
     try
     {   //config
-        fa = CfgArgs::instance<HandleHelpArg>(global_hpv)->handle(argc, argv);
+        fa = CfgArgs::init<HandleHelpArg>(global_hpv)->handle(argc, argv);
 
         // setting up logger
         setup_logging(CfgArgs::instance());
@@ -115,6 +116,7 @@ int main(int argc, char *argv[])
                 , server_name
                     , registry_args_ptr->restricted_handles));
 
+        std::auto_ptr<Registry::Whois::Server_impl> myWhois2 ( new Registry::Whois::Server_impl);
 
         std::auto_ptr<Registry::Contact::Verification::ContactVerification_i> contact_vrf_iface(
                 new Registry::Contact::Verification::ContactVerification_i("fred-pifd-cv"));
@@ -133,8 +135,10 @@ int main(int argc, char *argv[])
             ->register_server(myccReg_Whois_i.release(), "Whois");
 
         CorbaContainer::get_instance()
-            ->register_server(contact_vrf_iface.release(), "ContactVerification");
+            ->register_server(myWhois2.release(), "Whois2");
 
+        CorbaContainer::get_instance()
+            ->register_server(contact_vrf_iface.release(), "ContactVerification");
 
         run_server(CfgArgs::instance(), CorbaContainer::get_instance());
 

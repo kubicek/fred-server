@@ -1,18 +1,20 @@
 #include "types/birthdate.h"
-#include "fredlib/object_states.h"
-#include "fredlib/public_request/public_request_impl.h"
-#include "fredlib/contact_verification/contact.h"
-#include "fredlib/contact_verification/contact_verification_password.h"
-#include "fredlib/contact_verification/contact_conditional_identification_impl.h"
-#include "fredlib/contact_verification/contact_identification_impl.h"
-#include "contact_verification/public_request_contact_verification_impl.h"
-#include "mojeid/request.h"
-#include "mojeid/mojeid_contact_states.h"
-#include "mojeid/mojeid_contact_transfer_request_impl.h"
+#include "src/fredlib/object_states.h"
+#include "src/fredlib/public_request/public_request_impl.h"
+#include "src/fredlib/contact_verification/contact.h"
+#include "src/fredlib/contact_verification/contact_verification_password.h"
+#include "src/fredlib/contact_verification/contact_conditional_identification_impl.h"
+#include "src/fredlib/contact_verification/contact_identification_impl.h"
+#include "src/contact_verification/public_request_contact_verification_impl.h"
+#include "src/mojeid/request.h"
+#include "src/mojeid/mojeid_contact_states.h"
+#include "src/mojeid/mojeid_contact_transfer_request_impl.h"
 #include "map_at.h"
 #include "factory.h"
 #include "public_request_verification_impl.h"
 #include "mojeid_validators.h"
+
+#include <boost/assign/list_of.hpp>
 
 namespace Fred {
 namespace PublicRequest {
@@ -259,7 +261,7 @@ public:
                 boost::format(
                 "Potvrzujeme uspesne zalozeni uctu mojeID. "
                 "Pro aktivaci Vaseho uctu je nutne vlozit kody "
-                "PIN1 a PIN2. PIN1 Vam byl zaslan emailem, PIN2 je: %1%. "
+                "PIN1 a PIN2. PIN1 Vam byl zaslan emailem, PIN2 je: %1%"
                 )
                 , "mojeid_pin2");
     }
@@ -328,12 +330,35 @@ public:
 
     void sendPasswords()
     {
+        /* get configured forwarding service type */
+        Database::Connection conn = Database::Manager::acquire();
+        Database::Result fs = conn.exec(
+                "SELECT mtfsm.service_handle"
+                " FROM message_type_forwarding_service_map mtfsm"
+                " JOIN message_type mt ON mt.id = mtfsm.message_type_id"
+                " WHERE mt.type = 'mojeid_pin3'"
+                " FOR SHARE OF mtfsm");
+        if (fs.size() != 1)
+        {
+            throw std::runtime_error("message forwarding service not configured for 'mojeid_pin3'!");
+        }
+
+        const std::string service = static_cast<std::string>(fs[0]["service_handle"]);
+
+        /* XXX: mapping should be in database */
+        typedef std::map<std::string, Fred::Document::GenerationType> ServiceTemplateMap;
+        const ServiceTemplateMap service_to_template = boost::assign::map_list_of
+            ("POSTSERVIS", Fred::Document::GT_CONTACT_IDENTIFICATION_LETTER_PIN3)
+            ("OPTYS", Fred::Document::GT_CONTACT_IDENTIFICATION_LETTER_PIN3_OPTYS);
+
+        ServiceTemplateMap::const_iterator it = service_to_template.find(service);
+        if (it == service_to_template.end())
+        {
+            throw std::runtime_error("unknown mapping for message forwarding service"
+                   " to document template for 'mojeid_pin3'!");
+        }
         /* contact is already conditionally identified - send pin3 */
-        contact_verification_passwd_.sendLetterPassword("pin3"
-                , Fred::Document::GT_CONTACT_IDENTIFICATION_LETTER_PIN3
-                , "mojeid_pin3"
-                , "letter"
-                );
+        contact_verification_passwd_.sendLetterPassword("pin3", it->second, "mojeid_pin3", "letter");
     }
 
     static std::string registration_name()

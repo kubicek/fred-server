@@ -44,29 +44,24 @@
 
 #include "setup_server_decl.h"
 #include "time_clock.h"
-#include "fredlib/registrar.h"
-#include "fredlib/domain/update_domain.h"
-#include "fredlib/nsset/update_nsset.h"
-#include "fredlib/keyset/update_keyset.h"
-#include "fredlib/contact/delete_contact.h"
-#include "fredlib/contact/create_contact.h"
-#include "fredlib/nsset/create_nsset.h"
-#include "fredlib/keyset/create_keyset.h"
-#include "fredlib/domain/create_domain.h"
-#include "fredlib/nsset/info_nsset.h"
-#include "fredlib/nsset/info_nsset_history.h"
-#include "fredlib/nsset/info_nsset_compare.h"
-#include "fredlib/opexception.h"
+#include "src/fredlib/registrar.h"
+#include "src/fredlib/nsset/update_nsset.h"
+#include "src/fredlib/contact/info_contact.h"
+#include "src/fredlib/contact/delete_contact.h"
+#include "src/fredlib/contact/create_contact.h"
+#include "src/fredlib/nsset/create_nsset.h"
+#include "src/fredlib/nsset/info_nsset.h"
+#include "src/fredlib/opexception.h"
 #include "util/util.h"
 
-#include "fredlib/contact_verification/contact.h"
-#include "fredlib/object_states.h"
-#include "contact_verification/contact_verification_impl.h"
+#include "src/fredlib/contact_verification/contact.h"
+#include "src/fredlib/object_states.h"
+#include "src/contact_verification/contact_verification_impl.h"
 #include "random_data_generator.h"
 #include "concurrent_queue.h"
 
 
-#include "fredlib/db_settings.h"
+#include "src/fredlib/db_settings.h"
 
 #include "cfg/handle_general_args.h"
 #include "cfg/handle_server_args.h"
@@ -86,11 +81,12 @@ BOOST_AUTO_TEST_SUITE(TestUpdateNsset)
 const std::string server_name = "test-update-nsset";
 
 /**
- * test call InfoNsset
+ * test call InfoNssetByHandle
 */
 
 BOOST_AUTO_TEST_CASE(info_nsset)
 {
+    namespace ip = boost::asio::ip;
     Fred::OperationContext ctx;
 
     std::string registrar_handle = static_cast<std::string>(
@@ -120,15 +116,15 @@ BOOST_AUTO_TEST_CASE(info_nsset)
     std::string test_nsset_handle = std::string("TEST-NSSET-HANDLE")+xmark;
     Fred::CreateNsset(test_nsset_handle, registrar_handle)
         .set_dns_hosts(Util::vector_of<Fred::DnsHost>
-            (Fred::DnsHost("a.ns.nic.cz",  Util::vector_of<std::string>("127.0.0.3")("127.1.1.3"))) //add_dns
-            (Fred::DnsHost("b.ns.nic.cz",  Util::vector_of<std::string>("127.0.0.4")("127.1.1.4"))) //add_dns
+            (Fred::DnsHost("a.ns.nic.cz",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.3"))(ip::address::from_string("127.1.1.3")))) //add_dns
+            (Fred::DnsHost("b.ns.nic.cz",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.4"))(ip::address::from_string("127.1.1.4")))) //add_dns
             )
             .exec(ctx);
 
     //ctx.commit_transaction();
 
-    Fred::InfoNssetOutput nsset_info1 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    Fred::InfoNssetOutput nsset_info2 = Fred::InfoNsset(test_nsset_handle, registrar_handle).set_lock().exec(ctx);
+    Fred::InfoNssetOutput nsset_info1 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    Fred::InfoNssetOutput nsset_info2 = Fred::InfoNssetByHandle(test_nsset_handle).set_lock().exec(ctx);
 }
 
 struct update_nsset_fixture
@@ -145,6 +141,7 @@ struct update_nsset_fixture
     , admin_contact3_handle(std::string("TEST-ADMIN-CONTACT3-HANDLE")+xmark)
     , test_nsset_handle ( std::string("TEST-NSSET-HANDLE")+xmark)
     {
+        namespace ip = boost::asio::ip;
         Fred::OperationContext ctx;
         registrar_handle = static_cast<std::string>(ctx.get_conn().exec(
             "SELECT handle FROM registrar WHERE system = TRUE ORDER BY id LIMIT 1")[0][0]);
@@ -168,8 +165,8 @@ struct update_nsset_fixture
 
         Fred::CreateNsset(test_nsset_handle, registrar_handle)
             .set_dns_hosts(Util::vector_of<Fred::DnsHost>
-                (Fred::DnsHost("a.ns.nic.cz",  Util::vector_of<std::string>("127.0.0.3")("127.1.1.3"))) //add_dns
-                (Fred::DnsHost("b.ns.nic.cz",  Util::vector_of<std::string>("127.0.0.4")("127.1.1.4"))) //add_dns
+                (Fred::DnsHost("a.ns.nic.cz",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.3"))(ip::address::from_string("127.1.1.3")))) //add_dns
+                (Fred::DnsHost("b.ns.nic.cz",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.4"))(ip::address::from_string("127.1.1.4")))) //add_dns
                 )
                 .set_tech_contacts(Util::vector_of<std::string>(admin_contact3_handle))
                 .exec(ctx);
@@ -188,9 +185,11 @@ struct update_nsset_fixture
  */
 BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
 {
+    namespace ip = boost::asio::ip;
+
     Fred::OperationContext ctx;
-    Fred::InfoNssetOutput info_data_1 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_1 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_1 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_1 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     //update_registrar_handle check
     BOOST_CHECK(info_data_1.info_nsset_data.update_registrar_handle.isnull());
@@ -205,8 +204,8 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     //empty update
     Fred::UpdateNsset(test_nsset_handle, registrar_handle).exec(ctx);
 
-    Fred::InfoNssetOutput info_data_2 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_2 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_2 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_2 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     Fred::InfoNssetOutput info_data_1_with_changes = info_data_1;
 
@@ -215,7 +214,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     info_data_1_with_changes.info_nsset_data.historyid = info_data_2.info_nsset_data.historyid;
 
     //updated update_registrar_handle
-    BOOST_CHECK(registrar_handle == std::string(info_data_2.info_nsset_data.update_registrar_handle));
+    BOOST_CHECK(registrar_handle == info_data_2.info_nsset_data.update_registrar_handle.get_value());
     info_data_1_with_changes.info_nsset_data.update_registrar_handle = registrar_handle;
 
     //updated update_time
@@ -224,19 +223,20 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     //check changes made by last update
     BOOST_CHECK(info_data_1_with_changes == info_data_2);
 
-    //check info domain history against info domain
+    //check info nsset history against info nsset
     BOOST_CHECK(history_info_data_2.at(0) == info_data_2);
     BOOST_CHECK(history_info_data_2.at(1) == info_data_1);
 
-    //check info domain history against last info domain history
+    //check info nsset history against last info nsset history
     BOOST_CHECK(history_info_data_2.at(1).info_nsset_data == history_info_data_1.at(0).info_nsset_data);
 
     //check historyid
-    BOOST_CHECK(history_info_data_2.at(1).next_historyid == history_info_data_2.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data_2.at(1).next_historyid.get_value() == history_info_data_2.at(0).info_nsset_data.historyid);
     BOOST_CHECK(history_info_data_2.at(0).info_nsset_data.crhistoryid == info_data_2.info_nsset_data.crhistoryid);
 
     Fred::UpdateNsset(test_nsset_handle//handle
             , registrar_handle//registrar
+            , Optional<std::string>()//sponsoring registrar
             , Optional<std::string>()//authinfo
             , std::vector<Fred::DnsHost>() //add_dns
             , std::vector<std::string>() //rem_dns
@@ -246,8 +246,8 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
             , Optional<unsigned long long>() //logd_request_id
             ).exec(ctx);
 
-    Fred::InfoNssetOutput info_data_3 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_3 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_3 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_3 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     Fred::InfoNssetOutput info_data_2_with_changes = info_data_2;
 
@@ -256,7 +256,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     info_data_2_with_changes.info_nsset_data.historyid = info_data_3.info_nsset_data.historyid;
 
     //updated update_registrar_handle
-    BOOST_CHECK(registrar_handle == std::string(info_data_3.info_nsset_data.update_registrar_handle));
+    BOOST_CHECK(registrar_handle == info_data_3.info_nsset_data.update_registrar_handle.get_value());
     info_data_2_with_changes.info_nsset_data.update_registrar_handle = registrar_handle;
 
     //updated update_time
@@ -265,25 +265,26 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     //check changes made by last update
     BOOST_CHECK(info_data_2_with_changes == info_data_3);
 
-    //check info domain history against info domain
+    //check info nsset history against info nsset
     BOOST_CHECK(history_info_data_3.at(0) == info_data_3);
     BOOST_CHECK(history_info_data_3.at(1) == info_data_2);
     BOOST_CHECK(history_info_data_3.at(2) == info_data_1);
 
-    //check info domain history against last info domain history
+    //check info nsset history against last info nsset history
     BOOST_CHECK(history_info_data_3.at(1).info_nsset_data == history_info_data_2.at(0).info_nsset_data);
 
     //check historyid
-    BOOST_CHECK(history_info_data_3.at(1).next_historyid == history_info_data_3.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data_3.at(1).next_historyid.get_value() == history_info_data_3.at(0).info_nsset_data.historyid);
     BOOST_CHECK(history_info_data_3.at(0).info_nsset_data.crhistoryid == info_data_3.info_nsset_data.crhistoryid);
 
     Fred::UpdateNsset(test_nsset_handle//handle
             , registrar_handle//registrar
+                , Optional<std::string>(registrar_handle)//sponsoring registrar
                 , Optional<std::string>("passwd")//authinfo
                 , Util::vector_of<Fred::DnsHost>
-                    (Fred::DnsHost("host",  Util::vector_of<std::string>("127.0.0.1")("127.1.1.1"))) //add_dns
-                    (Fred::DnsHost("host1", Util::vector_of<std::string>("127.0.0.2")("127.1.1.2"))) //add_dns
-                    (Fred::DnsHost("b.ns.nic.cz",  Util::vector_of<std::string>("127.0.0.4")))//add_dns
+                    (Fred::DnsHost("host",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.1"))(ip::address::from_string("127.1.1.1")))) //add_dns
+                    (Fred::DnsHost("host1", Util::vector_of<ip::address>(ip::address::from_string("127.0.0.2"))(ip::address::from_string("127.1.1.2")))) //add_dns
+                    (Fred::DnsHost("b.ns.nic.cz",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.4"))))//add_dns
                 , Util::vector_of<std::string>("a.ns.nic.cz")("b.ns.nic.cz") //rem_dns
                 , Util::vector_of<std::string>(admin_contact2_handle) //std::vector<std::string>() //add_tech_contact
                 , Util::vector_of<std::string>(admin_contact2_handle) //std::vector<std::string>() //rem_tech_contact
@@ -291,8 +292,8 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
                 , Optional<unsigned long long>(0) //logd_request_id
                 ).exec(ctx);
 
-    Fred::InfoNssetOutput info_data_4 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_4 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_4 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_4 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     Fred::InfoNssetOutput info_data_3_with_changes = info_data_3;
 
@@ -301,8 +302,13 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     info_data_3_with_changes.info_nsset_data.historyid = info_data_4.info_nsset_data.historyid;
 
     //updated update_registrar_handle
-    BOOST_CHECK(registrar_handle == std::string(info_data_4.info_nsset_data.update_registrar_handle));
+    BOOST_CHECK(registrar_handle == info_data_4.info_nsset_data.update_registrar_handle.get_value());
     info_data_3_with_changes.info_nsset_data.update_registrar_handle = registrar_handle;
+
+    //updated sponsoring_registrar_handle
+    BOOST_CHECK(registrar_handle == std::string(info_data_4.info_nsset_data.sponsoring_registrar_handle));
+    info_data_3_with_changes.info_nsset_data.sponsoring_registrar_handle = registrar_handle;
+
 
     //updated update_time
     info_data_3_with_changes.info_nsset_data.update_time = info_data_4.info_nsset_data.update_time;
@@ -314,28 +320,29 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
 
     //update dns_hosts
     info_data_3_with_changes.info_nsset_data.dns_hosts = Util::vector_of<Fred::DnsHost>
-        (Fred::DnsHost("b.ns.nic.cz",  Util::vector_of<std::string>("127.0.0.4")))
-        (Fred::DnsHost("host",  Util::vector_of<std::string>("127.0.0.1")("127.1.1.1")))
-        (Fred::DnsHost("host1", Util::vector_of<std::string>("127.0.0.2")("127.1.1.2")));
+        (Fred::DnsHost("b.ns.nic.cz",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.4"))))
+        (Fred::DnsHost("host",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.1"))(ip::address::from_string("127.1.1.1"))))
+        (Fred::DnsHost("host1", Util::vector_of<ip::address>(ip::address::from_string("127.0.0.2"))(ip::address::from_string("127.1.1.2"))));
 
     //check changes made by last update
     BOOST_CHECK(info_data_3_with_changes == info_data_4);
 
-    //check info domain history against info domain
+    //check info nsset history against info nsset
     BOOST_CHECK(history_info_data_4.at(0) == info_data_4);
     BOOST_CHECK(history_info_data_4.at(1) == info_data_3);
     BOOST_CHECK(history_info_data_4.at(2) == info_data_2);
     BOOST_CHECK(history_info_data_4.at(3) == info_data_1);
 
-    //check info domain history against last info domain history
+    //check info nsset history against last info nsset history
     BOOST_CHECK(history_info_data_4.at(1).info_nsset_data == history_info_data_3.at(0).info_nsset_data);
 
     //check historyid
-    BOOST_CHECK(history_info_data_4.at(1).next_historyid == history_info_data_4.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data_4.at(1).next_historyid.get_value() == history_info_data_4.at(0).info_nsset_data.historyid);
     BOOST_CHECK(history_info_data_4.at(0).info_nsset_data.crhistoryid == info_data_4.info_nsset_data.crhistoryid);
 
     Fred::UpdateNsset(test_nsset_handle, registrar_handle)
-        .add_dns(Fred::DnsHost("host2",  Util::vector_of<std::string>("127.0.0.3")("127.1.1.3")))
+        .set_sponsoring_registrar(registrar_handle)
+        .add_dns(Fred::DnsHost("host2",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.3"))(ip::address::from_string("127.1.1.3"))))
         .rem_dns("b.ns.nic.cz")
         .add_tech_contact(admin_contact2_handle)
         .rem_tech_contact(admin_contact2_handle)
@@ -344,8 +351,8 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
         .set_tech_check_level(3)
     .exec(ctx);
 
-    Fred::InfoNssetOutput info_data_5 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_5 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_5 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_5 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     Fred::InfoNssetOutput info_data_4_with_changes = info_data_4;
 
@@ -354,8 +361,12 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     info_data_4_with_changes.info_nsset_data.historyid = info_data_5.info_nsset_data.historyid;
 
     //updated update_registrar_handle
-    BOOST_CHECK(registrar_handle == std::string(info_data_5.info_nsset_data.update_registrar_handle));
+    BOOST_CHECK(registrar_handle == info_data_5.info_nsset_data.update_registrar_handle.get_value());
     info_data_4_with_changes.info_nsset_data.update_registrar_handle = registrar_handle;
+
+    //updated sponsoring_registrar_handle
+    BOOST_CHECK(registrar_handle == std::string(info_data_5.info_nsset_data.sponsoring_registrar_handle));
+    info_data_4_with_changes.info_nsset_data.sponsoring_registrar_handle = registrar_handle;
 
     //updated update_time
     info_data_4_with_changes.info_nsset_data.update_time = info_data_5.info_nsset_data.update_time;
@@ -367,40 +378,40 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
 
     //update dns_hosts
     info_data_4_with_changes.info_nsset_data.dns_hosts = Util::vector_of<Fred::DnsHost>
-        (Fred::DnsHost("host2",  Util::vector_of<std::string>("127.0.0.3")("127.1.1.3")))
-        (Fred::DnsHost("host",  Util::vector_of<std::string>("127.0.0.1")("127.1.1.1")))
-        (Fred::DnsHost("host1", Util::vector_of<std::string>("127.0.0.2")("127.1.1.2")));
+        (Fred::DnsHost("host2",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.3"))(ip::address::from_string("127.1.1.3"))))
+        (Fred::DnsHost("host",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.1"))(ip::address::from_string("127.1.1.1"))))
+        (Fred::DnsHost("host1", Util::vector_of<ip::address>(ip::address::from_string("127.0.0.2"))(ip::address::from_string("127.1.1.2"))));
 
     //updated tech_check_level
-    BOOST_CHECK(3 == info_data_5.info_nsset_data.tech_check_level);
+    BOOST_CHECK(3 == info_data_5.info_nsset_data.tech_check_level.get_value());
     info_data_4_with_changes.info_nsset_data.tech_check_level = 3;
 
     //check logd request_id
-    BOOST_CHECK(4 == history_info_data_5.at(0).logd_request_id);
+    BOOST_CHECK(4 == history_info_data_5.at(0).logd_request_id.get_value());
 
 
     //check changes made by last update
     BOOST_CHECK(info_data_4_with_changes == info_data_5);
 
-    //check info domain history against info domain
+    //check info nsset history against info nsset
     BOOST_CHECK(history_info_data_5.at(0) == info_data_5);
     BOOST_CHECK(history_info_data_5.at(1) == info_data_4);
     BOOST_CHECK(history_info_data_5.at(2) == info_data_3);
     BOOST_CHECK(history_info_data_5.at(3) == info_data_2);
     BOOST_CHECK(history_info_data_5.at(4) == info_data_1);
 
-    //check info domain history against last info domain history
+    //check info nsset history against last info nsset history
     BOOST_CHECK(history_info_data_5.at(1).info_nsset_data == history_info_data_4.at(0).info_nsset_data);
 
     //check historyid
-    BOOST_CHECK(history_info_data_5.at(1).next_historyid == history_info_data_5.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data_5.at(1).next_historyid.get_value() == history_info_data_5.at(0).info_nsset_data.historyid);
     BOOST_CHECK(history_info_data_5.at(0).info_nsset_data.crhistoryid == info_data_5.info_nsset_data.crhistoryid);
 
     //add dns host
-    Fred::UpdateNsset(test_nsset_handle, registrar_handle).add_dns(Fred::DnsHost("host3",  Util::vector_of<std::string>("127.0.0.5")("127.1.1.5"))).exec(ctx);
+    Fred::UpdateNsset(test_nsset_handle, registrar_handle).add_dns(Fred::DnsHost("host3",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.5"))(ip::address::from_string("127.1.1.5")))).exec(ctx);
 
-    Fred::InfoNssetOutput info_data_6 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_6 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_6 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_6 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     Fred::InfoNssetOutput info_data_5_with_changes = info_data_5;
 
@@ -409,7 +420,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     info_data_5_with_changes.info_nsset_data.historyid = info_data_6.info_nsset_data.historyid;
 
     //updated update_registrar_handle
-    BOOST_CHECK(registrar_handle == std::string(info_data_6.info_nsset_data.update_registrar_handle));
+    BOOST_CHECK(registrar_handle == info_data_6.info_nsset_data.update_registrar_handle.get_value());
     info_data_5_with_changes.info_nsset_data.update_registrar_handle = registrar_handle;
 
     //updated update_time
@@ -417,15 +428,15 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
 
     //update dns_hosts
     info_data_5_with_changes.info_nsset_data.dns_hosts = Util::vector_of<Fred::DnsHost>
-        (Fred::DnsHost("host2",  Util::vector_of<std::string>("127.0.0.3")("127.1.1.3")))
-        (Fred::DnsHost("host",  Util::vector_of<std::string>("127.0.0.1")("127.1.1.1")))
-        (Fred::DnsHost("host1", Util::vector_of<std::string>("127.0.0.2")("127.1.1.2")))
-        (Fred::DnsHost("host3",  Util::vector_of<std::string>("127.0.0.5")("127.1.1.5")));
+        (Fred::DnsHost("host2",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.3"))(ip::address::from_string("127.1.1.3"))))
+        (Fred::DnsHost("host",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.1"))(ip::address::from_string("127.1.1.1"))))
+        (Fred::DnsHost("host1", Util::vector_of<ip::address>(ip::address::from_string("127.0.0.2"))(ip::address::from_string("127.1.1.2"))))
+        (Fred::DnsHost("host3",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.5"))(ip::address::from_string("127.1.1.5"))));
 
     //check changes made by last update
     BOOST_CHECK(info_data_5_with_changes == info_data_6);
 
-    //check info domain history against info domain
+    //check info nsset history against info nsset
     BOOST_CHECK(history_info_data_6.at(0) == info_data_6);
     BOOST_CHECK(history_info_data_6.at(1) == info_data_5);
     BOOST_CHECK(history_info_data_6.at(2) == info_data_4);
@@ -433,18 +444,18 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     BOOST_CHECK(history_info_data_6.at(4) == info_data_2);
     BOOST_CHECK(history_info_data_6.at(5) == info_data_1);
 
-    //check info domain history against last info domain history
+    //check info nsset history against last info nsset history
     BOOST_CHECK(history_info_data_6.at(1).info_nsset_data == history_info_data_5.at(0).info_nsset_data);
 
     //check historyid
-    BOOST_CHECK(history_info_data_6.at(1).next_historyid == history_info_data_6.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data_6.at(1).next_historyid.get_value() == history_info_data_6.at(0).info_nsset_data.historyid);
     BOOST_CHECK(history_info_data_6.at(0).info_nsset_data.crhistoryid == info_data_6.info_nsset_data.crhistoryid);
 
     //rem dns host
     Fred::UpdateNsset(test_nsset_handle, registrar_handle).rem_dns("host2").exec(ctx);
 
-    Fred::InfoNssetOutput info_data_7 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_7 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_7 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_7 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     Fred::InfoNssetOutput info_data_6_with_changes = info_data_6;
 
@@ -453,7 +464,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     info_data_6_with_changes.info_nsset_data.historyid = info_data_7.info_nsset_data.historyid;
 
     //updated update_registrar_handle
-    BOOST_CHECK(registrar_handle == std::string(info_data_7.info_nsset_data.update_registrar_handle));
+    BOOST_CHECK(registrar_handle == info_data_7.info_nsset_data.update_registrar_handle.get_value());
     info_data_6_with_changes.info_nsset_data.update_registrar_handle = registrar_handle;
 
     //updated update_time
@@ -461,14 +472,14 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
 
     //update dns_hosts
     info_data_6_with_changes.info_nsset_data.dns_hosts = Util::vector_of<Fred::DnsHost>
-        (Fred::DnsHost("host",  Util::vector_of<std::string>("127.0.0.1")("127.1.1.1")))
-        (Fred::DnsHost("host1", Util::vector_of<std::string>("127.0.0.2")("127.1.1.2")))
-        (Fred::DnsHost("host3",  Util::vector_of<std::string>("127.0.0.5")("127.1.1.5")));
+        (Fred::DnsHost("host",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.1"))(ip::address::from_string("127.1.1.1"))))
+        (Fred::DnsHost("host1", Util::vector_of<ip::address>(ip::address::from_string("127.0.0.2"))(ip::address::from_string("127.1.1.2"))))
+        (Fred::DnsHost("host3",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.5"))(ip::address::from_string("127.1.1.5"))));
 
     //check changes made by last update
     BOOST_CHECK(info_data_6_with_changes == info_data_7);
 
-    //check info domain history against info domain
+    //check info nsset history against info nsset
     BOOST_CHECK(history_info_data_7.at(0) == info_data_7);
     BOOST_CHECK(history_info_data_7.at(1) == info_data_6);
     BOOST_CHECK(history_info_data_7.at(2) == info_data_5);
@@ -477,18 +488,18 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     BOOST_CHECK(history_info_data_7.at(5) == info_data_2);
     BOOST_CHECK(history_info_data_7.at(6) == info_data_1);
 
-    //check info domain history against last info domain history
+    //check info nsset history against last info nsset history
     BOOST_CHECK(history_info_data_7.at(1).info_nsset_data == history_info_data_6.at(0).info_nsset_data);
 
     //check historyid
-    BOOST_CHECK(history_info_data_7.at(1).next_historyid == history_info_data_7.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data_7.at(1).next_historyid.get_value() == history_info_data_7.at(0).info_nsset_data.historyid);
     BOOST_CHECK(history_info_data_7.at(0).info_nsset_data.crhistoryid == info_data_7.info_nsset_data.crhistoryid);
 
     //rem tech contact
     Fred::UpdateNsset(test_nsset_handle, registrar_handle).rem_tech_contact(admin_contact3_handle).exec(ctx);
 
-    Fred::InfoNssetOutput info_data_8 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_8 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_8 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_8 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     Fred::InfoNssetOutput info_data_7_with_changes = info_data_7;
 
@@ -497,22 +508,24 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     info_data_7_with_changes.info_nsset_data.historyid = info_data_8.info_nsset_data.historyid;
 
     //updated update_registrar_handle
-    BOOST_CHECK(registrar_handle == std::string(info_data_8.info_nsset_data.update_registrar_handle));
+    BOOST_CHECK(registrar_handle == info_data_8.info_nsset_data.update_registrar_handle.get_value());
     info_data_7_with_changes.info_nsset_data.update_registrar_handle = registrar_handle;
 
     //updated update_time
     info_data_7_with_changes.info_nsset_data.update_time = info_data_8.info_nsset_data.update_time;
 
+    Fred::InfoContactOutput admin_contact3_info  = Fred::InfoContactByHandle(admin_contact3_handle).exec(ctx);
     //rem tech contact
     info_data_7_with_changes.info_nsset_data.tech_contacts.erase(std::remove(
-            info_data_7_with_changes.info_nsset_data.tech_contacts.begin()
-            , info_data_7_with_changes.info_nsset_data.tech_contacts.end()
-            , admin_contact3_handle));
+            info_data_7_with_changes.info_nsset_data.tech_contacts.begin(),
+            info_data_7_with_changes.info_nsset_data.tech_contacts.end(),
+        Fred::ObjectIdHandlePair(admin_contact3_info.info_contact_data.id,admin_contact3_info.info_contact_data.handle)
+    ));
 
     //check changes made by last update
     BOOST_CHECK(info_data_7_with_changes == info_data_8);
 
-    //check info domain history against info domain
+    //check info nsset history against info nsset
     BOOST_CHECK(history_info_data_8.at(0) == info_data_8);
     BOOST_CHECK(history_info_data_8.at(1) == info_data_7);
     BOOST_CHECK(history_info_data_8.at(2) == info_data_6);
@@ -522,18 +535,18 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     BOOST_CHECK(history_info_data_8.at(6) == info_data_2);
     BOOST_CHECK(history_info_data_8.at(7) == info_data_1);
 
-    //check info domain history against last info domain history
+    //check info nsset history against last info nsset history
     BOOST_CHECK(history_info_data_8.at(1).info_nsset_data == history_info_data_7.at(0).info_nsset_data);
 
     //check historyid
-    BOOST_CHECK(history_info_data_8.at(1).next_historyid == history_info_data_8.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data_8.at(1).next_historyid.get_value() == history_info_data_8.at(0).info_nsset_data.historyid);
     BOOST_CHECK(history_info_data_8.at(0).info_nsset_data.crhistoryid == info_data_8.info_nsset_data.crhistoryid);
 
     //add tech contact
     Fred::UpdateNsset(test_nsset_handle, registrar_handle).add_tech_contact(admin_contact3_handle).exec(ctx);
 
-    Fred::InfoNssetOutput info_data_9 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_9 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_9 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_9 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     Fred::InfoNssetOutput info_data_8_with_changes = info_data_8;
 
@@ -542,19 +555,20 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     info_data_8_with_changes.info_nsset_data.historyid = info_data_9.info_nsset_data.historyid;
 
     //updated update_registrar_handle
-    BOOST_CHECK(registrar_handle == std::string(info_data_9.info_nsset_data.update_registrar_handle));
+    BOOST_CHECK(registrar_handle == info_data_9.info_nsset_data.update_registrar_handle.get_value());
     info_data_8_with_changes.info_nsset_data.update_registrar_handle = registrar_handle;
 
     //updated update_time
     info_data_8_with_changes.info_nsset_data.update_time = info_data_9.info_nsset_data.update_time;
 
     //add tech contact
-    info_data_8_with_changes.info_nsset_data.tech_contacts.push_back(admin_contact3_handle);
+    info_data_8_with_changes.info_nsset_data.tech_contacts.push_back(
+        Fred::ObjectIdHandlePair(admin_contact3_info.info_contact_data.id,admin_contact3_info.info_contact_data.handle));
 
     //check changes made by last update
     BOOST_CHECK(info_data_8_with_changes == info_data_9);
 
-    //check info domain history against info domain
+    //check info nsset history against info nsset
     BOOST_CHECK(history_info_data_9.at(0) == info_data_9);
     BOOST_CHECK(history_info_data_9.at(1) == info_data_8);
     BOOST_CHECK(history_info_data_9.at(2) == info_data_7);
@@ -565,18 +579,18 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     BOOST_CHECK(history_info_data_9.at(7) == info_data_2);
     BOOST_CHECK(history_info_data_9.at(8) == info_data_1);
 
-    //check info domain history against last info domain history
+    //check info nsset history against last info nsset history
     BOOST_CHECK(history_info_data_9.at(1).info_nsset_data == history_info_data_8.at(0).info_nsset_data);
 
     //check historyid
-    BOOST_CHECK(history_info_data_9.at(1).next_historyid == history_info_data_9.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data_9.at(1).next_historyid.get_value() == history_info_data_9.at(0).info_nsset_data.historyid);
     BOOST_CHECK(history_info_data_9.at(0).info_nsset_data.crhistoryid == info_data_9.info_nsset_data.crhistoryid);
 
     //set authinfopw
     Fred::UpdateNsset(test_nsset_handle, registrar_handle).set_authinfo("passw").exec(ctx);
 
-    Fred::InfoNssetOutput info_data_10 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_10 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_10 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_10 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     Fred::InfoNssetOutput info_data_9_with_changes = info_data_9;
 
@@ -585,7 +599,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     info_data_9_with_changes.info_nsset_data.historyid = info_data_10.info_nsset_data.historyid;
 
     //updated update_registrar_handle
-    BOOST_CHECK(registrar_handle == std::string(info_data_10.info_nsset_data.update_registrar_handle));
+    BOOST_CHECK(registrar_handle == info_data_10.info_nsset_data.update_registrar_handle.get_value());
     info_data_9_with_changes.info_nsset_data.update_registrar_handle = registrar_handle;
 
     //updated update_time
@@ -597,7 +611,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     //check changes made by last update
     BOOST_CHECK(info_data_9_with_changes == info_data_10);
 
-    //check info domain history against info domain
+    //check info nsset history against info nsset
     BOOST_CHECK(history_info_data_10.at(0) == info_data_10);
     BOOST_CHECK(history_info_data_10.at(1) == info_data_9);
     BOOST_CHECK(history_info_data_10.at(2) == info_data_8);
@@ -609,18 +623,18 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     BOOST_CHECK(history_info_data_10.at(8) == info_data_2);
     BOOST_CHECK(history_info_data_10.at(9) == info_data_1);
 
-    //check info domain history against last info domain history
+    //check info nsset history against last info nsset history
     BOOST_CHECK(history_info_data_10.at(1).info_nsset_data == history_info_data_9.at(0).info_nsset_data);
 
     //check historyid
-    BOOST_CHECK(history_info_data_10.at(1).next_historyid == history_info_data_10.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data_10.at(1).next_historyid.get_value() == history_info_data_10.at(0).info_nsset_data.historyid);
     BOOST_CHECK(history_info_data_10.at(0).info_nsset_data.crhistoryid == info_data_10.info_nsset_data.crhistoryid);
 
     //set logd request_id
     Fred::UpdateNsset(test_nsset_handle, registrar_handle).set_logd_request_id(1).exec(ctx);
 
-    Fred::InfoNssetOutput info_data_11 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_11 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_11 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_11 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     Fred::InfoNssetOutput info_data_10_with_changes = info_data_10;
 
@@ -629,7 +643,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     info_data_10_with_changes.info_nsset_data.historyid = info_data_11.info_nsset_data.historyid;
 
     //updated update_registrar_handle
-    BOOST_CHECK(registrar_handle == std::string(info_data_11.info_nsset_data.update_registrar_handle));
+    BOOST_CHECK(registrar_handle == info_data_11.info_nsset_data.update_registrar_handle.get_value());
     info_data_10_with_changes.info_nsset_data.update_registrar_handle = registrar_handle;
 
     //updated update_time
@@ -638,7 +652,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     //check changes made by last update
     BOOST_CHECK(info_data_10_with_changes == info_data_11);
 
-    //check info domain history against info domain
+    //check info nsset history against info nsset
     BOOST_CHECK(history_info_data_11.at(0) == info_data_11);
     BOOST_CHECK(history_info_data_11.at(1) == info_data_10);
     BOOST_CHECK(history_info_data_11.at(2) == info_data_9);
@@ -651,21 +665,21 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     BOOST_CHECK(history_info_data_11.at(9) == info_data_2);
     BOOST_CHECK(history_info_data_11.at(10) == info_data_1);
 
-    //check info domain history against last info domain history
+    //check info nsset history against last info nsset history
     BOOST_CHECK(history_info_data_11.at(1).info_nsset_data == history_info_data_10.at(0).info_nsset_data);
 
     //check historyid
-    BOOST_CHECK(history_info_data_11.at(1).next_historyid == history_info_data_11.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data_11.at(1).next_historyid.get_value() == history_info_data_11.at(0).info_nsset_data.historyid);
     BOOST_CHECK(history_info_data_11.at(0).info_nsset_data.crhistoryid == info_data_11.info_nsset_data.crhistoryid);
 
     //check logd request_id
-    BOOST_CHECK(1 == history_info_data_11.at(0).logd_request_id);
+    BOOST_CHECK(1 == history_info_data_11.at(0).logd_request_id.get_value());
 
     //set tech check level
     Fred::UpdateNsset(test_nsset_handle, registrar_handle).set_tech_check_level(2).exec(ctx);
 
-    Fred::InfoNssetOutput info_data_12 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data_12 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_12 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    std::vector<Fred::InfoNssetOutput> history_info_data_12 = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
 
     Fred::InfoNssetOutput info_data_11_with_changes = info_data_11;
 
@@ -674,21 +688,21 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     info_data_11_with_changes.info_nsset_data.historyid = info_data_12.info_nsset_data.historyid;
 
     //updated update_registrar_handle
-    BOOST_CHECK(registrar_handle == std::string(info_data_12.info_nsset_data.update_registrar_handle));
+    BOOST_CHECK(registrar_handle == info_data_12.info_nsset_data.update_registrar_handle.get_value());
     info_data_11_with_changes.info_nsset_data.update_registrar_handle = registrar_handle;
 
     //updated update_time
     info_data_11_with_changes.info_nsset_data.update_time = info_data_12.info_nsset_data.update_time;
 
     //updated tech_check_level
-    BOOST_CHECK(2 == info_data_12.info_nsset_data.tech_check_level);
+    BOOST_CHECK(2 == info_data_12.info_nsset_data.tech_check_level.get_value());
     info_data_11_with_changes.info_nsset_data.tech_check_level = 2;
 
 
     //check changes made by last update
     BOOST_CHECK(info_data_11_with_changes == info_data_12);
 
-    //check info domain history against info domain
+    //check info nsset history against info nsset
     BOOST_CHECK(history_info_data_12.at(0) == info_data_12);
     BOOST_CHECK(history_info_data_12.at(1) == info_data_11);
     BOOST_CHECK(history_info_data_12.at(2) == info_data_10);
@@ -702,11 +716,11 @@ BOOST_FIXTURE_TEST_CASE(update_nsset, update_nsset_fixture )
     BOOST_CHECK(history_info_data_12.at(10) == info_data_2);
     BOOST_CHECK(history_info_data_12.at(11) == info_data_1);
 
-    //check info domain history against last info domain history
+    //check info nsset history against last info nsset history
     BOOST_CHECK(history_info_data_12.at(1).info_nsset_data == history_info_data_11.at(0).info_nsset_data);
 
     //check historyid
-    BOOST_CHECK(history_info_data_12.at(1).next_historyid == history_info_data_12.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data_12.at(1).next_historyid.get_value() == history_info_data_12.at(0).info_nsset_data.historyid);
     BOOST_CHECK(history_info_data_12.at(0).info_nsset_data.crhistoryid == info_data_12.info_nsset_data.crhistoryid);
 
     ctx.commit_transaction();
@@ -726,6 +740,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_wrong_handle, update_nsset_fixture )
         Fred::OperationContext ctx;//new connection to rollback on error
         Fred::UpdateNsset(bad_test_nsset_handle, registrar_handle).exec(ctx);
         ctx.commit_transaction();
+        BOOST_ERROR("no exception thrown");
     }
     catch(const Fred::UpdateNsset::Exception& ex)
     {
@@ -739,15 +754,19 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_wrong_handle, update_nsset_fixture )
  */
 BOOST_FIXTURE_TEST_CASE(update_nsset_wrong_registrar, update_nsset_fixture)
 {
-    Fred::OperationContext ctx;
     std::string bad_registrar_handle = registrar_handle+xmark;
-    Fred::InfoNssetOutput info_data_1 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_1;
+    {
+        Fred::OperationContext ctx;
+        info_data_1 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
 
     try
     {
         Fred::OperationContext ctx;//new connection to rollback on error
         Fred::UpdateNsset(test_nsset_handle, bad_registrar_handle).exec(ctx);
         ctx.commit_transaction();
+        BOOST_ERROR("no exception thrown");
     }
     catch(const Fred::UpdateNsset::Exception& ex)
     {
@@ -755,7 +774,47 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_wrong_registrar, update_nsset_fixture)
         BOOST_CHECK(ex.get_unknown_registrar_handle().compare(bad_registrar_handle) == 0);
     }
 
-    Fred::InfoNssetOutput info_data_2 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_2;
+    {
+        Fred::OperationContext ctx;
+        info_data_2 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
+    BOOST_CHECK(info_data_1 == info_data_2);
+    BOOST_CHECK(info_data_2.info_nsset_data.delete_time.isnull());
+
+}
+
+/**
+ * test UpdateNsset with wrong sponsoring registrar
+ */
+BOOST_FIXTURE_TEST_CASE(update_nsset_wrong_sponsoring_registrar, update_nsset_fixture)
+{
+    std::string bad_registrar_handle = registrar_handle+xmark;
+    Fred::InfoNssetOutput info_data_1;
+    {
+        Fred::OperationContext ctx;
+        info_data_1 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
+
+    try
+    {
+        Fred::OperationContext ctx;//new connection to rollback on error
+        Fred::UpdateNsset(test_nsset_handle, registrar_handle)
+            .set_sponsoring_registrar(bad_registrar_handle).exec(ctx);
+        ctx.commit_transaction();
+        BOOST_ERROR("no exception thrown");
+    }
+    catch(const Fred::UpdateNsset::Exception& ex)
+    {
+        BOOST_CHECK(ex.is_set_unknown_sponsoring_registrar_handle());
+        BOOST_CHECK(ex.get_unknown_sponsoring_registrar_handle().compare(bad_registrar_handle) == 0);
+    }
+
+    Fred::InfoNssetOutput info_data_2;
+    {
+        Fred::OperationContext ctx;
+        info_data_2 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
     BOOST_CHECK(info_data_1 == info_data_2);
     BOOST_CHECK(info_data_2.info_nsset_data.delete_time.isnull());
 
@@ -767,10 +826,12 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_wrong_registrar, update_nsset_fixture)
  */
 BOOST_FIXTURE_TEST_CASE(update_nsset_add_wrong_tech_contact, update_nsset_fixture)
 {
-    Fred::OperationContext ctx;
     std::string bad_tech_contact_handle = admin_contact2_handle+xmark;
-
-    Fred::InfoNssetOutput info_data_1 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_1;
+    {
+        Fred::OperationContext ctx;
+        info_data_1 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
 
     try
     {
@@ -779,6 +840,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_add_wrong_tech_contact, update_nsset_fixtur
         .add_tech_contact(bad_tech_contact_handle)
         .exec(ctx);
         ctx.commit_transaction();
+        BOOST_ERROR("no exception thrown");
     }
     catch(const Fred::UpdateNsset::Exception& ex)
     {
@@ -786,7 +848,11 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_add_wrong_tech_contact, update_nsset_fixtur
         BOOST_CHECK(ex.get_vector_of_unknown_technical_contact_handle().at(0).compare(bad_tech_contact_handle) == 0);
     }
 
-    Fred::InfoNssetOutput info_data_2 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_2;
+    {
+        Fred::OperationContext ctx;
+        info_data_2 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
     BOOST_CHECK(info_data_1 == info_data_2);
     BOOST_CHECK(info_data_2.info_nsset_data.delete_time.isnull());
 }
@@ -796,8 +862,11 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_add_wrong_tech_contact, update_nsset_fixtur
  */
 BOOST_FIXTURE_TEST_CASE(update_nsset_add_already_added_tech_contact, update_nsset_fixture)
 {
-    Fred::OperationContext ctx;
-    Fred::InfoNssetOutput info_data_1 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_1;
+    {
+        Fred::OperationContext ctx;
+        info_data_1 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
 
     try
     {
@@ -806,6 +875,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_add_already_added_tech_contact, update_nsse
         .add_tech_contact(admin_contact3_handle)//already added in fixture
         .exec(ctx);
         ctx.commit_transaction();
+        BOOST_ERROR("no exception thrown");
     }
     catch(const Fred::UpdateNsset::Exception& ex)
     {
@@ -813,7 +883,11 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_add_already_added_tech_contact, update_nsse
         BOOST_CHECK(ex.get_vector_of_already_set_technical_contact_handle().at(0).compare(admin_contact3_handle) == 0);
     }
 
-    Fred::InfoNssetOutput info_data_2 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_2;
+    {
+        Fred::OperationContext ctx;
+        info_data_2 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
     BOOST_CHECK(info_data_1 == info_data_2);
     BOOST_CHECK(info_data_2.info_nsset_data.delete_time.isnull());
 }
@@ -823,10 +897,12 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_add_already_added_tech_contact, update_nsse
  */
 BOOST_FIXTURE_TEST_CASE(update_nsset_rem_wrong_tech_contact, update_nsset_fixture)
 {
-    Fred::OperationContext ctx;
     std::string bad_tech_contact_handle = admin_contact2_handle+xmark;
-
-    Fred::InfoNssetOutput info_data_1 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_1;
+    {
+        Fred::OperationContext ctx;
+        info_data_1 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
 
     try
     {
@@ -835,6 +911,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_rem_wrong_tech_contact, update_nsset_fixtur
         .rem_tech_contact(bad_tech_contact_handle)
         .exec(ctx);
         ctx.commit_transaction();
+        BOOST_ERROR("no exception thrown");
     }
     catch(const Fred::UpdateNsset::Exception& ex)
     {
@@ -842,8 +919,11 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_rem_wrong_tech_contact, update_nsset_fixtur
         BOOST_CHECK(ex.get_vector_of_unknown_technical_contact_handle().at(0).compare(bad_tech_contact_handle) == 0);
     }
 
-
-    Fred::InfoNssetOutput info_data_2 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_2;
+    {
+        Fred::OperationContext ctx;
+        info_data_2 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
     BOOST_CHECK(info_data_1 == info_data_2);
     BOOST_CHECK(info_data_2.info_nsset_data.delete_time.isnull());
 }
@@ -853,10 +933,12 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_rem_wrong_tech_contact, update_nsset_fixtur
  */
 BOOST_FIXTURE_TEST_CASE(update_nsset_rem_unassigned_tech_contact, update_nsset_fixture)
 {
-    Fred::OperationContext ctx;
     std::string bad_tech_contact_handle = admin_contact2_handle;
-
-    Fred::InfoNssetOutput info_data_1 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_1;
+    {
+        Fred::OperationContext ctx;
+        info_data_1 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
 
     try
     {
@@ -864,8 +946,8 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_rem_unassigned_tech_contact, update_nsset_f
         Fred::UpdateNsset(test_nsset_handle, registrar_handle)
         .rem_tech_contact(bad_tech_contact_handle)
         .exec(ctx);
-
         ctx.commit_transaction();
+        BOOST_ERROR("no exception thrown");
     }
     catch(const Fred::UpdateNsset::Exception& ex)
     {
@@ -873,7 +955,11 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_rem_unassigned_tech_contact, update_nsset_f
         BOOST_CHECK(ex.get_vector_of_unassigned_technical_contact_handle().at(0).compare(bad_tech_contact_handle) == 0);
     }
 
-    Fred::InfoNssetOutput info_data_2 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_2;
+    {
+        Fred::OperationContext ctx;
+        info_data_2 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
     BOOST_CHECK(info_data_1 == info_data_2);
     BOOST_CHECK(info_data_2.info_nsset_data.delete_time.isnull());
 }
@@ -884,16 +970,22 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_rem_unassigned_tech_contact, update_nsset_f
  */
 BOOST_FIXTURE_TEST_CASE(update_nsset_add_already_added_dnshost, update_nsset_fixture)
 {
-    Fred::OperationContext ctx;
-    Fred::InfoNssetOutput info_data_1 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    namespace ip = boost::asio::ip;
+
+    Fred::InfoNssetOutput info_data_1;
+    {
+        Fred::OperationContext ctx;
+        info_data_1 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
 
     try
     {
         Fred::OperationContext ctx;//new connection to rollback on error
         Fred::UpdateNsset(test_nsset_handle, registrar_handle)
-        .add_dns(Fred::DnsHost("a.ns.nic.cz",  Util::vector_of<std::string>("127.0.0.3")("127.1.1.3")))//already added in fixture
+        .add_dns(Fred::DnsHost("a.ns.nic.cz",  Util::vector_of<ip::address>(ip::address::from_string("127.0.0.3"))(ip::address::from_string("127.1.1.3"))))//already added in fixture
         .exec(ctx);
         ctx.commit_transaction();
+        BOOST_ERROR("no exception thrown");
     }
     catch(const Fred::UpdateNsset::Exception& ex)
     {
@@ -901,7 +993,11 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_add_already_added_dnshost, update_nsset_fix
         BOOST_CHECK(ex.get_vector_of_already_set_dns_host().at(0).compare("a.ns.nic.cz") == 0);
     }
 
-    Fred::InfoNssetOutput info_data_2 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_2;
+    {
+        Fred::OperationContext ctx;
+        info_data_2 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
     BOOST_CHECK(info_data_1 == info_data_2);
     BOOST_CHECK(info_data_2.info_nsset_data.delete_time.isnull());
 }
@@ -911,8 +1007,11 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_add_already_added_dnshost, update_nsset_fix
  */
 BOOST_FIXTURE_TEST_CASE(update_nsset_remove_unassigned_dnshost, update_nsset_fixture)
 {
-    Fred::OperationContext ctx;
-    Fred::InfoNssetOutput info_data_1 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_1;
+    {
+        Fred::OperationContext ctx;
+        info_data_1 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
 
     try
     {
@@ -921,6 +1020,7 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_remove_unassigned_dnshost, update_nsset_fix
         .rem_dns("c.ns.nic.cz")
         .exec(ctx);
         ctx.commit_transaction();
+        BOOST_ERROR("no exception thrown");
     }
     catch(const Fred::UpdateNsset::Exception& ex)
     {
@@ -928,7 +1028,11 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_remove_unassigned_dnshost, update_nsset_fix
         BOOST_CHECK(ex.get_vector_of_unassigned_dns_host().at(0).compare("c.ns.nic.cz") == 0);
     }
 
-    Fred::InfoNssetOutput info_data_2 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_2;
+    {
+        Fred::OperationContext ctx;
+        info_data_2 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
     BOOST_CHECK(info_data_1 == info_data_2);
     BOOST_CHECK(info_data_2.info_nsset_data.delete_time.isnull());
 }
@@ -943,8 +1047,11 @@ BOOST_FIXTURE_TEST_CASE(update_nsset_remove_unassigned_dnshost, update_nsset_fix
  */
 BOOST_FIXTURE_TEST_CASE(info_nsset_history_test, update_nsset_fixture)
 {
-    Fred::OperationContext ctx;
-    Fred::InfoNssetOutput info_data_1 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_1;
+    {
+        Fred::OperationContext ctx;
+        info_data_1 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+    }
     //call update
     {
         Fred::OperationContext ctx;//new connection to rollback on error
@@ -953,17 +1060,23 @@ BOOST_FIXTURE_TEST_CASE(info_nsset_history_test, update_nsset_fixture)
         ctx.commit_transaction();
     }
 
-    Fred::InfoNssetOutput info_data_2 = Fred::InfoNsset(test_nsset_handle, registrar_handle).exec(ctx);
+    Fred::InfoNssetOutput info_data_2;
+    std::vector<Fred::InfoNssetOutput> history_info_data;
+    {
+        Fred::OperationContext ctx;
+        info_data_2 = Fred::InfoNssetByHandle(test_nsset_handle).exec(ctx);
+        history_info_data = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid).exec(ctx);
+    }
 
-    std::vector<Fred::InfoNssetHistoryOutput> history_info_data = Fred::InfoNssetHistory(info_data_1.info_nsset_data.roid, registrar_handle).exec(ctx);
+    history_info_data.at(0) == info_data_2;
 
     BOOST_CHECK(history_info_data.at(0) == info_data_2);
     BOOST_CHECK(history_info_data.at(1) == info_data_1);
 
-    BOOST_CHECK(history_info_data.at(1).next_historyid == history_info_data.at(0).info_nsset_data.historyid);
+    BOOST_CHECK(history_info_data.at(1).next_historyid.get_value() == history_info_data.at(0).info_nsset_data.historyid);
 
-    BOOST_CHECK(history_info_data.at(1).history_valid_from < history_info_data.at(1).history_valid_to);
-    BOOST_CHECK(history_info_data.at(1).history_valid_to <= history_info_data.at(0).history_valid_from);
+    BOOST_CHECK(history_info_data.at(1).history_valid_from < history_info_data.at(1).history_valid_to.get_value());
+    BOOST_CHECK(history_info_data.at(1).history_valid_to.get_value() <= history_info_data.at(0).history_valid_from);
     BOOST_CHECK(history_info_data.at(0).history_valid_to.isnull());
 
     BOOST_CHECK(history_info_data.at(1).info_nsset_data.crhistoryid == history_info_data.at(1).info_nsset_data.historyid);

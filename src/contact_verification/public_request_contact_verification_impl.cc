@@ -1,13 +1,13 @@
 #include "util/types/birthdate.h"
 #include "util/map_at.h"
 #include "util/factory.h"
-#include "fredlib/object_states.h"
-#include "fredlib/public_request/public_request_impl.h"
-#include "fredlib/contact_verification/contact.h"
-#include "fredlib/contact_verification/contact_verification_validators.h"
-#include "fredlib/contact_verification/contact_verification_password.h"
-#include "fredlib/contact_verification/contact_conditional_identification_impl.h"
-#include "fredlib/contact_verification/contact_identification_impl.h"
+#include "src/fredlib/object_states.h"
+#include "src/fredlib/public_request/public_request_impl.h"
+#include "src/fredlib/contact_verification/contact.h"
+#include "src/fredlib/contact_verification/contact_verification_validators.h"
+#include "src/fredlib/contact_verification/contact_verification_password.h"
+#include "src/fredlib/contact_verification/contact_conditional_identification_impl.h"
+#include "src/fredlib/contact_verification/contact_identification_impl.h"
 #include "src/contact_verification/public_request_contact_verification_impl.h"
 
 #include <stdexcept>
@@ -91,7 +91,7 @@ public:
         contact_verification_passwd_.sendSmsPassword(
                  boost::format(
                  "Potvrzujeme zahajeni procesu verifikace kontaktu v registru domen. "
-                 "Prvni krok spociva v zadani PIN1 a PIN2. PIN1 Vam byl zaslan e-mailem, PIN2 je: %1%. "),
+                 "Prvni krok spociva v zadani PIN1 a PIN2. PIN1 Vam byl zaslan e-mailem, PIN2 je: %1%"),
                  "contact_verification_pin2");
     }
 

@@ -18,6 +18,9 @@
 /* define if the Boost::Date_Time library is available */
 #undef HAVE_BOOST_DATE_TIME
 
+/* define if the Boost::Filesystem library is available */
+#undef HAVE_BOOST_FILESYSTEM
+
 /* define if the Boost::PROGRAM_OPTIONS library is available */
 #undef HAVE_BOOST_PROGRAM_OPTIONS
 
@@ -48,11 +51,20 @@
 /* Define to 1 if you have the `curl' library (-lcurl). */
 #undef HAVE_LIBCURL
 
+/* Define to 1 if you have the `minizip' library (-lminizip). */
+#undef HAVE_LIBMINIZIP
+
 /* Define to 1 if you have the `mpdec' library (-lmpdec). */
 #undef HAVE_LIBMPDEC
 
 /* Define to 1 if you have the `pthread' library (-lpthread). */
 #undef HAVE_LIBPTHREAD
+
+/* Define to 1 if you have the `ssh' library (-lssh). */
+#undef HAVE_LIBSSH
+
+/* Define to 1 if you have the `z' library (-lz). */
+#undef HAVE_LIBZ
 
 /* compile libraries with logging messages */
 #undef HAVE_LOGGER
@@ -120,6 +132,12 @@
 
 /* location of hpmail config file */
 #undef HPMAIL_CONFIG
+
+/* Define to 1 if your C compiler doesn't accept -c and -o together. */
+#undef NO_MINUS_C_MINUS_O
+
+/* location of optys mail service config file */
+#undef OPTYS_CONFIG
 
 /* Name of package */
 #undef PACKAGE

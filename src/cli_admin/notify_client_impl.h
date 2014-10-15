@@ -34,11 +34,11 @@
 #include "cfg/handle_database_args.h"
 #include "cfg/handle_corbanameservice_args.h"
 #include "cfg/handle_sms_args.h"
-#include "cli_admin/handle_adminclientselection_args.h"
+#include "handle_adminclientselection_args.h"
 #include "log/context.h"
-#include "cli_admin/notifyclient.h"
-#include "cli_admin/commonclient.h"
-#include "corba/file_manager_client.h"
+#include "notifyclient.h"
+#include "commonclient.h"
+#include "src/corba/file_manager_client.h"
 
 
 
@@ -156,6 +156,23 @@ struct notify_sms_send_impl
               );
       notify_client.runMethod();
       return ;
+  }
+};
+
+/**
+ * \class notify_letters_optys_send_impl
+ * \brief admin client implementation of notify_letters_optys_send
+ */
+struct notify_letters_optys_send_impl
+{
+  void operator()() const
+  {
+      Logging::Context ctx("notify_letters_optys_send_impl");
+      Admin::notify_letters_optys_send_impl(
+              CfgArgGroups::instance()->get_handler_ptr_by_type<HandleCorbaNameServiceArgsGrp>()->get_nameservice_host_port()
+              , CfgArgGroups::instance()->get_handler_ptr_by_type<HandleCorbaNameServiceArgsGrp>()->get_nameservice_context()
+              , CfgArgGroups::instance()->get_handler_ptr_by_type<HandleAdminClientNotifyLettersOptysSendArgsGrp>()->optys_config
+              );
   }
 };
 

@@ -22,15 +22,15 @@
 #include <omniORB4/CORBA.h>
 #include "commonclient.h"
 #include "objectclient.h"
-#include "fredlib/registry.h"
-#include "fredlib/poll.h"
+#include "src/fredlib/registry.h"
+#include "src/fredlib/poll.h"
 #include "log/logger.h"
-#include "corba/nameservice.h"
+#include "src/corba/nameservice.h"
 #include <stdexcept>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/algorithm/string.hpp>
 
-#include "fredlib/object_states.h"
+#include "src/fredlib/object_states.h"
 
 namespace Admin {
 
@@ -59,10 +59,8 @@ ObjectClient::new_state_request_name()
         object_new_state_request_name_params.object_name
         , object_new_state_request_name_params.object_type
         , object_new_state_request_name_params.object_state_name
-        , object_new_state_request_name_params.valid_from.is_value_set()
-            ? object_new_state_request_name_params.valid_from.get_value()
-                :  boost::posix_time::to_iso_extended_string(microsec_clock::universal_time())  //valid_from default now
-        , object_new_state_request_name_params.valid_to//valid_to
+        , object_new_state_request_name_params.valid_from
+        , object_new_state_request_name_params.valid_to
         , object_new_state_request_name_params.update_object_state
         );
 

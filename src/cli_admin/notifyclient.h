@@ -26,9 +26,9 @@
 #include <iostream>
 
 
-#include "corba/admin/admin_impl.h"
-#include "old_utils/dbsql.h"
-#include "fredlib/registry.h"
+#include "src/corba/admin/admin_impl.h"
+#include "src/old_utils/dbsql.h"
+#include "src/fredlib/registry.h"
 #include "baseclient.h"
 
 #include "notify_params.h"
@@ -114,7 +114,6 @@ public:
     void sendLetters(std::auto_ptr<Fred::File::Transferer> fileman
             , const std::string &conf_file);
     void sendSMS(const std::string& command , const std::string& param_quote_by);
-    HPCfgMap readHPConfig(const std::string &conf_file);
     void send_letters_impl(
         Fred::File::Transferer* fileman
         , const HPCfgMap& hpmail_config
@@ -124,9 +123,20 @@ public:
 
 }; // class NotifyClient
 
+/**
+ * Send designated letters manually.
+ */
 void notify_registered_letters_manual_send_impl(const std::string& nameservice_host_port
         , const std::string& nameservice_context
         , const RegisteredLettersManualSendArgs& params
+        );
+/**
+ * Send designated letters via Optys.
+ */
+void notify_letters_optys_send_impl(const std::string& nameservice_host_port
+        , const std::string& nameservice_context
+        , const std::string& optys_config_file
+
         );
 
 

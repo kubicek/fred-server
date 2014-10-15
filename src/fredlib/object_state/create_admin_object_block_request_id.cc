@@ -21,15 +21,16 @@
  *  create administrative object block request
  */
 
-#include "fredlib/object_state/create_admin_object_block_request_id.h"
-#include "fredlib/object_state/clear_object_state_request_id.h"
-#include "fredlib/object_state/get_blocking_status_desc_list.h"
-#include "fredlib/opcontext.h"
-#include "fredlib/db_settings.h"
+#include "src/fredlib/object_state/create_admin_object_block_request_id.h"
+#include "src/fredlib/object_state/clear_object_state_request_id.h"
+#include "src/fredlib/object_state/get_blocking_status_desc_list.h"
+#include "lock_multiple_object_state_request_lock.h"
+#include "src/fredlib/opcontext.h"
+#include "src/fredlib/db_settings.h"
 #include "util/optional_value.h"
 #include "util/db/nullable.h"
 #include "util/util.h"
-#include "fredlib/object.h"
+#include "src/fredlib/object.h"
 
 #include <boost/algorithm/string.hpp>
 #include <set>
@@ -94,7 +95,7 @@ namespace Fred
             status_list,
             valid_from_,
             valid_to_);
-        const std::string handle_name = createObjectStateRequestId.exec(_ctx);
+        const std::string handle_name = createObjectStateRequestId.exec(_ctx).first;
         if (reason_.isset()) {
             _ctx.get_conn().exec_params(
                 "INSERT INTO object_state_request_reason (object_state_request_id,reason_creation,reason_cancellation) "

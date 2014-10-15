@@ -22,19 +22,24 @@
  */
 
 #include "administrativeblocking.h"
-#include "fredlib/object_state/get_blocking_status_desc_list.h"
-#include "fredlib/object_state/get_object_state_id_map.h"
-#include "fredlib/object_state/create_admin_object_block_request.h"
-#include "fredlib/object_state/create_admin_object_block_request_id.h"
-#include "fredlib/object_state/create_admin_object_state_restore_request.h"
-#include "fredlib/object_state/create_admin_object_state_restore_request_id.h"
-#include "fredlib/domain/create_domain_name_blacklist.h"
-#include "fredlib/domain/create_domain_name_blacklist_id.h"
-#include "fredlib/object_state/clear_admin_object_state_request_id.h"
-#include "fredlib/domain/update_domain.h"
-#include "fredlib/domain/delete_domain.h"
-#include "fredlib/domain/info_domain.h"
-#include "fredlib/contact/copy_contact.h"
+#include "src/fredlib/object_state/get_blocking_status_desc_list.h"
+#include "src/fredlib/object_state/get_object_state_id_map.h"
+#include "src/fredlib/object_state/create_admin_object_block_request.h"
+#include "src/fredlib/object_state/create_admin_object_block_request_id.h"
+#include "src/fredlib/object_state/create_admin_object_state_restore_request.h"
+#include "src/fredlib/object_state/create_admin_object_state_restore_request_id.h"
+#include "src/fredlib/domain/create_domain_name_blacklist.h"
+#include "src/fredlib/domain/create_domain_name_blacklist_id.h"
+#include "src/fredlib/object_state/clear_admin_object_state_request_id.h"
+#include "src/fredlib/domain/update_domain.h"
+#include "src/fredlib/domain/delete_domain.h"
+#include "src/fredlib/domain/info_domain.h"
+#include "src/fredlib/contact/copy_contact.h"
+#include "src/fredlib/poll/create_update_object_poll_message.h"
+
+#include "util/log/context.h"
+#include "util/random.h"
+
 #include <memory>
 #include <map>
 
@@ -42,6 +47,11 @@ namespace
 {
 
 enum { OBJECT_TYPE_DOMAIN = 3 };
+
+std::string create_ctx_name(const std::string &_name)
+{
+    return str(boost::format("%1%-<%2%>")% _name % Random::integer(0, 10000));
+}
 
 }
 
@@ -52,6 +62,8 @@ namespace Registry
 
         Fred::GetBlockingStatusDescList::StatusDescList BlockingImpl::getBlockingStatusDescList(const std::string &_lang)
         {
+            Logging::Context ctx_server(create_ctx_name(this->get_server_name()));
+            Logging::Context ctx_method("get-blocking-status-desc-list");
             try {
                 Fred::OperationContext ctx;
                 Fred::GetBlockingStatusDescList blocking_status_desc_list;
@@ -335,6 +347,9 @@ namespace Registry
             const std::string &_reason,
             unsigned long long _log_req_id)
         {
+            Logging::Context ctx_server(create_ctx_name(this->get_server_name()));
+            Logging::Context ctx_method("block-domains-id");
+
             EX_DOMAIN_ID_NOT_FOUND domain_id_not_found;
             EX_UNKNOWN_STATUS unknown_status;
             EX_DOMAIN_ID_ALREADY_BLOCKED domain_id_already_blocked;
@@ -377,7 +392,7 @@ namespace Registry
                 boost::posix_time::ptime block_time_limit;
                 if (!_block_to_date.isnull()) {
                     // block to date 12:00:00 https://admin.nic.cz/ticket/6314#comment:50
-                    block_time_limit = boost::posix_time::ptime(static_cast< boost::gregorian::date >(_block_to_date),
+                    block_time_limit = boost::posix_time::ptime(_block_to_date.get_value(),
                                                                 boost::posix_time::time_duration(12, 0, 0));
                 }
                 for (IdlDomainIdList::const_iterator pObjectId = _domain_list.begin(); pObjectId != _domain_list.end(); ++pObjectId) {
@@ -439,7 +454,9 @@ namespace Registry
                                 if (0 < _log_req_id) {
                                     update_domain.set_logd_request_id(_log_req_id);
                                 }
-                                update_domain.exec(ctx);
+                                unsigned long long new_hid = update_domain.exec(ctx);
+                                /* in case of error when creating poll message we fail with internal server error */
+                                Fred::Poll::CreateUpdateObjectPollMessage(new_hid).exec(ctx);
                             }
                             result.push_back(result_item);
                         }
@@ -535,6 +552,9 @@ namespace Registry
             const std::string &_reason,
             unsigned long long _log_req_id)
         {
+            Logging::Context ctx_server(create_ctx_name(this->get_server_name()));
+            Logging::Context ctx_method("restore-pre-administrative-block-states-id");
+
             EX_DOMAIN_ID_NOT_BLOCKED domain_id_not_blocked;
             try {
                 Fred::OperationContext ctx;
@@ -549,13 +569,16 @@ namespace Registry
                         create_object_state_restore_request.exec(ctx);
                         Fred::PerformObjectStateRequest(object_id).exec(ctx);
                         const std::string fqdn = get_object_handle(ctx, object_id);
+
                         if (sys_registrar.empty()) {
                             sys_registrar = get_sys_registrar(ctx, is_sys_registrar);
                         }
-                        const boost::gregorian::date expiration_date = Fred::InfoDomain(fqdn, sys_registrar).exec(ctx).info_domain_data.expiration_date;
+
+                        const boost::gregorian::date expiration_date = Fred::InfoDomainByHandle(fqdn).exec(ctx).info_domain_data.expiration_date;
+
                         const boost::gregorian::date today(boost::gregorian::day_clock::universal_day());
                         const bool set_expire_today = expiration_date < today;
-                        const bool new_owner_is_set = !(_new_owner.isnull() || static_cast< std::string >(_new_owner).empty());
+                        const bool new_owner_is_set = !(_new_owner.isnull() || _new_owner.get_value().empty());
                         if (new_owner_is_set || set_expire_today) {
                             if (sys_registrar.empty()) {
                                 sys_registrar = get_sys_registrar(ctx, is_sys_registrar);
@@ -567,7 +590,7 @@ namespace Registry
                             }
                             Fred::UpdateDomain update_domain(fqdn, sys_registrar);
                             if (new_owner_is_set) {
-                                update_domain.set_registrant(_new_owner);
+                                update_domain.set_registrant(_new_owner.get_value());
                             }
                             if (set_expire_today) {
                                 update_domain.set_domain_expiration(today);
@@ -628,13 +651,16 @@ namespace Registry
             const std::string &_reason,
             unsigned long long _log_req_id)
         {
+            Logging::Context ctx_server(create_ctx_name(this->get_server_name()));
+            Logging::Context ctx_method("update-block-domains-id");
+
             EX_DOMAIN_ID_NOT_FOUND domain_id_not_found;
             EX_UNKNOWN_STATUS unknown_status;
             try {
                 boost::posix_time::ptime block_time_limit;
                 if (!_block_to_date.isnull()) {
                     // block to date 12:00:00 https://admin.nic.cz/ticket/6314#comment:50
-                    block_time_limit = boost::posix_time::ptime(static_cast< boost::gregorian::date >(_block_to_date),
+                    block_time_limit = boost::posix_time::ptime(_block_to_date.get_value(),
                                                                 boost::posix_time::time_duration(12, 0, 0));
                 }
                 Fred::OperationContext ctx;
@@ -708,6 +734,9 @@ namespace Registry
             const std::string &_reason,
             unsigned long long _log_req_id)
         {
+            Logging::Context ctx_server(create_ctx_name(this->get_server_name()));
+            Logging::Context ctx_method("unblock-domains-id");
+
             EX_DOMAIN_ID_NOT_BLOCKED domain_id_not_blocked;
             try {
                 Fred::OperationContext ctx;
@@ -721,13 +750,15 @@ namespace Registry
                         Fred::ClearAdminObjectStateRequestId(object_id, _reason).exec(ctx);
                         Fred::PerformObjectStateRequest(object_id).exec(ctx);
                         const std::string fqdn = get_object_handle(ctx, object_id);
+
                         if (sys_registrar.empty()) {
                             sys_registrar = get_sys_registrar(ctx, is_sys_registrar);
                         }
-                        const Fred::InfoDomainData info_domain_data = Fred::InfoDomain(fqdn, sys_registrar).exec(ctx).info_domain_data;
+                        const Fred::InfoDomainData info_domain_data = Fred::InfoDomainByHandle(fqdn).exec(ctx).info_domain_data;
+
                         const boost::gregorian::date today(boost::gregorian::day_clock::universal_day());
                         const bool set_expire_today = info_domain_data.expiration_date < today;
-                        const bool set_new_owner = !_new_owner.isnull() && !static_cast< std::string >(_new_owner).empty();
+                        const bool set_new_owner = !_new_owner.isnull() && !_new_owner.get_value().empty();
                         if (_remove_admin_c || set_new_owner || set_expire_today) {
                             if (sys_registrar.empty()) {
                                 sys_registrar = get_sys_registrar(ctx, is_sys_registrar);
@@ -739,7 +770,7 @@ namespace Registry
                             }
                             Fred::UpdateDomain update_domain(fqdn, sys_registrar);
                             if (set_new_owner) {
-                                update_domain.set_registrant(_new_owner);
+                                update_domain.set_registrant(_new_owner.get_value());
                             }
                             if (set_expire_today) {
                                 update_domain.set_domain_expiration(today);
@@ -748,12 +779,14 @@ namespace Registry
                                 update_domain.set_logd_request_id(_log_req_id);
                             }
                             if (_remove_admin_c) {
-                                for (std::vector< std::string >::const_iterator pAdmin = info_domain_data.admin_contacts.begin();
+                                for (std::vector< Fred::ObjectIdHandlePair >::const_iterator pAdmin = info_domain_data.admin_contacts.begin();
                                      pAdmin != info_domain_data.admin_contacts.end(); ++pAdmin) {
-                                    update_domain.rem_admin_contact(*pAdmin);
+                                    update_domain.rem_admin_contact(pAdmin->handle);
                                 }
                             }
-                            update_domain.exec(ctx);
+                            unsigned long long new_hid = update_domain.exec(ctx);
+                            /* in case of error when creating poll message we fail with internal server error */
+                            Fred::Poll::CreateUpdateObjectPollMessage(new_hid).exec(ctx);
                         }
                     }
                     catch (const Fred::ClearAdminObjectStateRequestId::Exception &e) {
@@ -782,8 +815,8 @@ namespace Registry
                             throw std::runtime_error("Fred::UpdateDomain::Exception");
                         }
                     }
-                    catch (const Fred::InfoDomain::Exception &e) {
-                        if (e.is_set_unknown_domain_fqdn()) {
+                    catch (const Fred::InfoDomainByHandle::Exception &e) {
+                        if (e.is_set_unknown_fqdn()) {
                             EX_INTERNAL_SERVER_ERROR ex;
                             ex.what = "domain doesn't exist"; 
                             throw ex;
@@ -820,11 +853,14 @@ namespace Registry
             const std::string &_reason,
             unsigned long long _log_req_id)
         {
+            Logging::Context ctx_server(create_ctx_name(this->get_server_name()));
+            Logging::Context ctx_method("blacklist-and-delete-domains-id");
+
             EX_DOMAIN_ID_NOT_FOUND domain_id_not_found;
             try {
                 boost::posix_time::ptime blacklist_to_limit;
                 if (!_blacklist_to_date.isnull()) {
-                    blacklist_to_limit = boost::posix_time::ptime(static_cast< boost::gregorian::date >(_blacklist_to_date),
+                    blacklist_to_limit = boost::posix_time::ptime(_blacklist_to_date.get_value(),
                                                                   boost::posix_time::time_duration(12, 0, 0));
                 }
                 Fred::OperationContext ctx;
@@ -842,7 +878,7 @@ namespace Registry
                             "WHERE id=$1::bigint", Database::query_param_list(object_id));
                         if (object_handle_res.size() == 1) {
                             const std::string domain = static_cast< std::string >(object_handle_res[0][0]);
-                            Fred::DeleteDomain(domain).exec(ctx);
+                            Fred::DeleteDomainByHandle(domain).exec(ctx);
                         }
                     }
                     catch (const Fred::CreateDomainNameBlacklistId::Exception &e) {
@@ -853,7 +889,7 @@ namespace Registry
                             throw;
                         }
                     }
-                    catch (const Fred::DeleteDomain::Exception &e) {
+                    catch (const Fred::DeleteDomainByHandle::Exception &e) {
                         if (e.is_set_unknown_domain_fqdn()) {
                             domain_id_not_found.what.insert(object_id);
                         }
@@ -883,10 +919,13 @@ namespace Registry
             bool _with_delete,
             unsigned long long _log_req_id)
         {
+            Logging::Context ctx_server(create_ctx_name(this->get_server_name()));
+            Logging::Context ctx_method("blacklist-domains-id");
+
             try {
                 boost::posix_time::ptime blacklist_to_limit;
                 if (!_blacklist_to_date.isnull()) {
-                    blacklist_to_limit = boost::posix_time::ptime(static_cast< boost::gregorian::date >(_blacklist_to_date),
+                    blacklist_to_limit = boost::posix_time::ptime(_blacklist_to_date.get_value(),
                                                                   boost::posix_time::time_duration(12, 0, 0));
                 }
                 Fred::OperationContext ctx;

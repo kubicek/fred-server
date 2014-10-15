@@ -8,18 +8,12 @@ AM_CPPFLAGS = \
 		$(OMNIORB4_CFLAGS) \
 		$(XML2_CFLAGS) \
 		-I $(top_srcdir)/util \
-		-I $(top_srcdir)/src \
-		-I . \
+		-I $(top_srcdir) \
 		-I $(top_srcdir)/util/db/model \
-		-I $(top_srcdir)/src/fredlib \
-		-I $(top_srcdir)/src/fredlib/banking \
-		-I $(top_srcdir)/src/corba \
-		-I $(top_srcdir)/src/corba/admin \
 		-I $(top_srcdir)/util/db \
-		-I $(top_srcdir)/util \
 		-I $(top_srcdir)/util/decimal \
-		-I $(top_builddir)/src/corba \
-		-I $(top_builddir)/src
+		-I $(top_srcdir)/include \
+		-I $(top_builddir)
 
 AM_LDFLAGS = \
 		$(POSTGRESQL_LDFLAGS) \
@@ -31,14 +25,14 @@ include $(top_srcdir)/am_doxygen.am
 CLEANFILES = \
 		config/server.conf \
 		config/hpmail.conf \
+		config/optysmail.conf \
 		init-scripts/fred-server \
+		doxy.conf \
 		src/corba/MessagesSK.cc \
 		src/corba/MessagesDynSK.cc \
-		src/corba/MessagesSK.h \
 		src/corba/Messages.hh \
 		src/corba/MojeIDSK.cc \
 		src/corba/MojeIDDynSK.cc \
-		src/corba/MojeIDSK.h \
 		src/corba/MojeID.hh \
 		src/corba/AdministrativeBlockingSK.cc \
 		src/corba/AdministrativeBlockingDynSK.cc \
@@ -46,55 +40,59 @@ CLEANFILES = \
 		src/corba/AdministrativeBlocking.hh \
 		src/corba/FileManagerSK.cc \
 		src/corba/FileManagerDynSK.cc \
-		src/corba/FileManagerSK.h \
 		src/corba/FileManager.hh \
 		src/corba/MailerSK.cc \
 		src/corba/MailerDynSK.cc \
-		src/corba/MailerSK.h \
 		src/corba/Mailer.hh \
 		src/corba/ZoneSK.cc \
 		src/corba/ZoneDynSK.cc \
-		src/corba/ZoneSK.h \
 		src/corba/Zone.hh \
 		src/corba/_dataTypesSK.cc \
 		src/corba/_dataTypesDynSK.cc \
-		src/corba/_dataTypesSK.h \
 		src/corba/_dataTypes.hh \
+		src/corba/DateTimeSK.cc \
+		src/corba/DateTimeDynSK.cc \
+		src/corba/DateTime.hh \
+		src/corba/NullableTypesSK.cc \
+		src/corba/NullableTypesDynSK.cc \
+		src/corba/NullableTypes.hh \
 		src/corba/FiltersSK.cc \
 		src/corba/FiltersDynSK.cc \
-		src/corba/FiltersSK.h \
 		src/corba/Filters.hh \
 		src/corba/RegistrySK.cc \
 		src/corba/RegistryDynSK.cc \
-		src/corba/RegistrySK.h \
 		src/corba/Registry.hh \
 		src/corba/WhoisSK.cc \
 		src/corba/WhoisDynSK.cc \
-		src/corba/WhoisSK.h \
 		src/corba/Whois.hh \
+		src/corba/Whois2SK.cc \
+		src/corba/Whois2DynSK.cc \
+		src/corba/Whois2.hh \
 		src/corba/AdminSK.cc \
 		src/corba/AdminDynSK.cc \
-		src/corba/AdminSK.h \
 		src/corba/Admin.hh \
 		src/corba/LoggerSK.cc \
 		src/corba/LoggerDynSK.cc \
-		src/corba/LoggerSK.h \
 		src/corba/Logger.hh \
 		src/corba/TechCheckSK.cc \
 		src/corba/TechCheckDynSK.cc \
-		src/corba/TechCheckSK.h \
 		src/corba/TechCheck.hh \
 		src/corba/EPPSK.cc \
 		src/corba/EPPDynSK.cc \
-		src/corba/EPPSK.h \
 		src/corba/EPP.hh \
 		src/corba/ZoneGeneratorSK.cc \
 		src/corba/ZoneGeneratorDynSK.cc \
-		src/corba/ZoneGeneratorSK.h \
 		src/corba/ZoneGenerator.hh \
 		src/corba/ContactVerificationSK.cc \
 		src/corba/ContactVerificationDynSK.cc \
-		src/corba/ContactVerification.hh
+		src/corba/ContactVerification.hh \
+		src/corba/DomainBrowserSK.cc \
+		src/corba/DomainBrowserDynSK.cc \
+		src/corba/DomainBrowser.hh \
+		src/corba/AdminContactVerificationSK.cc \
+		src/corba/AdminContactVerificationDynSK.cc \
+		src/corba/AdminContactVerificationSK.h \
+		src/corba/AdminContactVerification.hh
 
 
 
@@ -109,7 +107,8 @@ EXTRA_DIST = \
 
 dist_fredconf_DATA = \
 		config/server.conf \
-		config/hpmail.conf
+		config/hpmail.conf \
+		config/optysmail.conf
 
 dist_rcconf_SCRIPTS = \
 		init-scripts/fred-server
@@ -123,6 +122,14 @@ endif
 
 
 noinst_HEADERS = \
+		include/fredlib/contact.h \
+		include/fredlib/domain.h \
+		include/fredlib/fredlib.h \
+		include/fredlib/keyset.h \
+		include/fredlib/nsset.h \
+		include/fredlib/admin_contact_verification.h \
+		include/admin/admin_contact_verification.h \
+		include/fredlib/registrar.h \
 		util/util.h \
 		util/singleton.h \
 		util/time_clock.h \
@@ -163,17 +170,32 @@ noinst_HEADERS = \
 		util/cfg/validate_args.h \
 		util/cfg/handle_sms_args.h \
 		util/cfg/handle_contactverification_args.h \
+		util/optys/handle_optys_mail_args.h \
 		util/types/optional.h \
 		util/types/optional_from_program_options.h \
 		util/types/money.h \
+		util/xmlgen.h \
 		tests/exception-test.h \
 		util/factory.h \
 		util/factory_check.h \
 		util/map_get.h \
+		util/uuid.h \
 		src/corba/common_wrappers.h \
 		src/corba/contact_verification/corba_conversion.h \
 		util/optional_value.h \
-		util/output_indenter.h
+		util/is_equal_optional_nullable.h \
+		util/output_indenter.h \
+		src/corba/util/corba_conversions_datetime.h \
+		src/corba/util/corba_conversions_nullable_types.h \
+		src/corba/util/corba_conversions_string.h \
+		util/is_equal_optional_nullable.h \
+		src/fredlib/contact/verification/enum_testsuite_handle.h \
+		src/fredlib/contact/verification/enum_check_status.h \
+		src/fredlib/contact/verification/enum_test_status.h \
+		src/fredlib/contact/verification/exceptions.h \
+		src/admin/contact/verification/test_impl/test_interface.h \
+		src/admin/contact/verification/exceptions.h
+
 
 
 noinst_LIBRARIES = \
@@ -195,14 +217,17 @@ noinst_LIBRARIES = \
 		src/corba/libmailer.a \
 		src/corba/admin/libadmin_impl.a \
 		src/corba/whois/libwhois_impl.a \
+		src/corba/whois/libwhois2_impl.a \
 		src/corba/epp/libepp_impl.a \
 		src/corba/log/liblog_impl.a \
 		util/hp/libhp.a \
 		src/fredlib/notifier/libnotifier.a \
 		src/corba/libcorbadatatypes.a \
+		src/corba/libcorbanullabletypes.a \
 		src/corba/libcorbafilters.a \
 		src/corba/libcorbaregistry.a \
 		src/corba/libcorbawhois.a \
+		src/corba/libcorbawhois2.a \
 		src/corba/libcorbaadmin.a \
 		src/corba/libcorbalogger.a \
 		src/corba/libcorbatechcheck.a \
@@ -211,7 +236,11 @@ noinst_LIBRARIES = \
 		src/corba/libcorbaadministrativeblocking.a \
 		src/fredlib/public_request/libpublic_request.a \
 		src/fredlib/contact_verification/libcontact_verification.a \
-		src/corba/libcorbacontactverification.a
+		src/corba/libcorbacontactverification.a \
+		src/corba/libcorbadomainbrowser.a \
+		src/corba/libcorbaadmincontactverification.a \
+		src/corba/util/libcorbautil.a \
+		src/admin/contact/verification/libadmin_contact_verification.a
 
 
 noinst_PROGRAMS = \
@@ -231,6 +260,7 @@ sbin_PROGRAMS = \
 		src/corba/fred-logd \
 		src/corba/messages/fred-msgd \
 		src/corba/mojeid/fred-mifd \
+		src/corba/domain_browser/fred-dbifd \
 		src/cli_admin/fred-admin \
 		tools/logd_migration/migrate_log
 
@@ -240,7 +270,11 @@ sbin_PROGRAMS = \
 util_libutil_a_SOURCES = \
 		util/random.cc \
 		util/util.cc \
-		util/output_indenter.cc
+		util/output_indenter.cc \
+		util/printable.h \
+		util/printable.cc \
+		util/xmlgen.cc \
+		util/subprocess.cc
 #
 # util/libutil.a
 
@@ -494,6 +528,15 @@ util_hp_crc32_LDADD = \
 #
 # util/hp/crc32
 
+# src/corba/util/libcorbautil.a
+#
+src_corba_util_libcorbautil_a_SOURCES = \
+		src/corba/util/corba_conversions_datetime.cc \
+		src/corba/util/corba_conversions_nullable_types.cc \
+		src/corba/util/corba_conversions_string.cc
+#
+# src/corba/util/libcorbautil.a
+
 
 # src/old_utils/liboldutils.a
 #
@@ -685,23 +728,27 @@ src_fredlib_libfred_a_SOURCES = \
 		src/fredlib/domain/update_domain.cc \
 		src/fredlib/domain/info_domain_data.h \
 		src/fredlib/domain/info_domain_data.cc \
+		src/fredlib/domain/info_domain_diff.h \
+		src/fredlib/domain/info_domain_diff.cc \
 		src/fredlib/domain/info_domain.h \
 		src/fredlib/domain/info_domain.cc \
-		src/fredlib/domain/info_domain_history.h \
-		src/fredlib/domain/info_domain_history.cc \
-		src/fredlib/domain/info_domain_compare.h \
-		src/fredlib/domain/info_domain_compare.cc \
+		src/fredlib/domain/info_domain_impl.cc \
+		src/fredlib/domain/info_domain_impl.h \
+		src/fredlib/domain/info_domain_output.cc \
+		src/fredlib/domain/info_domain_output.h \
 		src/fredlib/domain/enum_validation_extension.h \
 		src/fredlib/nsset/update_nsset.h \
 		src/fredlib/nsset/update_nsset.cc \
 		src/fredlib/nsset/info_nsset.h \
 		src/fredlib/nsset/info_nsset.cc \
-		src/fredlib/nsset/info_nsset_history.h \
-		src/fredlib/nsset/info_nsset_history.cc \
 		src/fredlib/nsset/info_nsset_data.h \
 		src/fredlib/nsset/info_nsset_data.cc \
-		src/fredlib/nsset/info_nsset_compare.h \
-		src/fredlib/nsset/info_nsset_compare.cc \
+		src/fredlib/nsset/info_nsset_diff.h \
+		src/fredlib/nsset/info_nsset_diff.cc \
+		src/fredlib/nsset/info_nsset_impl.cc \
+		src/fredlib/nsset/info_nsset_impl.h \
+		src/fredlib/nsset/info_nsset_output.cc \
+		src/fredlib/nsset/info_nsset_output.h \
 		src/fredlib/keyset/update_keyset.h \
 		src/fredlib/keyset/keyset_dns_key.h \
 		src/fredlib/keyset/update_keyset.cc \
@@ -709,35 +756,51 @@ src_fredlib_libfred_a_SOURCES = \
 		src/fredlib/keyset/create_keyset.h \
 		src/fredlib/keyset/info_keyset_data.h \
 		src/fredlib/keyset/info_keyset_data.cc \
+		src/fredlib/keyset/info_keyset_diff.h \
+		src/fredlib/keyset/info_keyset_diff.cc \
 		src/fredlib/keyset/info_keyset.h \
 		src/fredlib/keyset/info_keyset.cc \
-		src/fredlib/keyset/info_keyset_history.h \
-		src/fredlib/keyset/info_keyset_history.cc \
-		src/fredlib/keyset/info_keyset_compare.h \
-		src/fredlib/keyset/info_keyset_compare.cc \
+		src/fredlib/keyset/info_keyset_impl.cc \
+		src/fredlib/keyset/info_keyset_impl.h \
+		src/fredlib/keyset/info_keyset_output.cc \
+		src/fredlib/keyset/info_keyset_output.h \
 		src/fredlib/contact/delete_contact.h \
 		src/fredlib/contact/delete_contact.cc \
 		src/fredlib/contact/info_contact_data.h \
 		src/fredlib/contact/info_contact_data.cc \
+		src/fredlib/contact/info_contact_diff.h \
+		src/fredlib/contact/info_contact_diff.cc \
 		src/fredlib/contact/info_contact.h \
 		src/fredlib/contact/info_contact.cc \
-		src/fredlib/contact/info_contact_history.h \
-		src/fredlib/contact/info_contact_history.cc \
-		src/fredlib/contact/info_contact_compare.h \
-		src/fredlib/contact/info_contact_compare.cc \
+		src/fredlib/contact/info_contact_impl.cc \
+		src/fredlib/contact/info_contact_impl.h \
+		src/fredlib/contact/info_contact_output.cc \
+		src/fredlib/contact/info_contact_output.h \
 		src/fredlib/object/object.h \
 		src/fredlib/object/object.cc \
-		src/fredlib/poll/create_poll_message.h \
-		src/fredlib/poll/create_poll_message.cc \
+		src/fredlib/object/object_impl.h \
+		src/fredlib/object/object_impl.cc \
+		src/fredlib/poll/message_types.h \
+		src/fredlib/poll/create_poll_message_impl.h \
+		src/fredlib/poll/create_poll_message_impl.cc \
+		src/fredlib/poll/create_epp_action_poll_message_impl.h \
+		src/fredlib/poll/create_epp_action_poll_message_impl.cc \
 		src/fredlib/poll/create_update_object_poll_message.h \
 		src/fredlib/poll/create_update_object_poll_message.cc \
 		src/fredlib/poll/create_delete_contact_poll_message.h \
 		src/fredlib/poll/create_delete_contact_poll_message.cc \
+		src/fredlib/poll/create_delete_domain_poll_message.h \
+		src/fredlib/poll/create_delete_domain_poll_message.cc \
 		src/fredlib/opexception.h \
 		src/fredlib/contact/merge_contact.h \
 		src/fredlib/contact/merge_contact.cc \
 		src/fredlib/contact/create_contact.cc \
 		src/fredlib/contact/create_contact.h \
+		src/fredlib/contact/update_contact.cc \
+		src/fredlib/contact/update_contact.h \
+		src/admin/contact/verification/contact_states/delete_all.h \
+		src/admin/contact/verification/contact_states/delete_all.cc \
+		src/fredlib/contact/contact_enum.h \
 		src/fredlib/nsset/create_nsset.cc \
 		src/fredlib/nsset/create_nsset.h \
 		src/fredlib/nsset/nsset_dns_host.h \
@@ -755,11 +818,94 @@ src_fredlib_libfred_a_SOURCES = \
 		src/fredlib/domain/domain_name.cc \
 		src/fredlib/zone/zone.h \
 		src/fredlib/zone/zone.cc \
-		src/fredlib/domain/domain_name.h \
-		src/fredlib/domain/domain_name.cc \
+		src/fredlib/contact/verification/create_check.h \
+		src/fredlib/contact/verification/create_check.cc \
+		src/fredlib/contact/verification/update_check.h \
+		src/fredlib/contact/verification/update_check.cc \
+		src/fredlib/contact/verification/info_check.h \
+		src/fredlib/contact/verification/info_check.cc \
+		src/fredlib/contact/verification/list_checks.h \
+		src/fredlib/contact/verification/list_checks.cc \
+		src/fredlib/contact/verification/list_enum_objects.h \
+		src/fredlib/contact/verification/list_enum_objects.cc \
+		src/fredlib/contact/verification/create_test.h \
+		src/fredlib/contact/verification/create_test.cc \
+		src/fredlib/contact/verification/update_test.h \
+		src/fredlib/contact/verification/update_test.cc \
+		src/fredlib/domain/check_domain.h \
+		src/fredlib/domain/check_domain.cc \
+		src/fredlib/contact/check_contact.cc \
+		src/fredlib/contact/check_contact.h \
+		src/fredlib/nsset/check_nsset.cc \
+		src/fredlib/nsset/check_nsset.h \
+		src/fredlib/nsset/delete_nsset.cc \
+		src/fredlib/nsset/delete_nsset.h \
+		src/fredlib/keyset/check_keyset.cc \
+		src/fredlib/keyset/check_keyset.h \
+		src/fredlib/object/check_handle.cc \
+		src/fredlib/object/check_handle.h\
+		src/fredlib/keyset/delete_keyset.cc \
+		src/fredlib/keyset/delete_keyset.h \
+		src/fredlib/registrar/registrar_impl.h \
+		src/fredlib/registrar/registrar_impl.cc \
+		src/fredlib/registrar/info_registrar.cc \
+		src/fredlib/registrar/info_registrar.h \
+		src/fredlib/registrar/info_registrar_data.cc \
+		src/fredlib/registrar/info_registrar_data.h \
+		src/fredlib/registrar/info_registrar_diff.cc \
+		src/fredlib/registrar/info_registrar_diff.h \
+		src/fredlib/registrar/registrar_zone_access.h \
+		src/fredlib/registrar/create_registrar.cc \
+		src/fredlib/registrar/create_registrar.h \
+		src/fredlib/registrar/info_registrar_impl.cc \
+		src/fredlib/registrar/info_registrar_impl.h \
+		src/fredlib/registrar/info_registrar_output.cc \
+		src/fredlib/registrar/info_registrar_output.h \
 		src/fredlib/registrar/get_registrar_handles.cc \
-		src/fredlib/registrar/get_registrar_handles.h
-
+		src/fredlib/registrar/get_registrar_handles.h \
+		src/fredlib/object/object_id_handle_pair.h \
+		src/fredlib/object/object_id_handle_pair.cc \
+		src/fredlib/object_state/object_state_name.h \
+		src/fredlib/object_state/object_has_state.h \
+		src/fredlib/object_state/object_has_state.cc \
+		src/fredlib/object_state/lock_multiple_object_state_request_lock.cc \
+		src/fredlib/object_state/lock_multiple_object_state_request_lock.h \
+		src/fredlib/object_state/lock_object_state_request_lock.h \
+		src/fredlib/object_state/lock_object_state_request_lock.cc \
+		src/fredlib/object_state/get_object_state_descriptions.h \
+		src/fredlib/object_state/get_object_state_descriptions.cc \
+		src/fredlib/object_state/get_object_states.h \
+		src/fredlib/object_state/get_object_states.cc \
+		src/fredlib/object_state/get_object_state_id_map.h \
+		src/fredlib/object_state/get_object_state_id_map.cc \
+		src/fredlib/object_state/get_blocking_status_desc_list.cc \
+		src/fredlib/object_state/get_blocking_status_desc_list.h \
+		src/fredlib/object_state/perform_object_state_request.h \
+		src/fredlib/object_state/perform_object_state_request.cc \
+		src/fredlib/object_state/cancel_object_state_request.cc \
+		src/fredlib/object_state/cancel_object_state_request.h \
+		src/fredlib/object_state/cancel_object_state_request_id.cc \
+		src/fredlib/object_state/cancel_object_state_request_id.h \
+		src/fredlib/object_state/create_object_state_request.cc \
+		src/fredlib/object_state/create_object_state_request.h \
+		src/fredlib/object_state/create_object_state_request_id.cc \
+		src/fredlib/object_state/create_object_state_request_id.h \
+		src/fredlib/object_state/create_admin_object_block_request.cc \
+		src/fredlib/object_state/create_admin_object_block_request.h \
+		src/fredlib/object_state/create_admin_object_block_request_id.cc \
+		src/fredlib/object_state/create_admin_object_block_request_id.h \
+		src/fredlib/object_state/create_admin_object_state_restore_request.cc \
+		src/fredlib/object_state/create_admin_object_state_restore_request.h \
+		src/fredlib/object_state/create_admin_object_state_restore_request_id.cc \
+		src/fredlib/object_state/create_admin_object_state_restore_request_id.h \
+		src/fredlib/object_state/clear_admin_object_state_request_id.cc \
+		src/fredlib/object_state/clear_admin_object_state_request_id.h \
+		src/fredlib/object_state/clear_object_state_request.cc \
+		src/fredlib/object_state/clear_object_state_request.h \
+		src/fredlib/object_state/clear_object_state_request_id.cc \
+		src/fredlib/object_state/clear_object_state_request_id.h \
+		src/fredlib/object/object_id_handle_pair.h \
+		src/fredlib/object/object_id_handle_pair.cc
 #
 # src/fredlib/libfred.a
 
@@ -879,6 +1025,49 @@ src_fredlib_contact_verification_libcontact_verification_a_SOURCES = \
 #
 # src/fredlib/contact_verification/libcontact_verification.a
 
+# src/admin/contact/verification/libadmin_contact_verification.a
+#
+src_admin_contact_verification_libadmin_contact_verification_a_SOURCES = \
+		src/admin/contact/verification/create_test_impl_prototypes.h \
+		src/admin/contact/verification/create_test_impl_prototypes.cc \
+		src/admin/contact/verification/delete_domains_of_invalid_contact.h \
+		src/admin/contact/verification/delete_domains_of_invalid_contact.cc \
+		src/admin/contact/verification/enqueue_check.h \
+		src/admin/contact/verification/enqueue_check.cc \
+		src/admin/contact/verification/exceptions.h \
+		src/admin/contact/verification/fill_check_queue.h \
+		src/admin/contact/verification/fill_check_queue.cc \
+		src/admin/contact/verification/list_active_checks.h \
+		src/admin/contact/verification/list_active_checks.cc \
+		src/admin/contact/verification/related_records.h \
+		src/admin/contact/verification/related_records.cc \
+		src/admin/contact/verification/resolve_check.h \
+		src/admin/contact/verification/resolve_check.cc \
+		src/admin/contact/verification/run_all_enqueued_checks.h \
+		src/admin/contact/verification/run_all_enqueued_checks.cc \
+		src/admin/contact/verification/update_tests.h \
+		src/admin/contact/verification/update_tests.cc \
+		src/admin/contact/verification/contact_states/enum.h \
+		src/admin/contact/verification/contact_states/delete_all.h \
+		src/admin/contact/verification/contact_states/delete_all.cc \
+		src/admin/contact/verification/test_impl/test_contactability.h \
+		src/admin/contact/verification/test_impl/test_contactability.cc \
+		src/admin/contact/verification/test_impl/test_cz_address_exists.h \
+		src/admin/contact/verification/test_impl/test_cz_address_exists.cc \
+		src/admin/contact/verification/test_impl/test_email_exists.h \
+		src/admin/contact/verification/test_impl/test_email_exists.cc \
+		src/admin/contact/verification/test_impl/test_email_syntax.h \
+		src/admin/contact/verification/test_impl/test_email_syntax.cc \
+		src/admin/contact/verification/test_impl/test_interface.h \
+		src/admin/contact/verification/test_impl/test_interface.cc \
+		src/admin/contact/verification/test_impl/test_name_syntax.h \
+		src/admin/contact/verification/test_impl/test_name_syntax.cc \
+		src/admin/contact/verification/test_impl/test_phone_syntax.h \
+		src/admin/contact/verification/test_impl/test_phone_syntax.cc \
+		src/admin/contact/verification/test_impl/test_send_letter.h \
+		src/admin/contact/verification/test_impl/test_send_letter.cc
+#
+# src/admin/contact/verification/libadmin_contact_verification.a
 
 BUILT_SOURCES = \
 		src/corba/MessagesSK.cc \
@@ -887,15 +1076,20 @@ BUILT_SOURCES = \
 		src/corba/FileManagerSK.cc \
 		src/corba/MailerSK.cc \
 		src/corba/ZoneSK.cc \
+		src/corba/DateTimeSK.cc \
+		src/corba/NullableTypesSK.cc \
 		src/corba/_dataTypesSK.cc \
 		src/corba/FiltersSK.cc src/corba/RegistrySK.cc \
 		src/corba/WhoisSK.cc \
+		src/corba/Whois2SK.cc \
 		src/corba/AdminSK.cc \
 		src/corba/LoggerSK.cc \
 		src/corba/TechCheckSK.cc \
 		src/corba/EPPSK.cc \
 		src/corba/ZoneGeneratorSK.cc \
-		src/corba/ContactVerificationSK.cc
+		src/corba/ContactVerificationSK.cc \
+		src/corba/DomainBrowserSK.cc \
+		src/corba/AdminContactVerificationSK.cc
 
 
 # src/corba/libcorba.a
@@ -951,7 +1145,15 @@ nodist_src_corba_libcorbazone_a_SOURCES = \
 nodist_src_corba_libcorbadatatypes_a_SOURCES = \
 		src/corba/_dataTypesSK.cc \
 		src/corba/_dataTypesDynSK.cc \
-		src/corba/_dataTypes.hh
+		src/corba/_dataTypes.hh \
+		src/corba/DateTimeSK.cc \
+		src/corba/DateTimeDynSK.cc \
+		src/corba/DateTime.hh
+
+nodist_src_corba_libcorbanullabletypes_a_SOURCES = \
+		src/corba/NullableTypesSK.cc \
+		src/corba/NullableTypesDynSK.cc \
+		src/corba/NullableTypes.hh
 
 nodist_src_corba_libcorbafilters_a_SOURCES = \
 		src/corba/FiltersSK.cc \
@@ -967,6 +1169,11 @@ nodist_src_corba_libcorbawhois_a_SOURCES = \
 		src/corba/WhoisSK.cc \
 		src/corba/WhoisDynSK.cc \
 		src/corba/Whois.hh
+		
+nodist_src_corba_libcorbawhois2_a_SOURCES = \
+		src/corba/Whois2SK.cc \
+		src/corba/Whois2DynSK.cc \
+		src/corba/Whois2.hh
 
 nodist_src_corba_libcorbaadmin_a_SOURCES = \
 		src/corba/AdminSK.cc \
@@ -998,10 +1205,21 @@ nodist_src_corba_libcorbacontactverification_a_SOURCES = \
 		src/corba/ContactVerificationDynSK.cc \
 		src/corba/ContactVerification.hh
 
+nodist_src_corba_libcorbaadmincontactverification_a_SOURCES = \
+		src/corba/AdminContactVerificationSK.cc \
+		src/corba/AdminContactVerificationDynSK.cc \
+		src/corba/AdminContactVerificationSK.h \
+		src/corba/AdminContactVerification.hh
+
 nodist_src_corba_libcorbaadministrativeblocking_a_SOURCES = \
 		src/corba/AdministrativeBlockingSK.cc \
 		src/corba/AdministrativeBlockingDynSK.cc \
 		src/corba/AdministrativeBlocking.hh
+
+nodist_src_corba_libcorbadomainbrowser_a_SOURCES = \
+		src/corba/DomainBrowserSK.cc \
+		src/corba/DomainBrowserDynSK.cc \
+		src/corba/DomainBrowser.hh
 
 #
 # nodist corba libs
@@ -1010,52 +1228,68 @@ nodist_src_corba_libcorbaadministrativeblocking_a_SOURCES = \
 # idl build
 #
 src/corba/MessagesSK.cc: $(IDLDIR)/Messages.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Messages.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Messages.idl
 
 src/corba/MojeIDSK.cc: $(IDLDIR)/MojeID.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/MojeID.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/MojeID.idl
 
 src/corba/AdministrativeBlockingSK.cc: $(IDLDIR)/AdministrativeBlocking.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/AdministrativeBlocking.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/AdministrativeBlocking.idl
 
 src/corba/FileManagerSK.cc: $(IDLDIR)/FileManager.idl $(IDLDIR)/_dataTypes.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/FileManager.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/FileManager.idl
 
 src/corba/MailerSK.cc: $(IDLDIR)/Mailer.idl $(IDLDIR)/_dataTypes.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Mailer.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Mailer.idl
 
 src/corba/ZoneSK.cc: $(IDLDIR)/Zone.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Zone.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Zone.idl
+
+src/corba/DateTimeSK.cc: $(IDLDIR)/DateTime.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/DateTime.idl
+
+src/corba/NullableTypesSK.cc: $(IDLDIR)/NullableTypes.idl $(IDLDIR)/DateTime.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/NullableTypes.idl
 
 src/corba/_dataTypesSK.cc: $(IDLDIR)/_dataTypes.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/_dataTypes.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/_dataTypes.idl
 
 src/corba/FiltersSK.cc: $(IDLDIR)/Filters.idl $(IDLDIR)/_dataTypes.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Filters.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Filters.idl
 
 src/corba/RegistrySK.cc: $(IDLDIR)/Registry.idl $(IDLDIR)/Filters.idl $(IDLDIR)/_dataTypes.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Registry.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Registry.idl
 
 src/corba/WhoisSK.cc: $(IDLDIR)/Whois.idl $(IDLDIR)/Registry.idl $(IDLDIR)/_dataTypes.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Whois.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Whois.idl
 
+src/corba/Whois2SK.cc: $(IDLDIR)/Whois2.idl $(IDLDIR)/NullableTypes.idl $(IDLDIR)/DateTime.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Whois2.idl
+		
 src/corba/AdminSK.cc: $(IDLDIR)/Admin.idl $(IDLDIR)/Whois.idl $(IDLDIR)/Filters.idl $(IDLDIR)/Registry.idl $(IDLDIR)/_dataTypes.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Admin.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Admin.idl
 
 src/corba/LoggerSK.cc: $(IDLDIR)/Logger.idl $(IDLDIR)/Admin.idl $(IDLDIR)/_dataTypes.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Logger.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/Logger.idl
 
 src/corba/TechCheckSK.cc: $(IDLDIR)/TechCheck.idl $(IDLDIR)/_dataTypes.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/TechCheck.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/TechCheck.idl
 
 src/corba/EPPSK.cc: $(IDLDIR)/EPP.idl $(IDLDIR)/_dataTypes.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/EPP.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/EPP.idl
 
 src/corba/ZoneGeneratorSK.cc: $(IDLDIR)/ZoneGenerator.idl $(IDLDIR)/_dataTypes.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/ZoneGenerator.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/ZoneGenerator.idl
 
 src/corba/ContactVerificationSK.cc: $(IDLDIR)/ContactVerification.idl
-		omniidl -bcxx -Wba -C$(top_builddir)/src/corba $(IDLDIR)/ContactVerification.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/ContactVerification.idl
+
+src/corba/DomainBrowserSK.cc: $(IDLDIR)/DomainBrowser.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/DomainBrowser.idl
+
+src/corba/AdminContactVerificationSK.cc: $(IDLDIR)/AdminContactVerification.idl $(IDLDIR)/_dataTypes.idl
+		omniidl -bcxx -Wbuse_quotes -Wba -C$(top_builddir)/src/corba $(IDLDIR)/AdminContactVerification.idl
+
 #
 # idl build
 
@@ -1126,6 +1360,17 @@ src_corba_whois_libwhois_impl_a_SOURCES = \
 # src/corba/whois/libwhois_impl.a
 
 
+# src/corba/whois/libwhois2_impl.a
+#
+src_corba_whois_libwhois2_impl_a_SOURCES = \
+		src/corba/whois/whois2_impl.cc \
+		src/corba/whois/whois2_impl.h \
+		src/whois/nameserver_exists.h \
+		src/whois/nameserver_exists.cc
+#
+# src/corba/whois/libwhois2_impl.a
+
+
 # src/corba/epp/libepp_impl.a
 #
 src_corba_epp_libepp_impl_a_SOURCES = \
@@ -1169,6 +1414,7 @@ src_corba_fred_rifd_SOURCES = \
 
 src_corba_fred_rifd_LDADD = \
 		src/corba/epp/libepp_impl.a \
+		src/admin/contact/verification/libadmin_contact_verification.a \
 		src/corba/libcorbaepp.a \
 		src/corba/libcorbatechcheck.a \
 		src/corba/libmailer.a \
@@ -1203,37 +1449,17 @@ src_corba_fred_rifd_LDADD = \
 src_corba_fred_adifd_SOURCES = \
 		src/mojeid/mojeid_validators.cc \
 		src/mojeid/mojeid_validators.h \
+		src/mojeid/mojeid_checkers.cc \
+		src/mojeid/mojeid_checkers.h \
 		src/mojeid/mojeid_contact_transfer_request_impl.cc \
 		src/mojeid/public_request_verification_impl.cc \
+		src/corba/admin_contact_verification/server_i.h \
+		src/corba/admin_contact_verification/server_i.cc \
+		src/fredlib/contact/util.h \
+		src/fredlib/contact/util.cc \
 		src/corba/fred-adifd.cc \
 		src/admin_block/administrativeblocking.cc \
 		src/admin_block/administrativeblocking.h \
-		src/fredlib/object_state/get_blocking_status_desc_list.cc \
-		src/fredlib/object_state/get_blocking_status_desc_list.h \
-		src/fredlib/object_state/cancel_object_state_request.cc \
-		src/fredlib/object_state/cancel_object_state_request.h \
-		src/fredlib/object_state/cancel_object_state_request_id.cc \
-		src/fredlib/object_state/cancel_object_state_request_id.h \
-		src/fredlib/object_state/create_object_state_request.cc \
-		src/fredlib/object_state/create_object_state_request.h \
-		src/fredlib/object_state/create_object_state_request_id.cc \
-		src/fredlib/object_state/create_object_state_request_id.h \
-		src/fredlib/object_state/get_object_state_id_map.cc \
-		src/fredlib/object_state/get_object_state_id_map.h \
-		src/fredlib/object_state/create_admin_object_block_request.cc \
-		src/fredlib/object_state/create_admin_object_block_request.h \
-		src/fredlib/object_state/create_admin_object_block_request_id.cc \
-		src/fredlib/object_state/create_admin_object_block_request_id.h \
-		src/fredlib/object_state/create_admin_object_state_restore_request.cc \
-		src/fredlib/object_state/create_admin_object_state_restore_request.h \
-		src/fredlib/object_state/create_admin_object_state_restore_request_id.cc \
-		src/fredlib/object_state/create_admin_object_state_restore_request_id.h \
-		src/fredlib/object_state/clear_admin_object_state_request_id.cc \
-		src/fredlib/object_state/clear_admin_object_state_request_id.h \
-		src/fredlib/object_state/clear_object_state_request.cc \
-		src/fredlib/object_state/clear_object_state_request.h \
-		src/fredlib/object_state/clear_object_state_request_id.cc \
-		src/fredlib/object_state/clear_object_state_request_id.h \
 		src/fredlib/domain/create_domain_name_blacklist.cc \
 		src/fredlib/domain/create_domain_name_blacklist.h \
 		src/fredlib/domain/create_domain_name_blacklist_id.cc \
@@ -1254,7 +1480,45 @@ src_corba_fred_adifd_SOURCES = \
 		src/corba/mailer_manager.cc \
 		src/corba/admin_block/corba_conversion.h \
 		src/corba/admin_block/server_i.cc \
-		src/corba/admin_block/server_i.h
+		src/corba/admin_block/server_i.h \
+		src/admin/contact/verification/create_test_impl_prototypes.h \
+		src/admin/contact/verification/create_test_impl_prototypes.cc \
+		src/admin/contact/verification/delete_domains_of_invalid_contact.h \
+		src/admin/contact/verification/delete_domains_of_invalid_contact.cc \
+		src/admin/contact/verification/enqueue_check.h \
+		src/admin/contact/verification/enqueue_check.cc \
+		src/admin/contact/verification/exceptions.h \
+		src/admin/contact/verification/fill_check_queue.h \
+		src/admin/contact/verification/fill_check_queue.cc \
+		src/admin/contact/verification/list_active_checks.h \
+		src/admin/contact/verification/list_active_checks.cc \
+		src/admin/contact/verification/related_records.h \
+		src/admin/contact/verification/related_records.cc \
+		src/admin/contact/verification/resolve_check.h \
+		src/admin/contact/verification/resolve_check.cc \
+		src/admin/contact/verification/run_all_enqueued_checks.h \
+		src/admin/contact/verification/run_all_enqueued_checks.cc \
+		src/admin/contact/verification/update_tests.h \
+		src/admin/contact/verification/update_tests.cc \
+		src/admin/contact/verification/contact_states/enum.h \
+		src/admin/contact/verification/contact_states/delete_all.h \
+		src/admin/contact/verification/contact_states/delete_all.cc \
+		src/admin/contact/verification/test_impl/test_contactability.h \
+		src/admin/contact/verification/test_impl/test_contactability.cc \
+		src/admin/contact/verification/test_impl/test_cz_address_exists.h \
+		src/admin/contact/verification/test_impl/test_cz_address_exists.cc \
+		src/admin/contact/verification/test_impl/test_email_exists.h \
+		src/admin/contact/verification/test_impl/test_email_exists.cc \
+		src/admin/contact/verification/test_impl/test_email_syntax.h \
+		src/admin/contact/verification/test_impl/test_email_syntax.cc \
+		src/admin/contact/verification/test_impl/test_interface.h \
+		src/admin/contact/verification/test_impl/test_interface.cc \
+		src/admin/contact/verification/test_impl/test_name_syntax.h \
+		src/admin/contact/verification/test_impl/test_name_syntax.cc \
+		src/admin/contact/verification/test_impl/test_phone_syntax.h \
+		src/admin/contact/verification/test_impl/test_phone_syntax.cc \
+		src/admin/contact/verification/test_impl/test_send_letter.h \
+		src/admin/contact/verification/test_impl/test_send_letter.cc
 
 src_corba_fred_adifd_LDADD = \
 		src/corba/admin/libadmin_impl.a \
@@ -1264,9 +1528,12 @@ src_corba_fred_adifd_LDADD = \
 		src/corba/libcorbazone.a \
 		src/corba/libmailer.a \
 		src/corba/libcorbadatatypes.a \
+		src/corba/libcorbanullabletypes.a \
+		src/corba/util/libcorbautil.a \
 		src/corba/libcorba.a \
 		src/corba/libcorbalogger.a \
 		src/corba/libcorbaepp.a \
+		src/corba/libcorbaadmincontactverification.a \
 		src/corba/libfilemanager.a \
 		src/corba/libcorbaadministrativeblocking.a \
 		src/fredlib/requests/librequests.a \
@@ -1282,6 +1549,7 @@ src_corba_fred_adifd_LDADD = \
 		src/old_utils/liboldutils.a \
 		util/libutil.a \
 		-lmpdec -lm \
+		-lresolv \
 		$(OMNIORB4_LIBS) \
 		$(LIBIDN_LIBS) \
 		$(BOOST_PROGRAM_OPTIONS_LIB) \
@@ -1301,6 +1569,8 @@ src_corba_fred_adifd_LDADD = \
 src_corba_fred_pifd_SOURCES = \
 		src/mojeid/mojeid_validators.cc \
 		src/mojeid/mojeid_validators.h \
+		src/mojeid/mojeid_checkers.cc \
+		src/mojeid/mojeid_checkers.h \
 		src/mojeid/mojeid_contact_transfer_request_impl.cc \
 		src/mojeid/public_request_verification_impl.cc \
 		src/corba/contact_verification/contact_verification_i.cc \
@@ -1308,12 +1578,18 @@ src_corba_fred_pifd_SOURCES = \
 		src/contact_verification/contact_verification_impl.cc \
 		src/contact_verification/contact_verification_impl.h \
 		src/contact_verification/public_request_contact_verification_wrapper.h \
+		src/domain_browser/domain_browser.cc \
+		src/domain_browser/domain_browser.h \
+		src/corba/domain_browser/domain_browser_i.cc \
+		src/corba/domain_browser/domain_browser_i.h \
 		src/corba/fred-pifd.cc
 
 src_corba_fred_pifd_LDADD = \
 		src/corba/whois/libwhois_impl.a \
+		src/corba/whois/libwhois2_impl.a \
 		src/corba/admin/libadmin_impl.a \
 		src/corba/libcorbawhois.a \
+		src/corba/libcorbawhois2.a \
 		src/corba/libcorbaadmin.a \
 		src/corba/libcorbaregistry.a \
 		src/corba/libcorbafilters.a \
@@ -1323,7 +1599,10 @@ src_corba_fred_pifd_LDADD = \
 		src/corba/libcorba.a \
 		src/corba/libcorbaepp.a \
 		src/corba/libfilemanager.a \
+		src/corba/libcorbadomainbrowser.a \
 		src/corba/libcorbalogger.a \
+		src/corba/util/libcorbautil.a \
+		src/corba/libcorbanullabletypes.a \
 		src/fredlib/contact_verification/libcontact_verification.a \
 		src/corba/libcorbacontactverification.a \
 		src/fredlib/requests/librequests.a \
@@ -1436,6 +1715,8 @@ src_corba_messages_fred_msgd_LDADD = \
 src_corba_mojeid_fred_mifd_SOURCES = \
 		src/mojeid/mojeid_validators.cc \
 		src/mojeid/mojeid_validators.h \
+		src/mojeid/mojeid_checkers.cc \
+		src/mojeid/mojeid_checkers.h \
 		src/mojeid/request.h \
 		src/mojeid/mojeid_contact_transfer_request_impl.h \
 		src/mojeid/mojeid_contact_transfer_request_impl.cc \
@@ -1490,6 +1771,40 @@ src_corba_mojeid_fred_mifd_LDADD = \
 		$(BOOST_SYSTEM_LIB)
 #
 # src/corba/mojeid/fred-mifd
+
+#
+# src/corba/domain_browser/fred-dbifd
+src_corba_domain_browser_fred_dbifd_SOURCES = \
+		util/cfg/handle_domainbrowser_args.h \
+		src/domain_browser/domain_browser.cc \
+		src/domain_browser/domain_browser.h \
+		src/corba/nameservice.cc \
+		src/corba/domain_browser/domain_browser_i.cc \
+		src/corba/domain_browser/domain_browser_i.h \
+		src/corba/domain_browser/fred-dbifd.cc
+
+src_corba_domain_browser_fred_dbifd_LDFLAGS = \
+		$(POSTGRESQL_LDFLAGS) \
+		$(BOOST_LDFLAGS) \
+		$(AM_LDFLAGS)
+
+src_corba_domain_browser_fred_dbifd_LDADD = \
+		src/corba/libcorbadomainbrowser.a \
+		src/fredlib/libfred.a \
+		util/libutil.a \
+		util/log/liblog.a \
+		util/db/libdb.a \
+		-lmpdec -lm \
+		$(LIBIDN_LIBS) \
+		$(BOOST_PROGRAM_OPTIONS_LIB) \
+		$(OMNIORB4_LIBS) \
+		$(BOOST_DATE_TIME_LIB) \
+		$(BOOST_REGEX_LIB) \
+		$(BOOST_THREAD_LIB) \
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
+#
+# src/corba/domain_browser/fred-dbifd
 
 
 # src/cli_admin/fred-admin
@@ -1560,12 +1875,26 @@ src_cli_admin_fred_admin_SOURCES = \
 		src/admin/contact/merge_contact_reporting.cc \
 		src/admin/contact/merge_contact_reporting.h \
 		src/cli_admin/domain_name_validation_params.h \
-		src/cli_admin/domain_name_validation_init.h
+		src/cli_admin/domain_name_validation_init.h \
+		src/fredlib/object_state/create_object_state_request.cc \
+		src/fredlib/object_state/create_object_state_request.h \
+		src/fredlib/object_state/create_object_state_request_id.cc \
+		src/fredlib/object_state/create_object_state_request_id.h \
+		src/fredlib/object_state/get_object_state_id_map.cc \
+		src/fredlib/object_state/get_object_state_id_map.h \
+		src/fredlib/object_state/cancel_object_state_request.cc \
+		src/fredlib/object_state/cancel_object_state_request.h \
+		src/fredlib/object_state/cancel_object_state_request_id.cc \
+		src/fredlib/object_state/cancel_object_state_request_id.h \
+		util/optys/upload_client.cc \
+		util/optys/upload_client.h
 
 src_cli_admin_fred_admin_LDFLAGS = \
-		$(POSTGRESQL_LDFLAGS)
+		$(POSTGRESQL_LDFLAGS) \
+		$(XML2_LIBS)	# using xpath in contact verification test for czech address
 
 src_cli_admin_fred_admin_LDADD = \
+		src/admin/contact/verification/libadmin_contact_verification.a \
 		src/fredlib/libfred.a \
 		src/model/libmodel.a \
 		src/fredlib/banking/libbanking.a \
@@ -1590,6 +1919,7 @@ src_cli_admin_fred_admin_LDADD = \
 		$(BOOST_PROGRAM_OPTIONS_LIB) \
 		$(BOOST_DATE_TIME_LIB) \
 		$(BOOST_REGEX_LIB) \
+		$(BOOST_FILESYSTEM_LIB) \
 		$(OMNIORB4_LIBS) \
 		$(XML2_LIBS) \
 		$(LIBIDN_CFLAGS) \
@@ -1597,7 +1927,8 @@ src_cli_admin_fred_admin_LDADD = \
 		$(BOOST_THREAD_LIB) \
 		$(BOOST_SERIALIZATION_LIB) \
 		$(POSTGRESQL_LIB) \
-		$(BOOST_SYSTEM_LIB)
+		$(BOOST_SYSTEM_LIB) \
+		-lresolv
 #
 # src/cli_admin/fred-admin
 
@@ -1644,7 +1975,8 @@ tools_logd_migration_migrate_log_LDADD = \
 SERVER_TESTS = \
 		tests/test-server \
 		tests/test-exception \
-		tests/test-blocking
+		tests/test-blocking \
+		tests/test-fredlib
 
 
 # tests/test_server
@@ -1657,7 +1989,6 @@ tests_test_server_SOURCES = \
 		tests/test-file-manager-client.cc \
 		tests/test-file-manager-client.h \
 		tests/test-db.cc \
-		tests/test-db.h \
 		tests/test-model.cc \
 		tests/test-model.h \
 		tests/test-registrar-group.cc \
@@ -1690,6 +2021,8 @@ tests_test_server_SOURCES = \
 		tests/test-contact-verification.cc \
 		tests/test-locking-trigger.cc \
 		tests/test-mojeid.cc \
+		tests/test-nullable.cc \
+		tests/test-optional.cc \
 		src/corba/epp_corba_client_impl.cc \
 		src/corba/epp_corba_client_impl.h \
 		src/contact_verification/contact_verification_impl.cc \
@@ -1698,6 +2031,8 @@ tests_test_server_SOURCES = \
 		src/fredlib/contact_verification/cancel_contact_verification.h \
 		src/mojeid/mojeid_validators.cc \
 		src/mojeid/mojeid_validators.h \
+		src/mojeid/mojeid_checkers.cc \
+		src/mojeid/mojeid_checkers.h \
 		src/mojeid/request.h \
 		src/mojeid/mojeid_contact_transfer_request_impl.h \
 		src/mojeid/mojeid_contact_transfer_request_impl.cc \
@@ -1709,18 +2044,36 @@ tests_test_server_SOURCES = \
 		src/mojeid/mojeid_notifier.h \
 		tests/checks.h \
 		tests/test-utils.cc \
-		tests/test-update-nsset.cc \
-		tests/test-update-keyset.cc \
-		tests/test-update-domain.cc \
-		tests/test-delete-contact.cc \
-		tests/test-info-domain.cc \
-		tests/test-merge-contact.cc \
-		tests/test-opexception.cc \
-		tests/test-create-contact.cc \
-		tests/test-info-contact.cc \
-		tests/test-delete-domain.cc \
-		tests/test-create-domain.cc \
-		tests/test-domain-name.cc
+		tests/fredlib/contact/verification/setup_utils.h \
+		tests/fredlib/contact/verification/setup_utils.cc \
+		tests/fredlib/contact/verification/test-create_check_integ.cc \
+		tests/fredlib/contact/verification/test-update_check_integ.cc \
+		tests/fredlib/contact/verification/test-create_test_integ.cc \
+		tests/fredlib/contact/verification/test-update_test_integ.cc \
+		tests/fredlib/contact/verification/test-info_check_integ.cc \
+		tests/fredlib/contact/verification/test-list_checks_integ.cc \
+		tests/fredlib/contact/verification/test-list_enum_objects_integ.cc \
+		tests/admin/contact/verification/setup_utils.h \
+		tests/admin/contact/verification/test-run_all_enqueued_checks.cc \
+		tests/admin/contact/verification/test-fill_check_queue.cc \
+		tests/admin/contact/verification/test-resolve_check.cc \
+		tests/admin/contact/verification/test-related_records.cc \
+		tests/admin/contact/verification/test-enqueue_check.cc \
+		tests/admin/contact/verification/test-delete_domains_of_invalid_contact.cc \
+		tests/util/test-is-equal-optional-nullable.cc \
+		src/fredlib/object_state/create_object_state_request.cc \
+		src/fredlib/object_state/create_object_state_request.h \
+		src/fredlib/object_state/create_object_state_request_id.cc \
+		src/fredlib/object_state/create_object_state_request_id.h \
+		src/fredlib/object_state/get_object_state_id_map.cc \
+		src/fredlib/object_state/get_object_state_id_map.h \
+		src/fredlib/object_state/cancel_object_state_request.cc \
+		src/fredlib/object_state/cancel_object_state_request.h \
+		src/fredlib/object_state/cancel_object_state_request_id.cc \
+		src/fredlib/object_state/cancel_object_state_request_id.h \
+		src/domain_browser/domain_browser.cc \
+		src/domain_browser/domain_browser.h \
+		tests/test-domain-browser.cc
 
 tests_test_server_LDFLAGS = \
 		$(POSTGRESQL_LDFLAGS) \
@@ -1735,6 +2088,7 @@ tests_test_server_LDADD = \
 		src/corba/libcorba.a \
 		src/corba/whois/libwhois_impl.a \
 		src/fredlib/public_request/libpublic_request.a \
+		src/admin/contact/verification/libadmin_contact_verification.a \
 		src/fredlib/libfred.a \
 		src/fredlib/messages/libmessages.a \
 		src/model/libmodel.a \
@@ -1795,6 +2149,8 @@ tests_test_blocking_SOURCES = \
 		src/fredlib/contact_verification/cancel_contact_verification.h \
 		src/mojeid/mojeid_validators.cc \
 		src/mojeid/mojeid_validators.h \
+		src/mojeid/mojeid_checkers.cc \
+		src/mojeid/mojeid_checkers.h \
 		src/mojeid/request.h \
 		src/mojeid/mojeid_contact_transfer_request_impl.h \
 		src/mojeid/mojeid_contact_transfer_request_impl.cc \
@@ -1877,6 +2233,65 @@ tests_test_blocking_LDADD = \
 		$(BOOST_SYSTEM_LIB)
 #
 # tests/test_blocking
+
+# tests/test_fredlib
+#
+tests_test_fredlib_SOURCES = \
+		tests/test-fredlib.cc \
+		tests/test-update-nsset.cc \
+		tests/test-update-keyset.cc \
+		tests/test-update-domain.cc \
+		tests/test-delete-contact.cc \
+		tests/test-info-domain.cc \
+		tests/test-merge-contact.cc \
+		tests/test-opexception.cc \
+		tests/test-create-contact.cc \
+		tests/test-info-contact.cc \
+		tests/test-delete-domain.cc \
+		tests/test-delete-nsset.cc \
+		tests/test-create-domain.cc \
+		tests/test-check-domain.cc \
+		tests/test-domain-name.cc \
+		tests/test-check-handle.cc \
+		tests/test-delete-keyset.cc \
+		tests/test-update-contact.cc \
+		tests/test-printable.cc \
+		tests/test-info-keyset.cc \
+		tests/test-info-nsset.cc \
+		tests/test-object-state.cc \
+		tests/test-info-registrar.cc \
+		tests/test-create-registrar.cc \
+		tests/fredlib/poll/test-create_delete_contact_poll_message.cc \
+		tests/fredlib/poll/test-create_delete_domain_poll_message.cc \
+		tests/fredlib/poll/test-create_update_object_poll_message.cc \
+		tests/fredlib/poll/setup_utils.h \
+		tests/fredlib/poll/setup_utils.cc
+
+
+
+tests_test_fredlib_LDFLAGS = \
+		$(POSTGRESQL_LDFLAGS) \
+		$(BOOST_LDFLAGS) \
+		$(AM_LDFLAGS)
+
+tests_test_fredlib_LDADD = \
+		src/fredlib/libfred.a \
+		util/libutil.a \
+		util/log/liblog.a \
+		-lmpdec -lm \
+		$(BOOST_PROGRAM_OPTIONS_LIB) \
+		$(BOOST_DATE_TIME_LIB) \
+		$(BOOST_REGEX_LIB) \
+		$(OMNIORB4_LIBS) \
+		$(LIBIDN_CFLAGS) \
+		$(LIBIDN_LIBS) \
+		$(BOOST_THREAD_LIB) \
+		$(BOOST_SERIALIZATION_LIB) \
+		$(XML2_LIBS) \
+		$(POSTGRESQL_LIB) \
+		$(BOOST_SYSTEM_LIB)
+#
+# tests/test_fredlib
 
 
 # non-corba tests with overloaded global operator new

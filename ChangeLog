@@ -1,3 +1,76 @@
+2014-09-01 Jan Korous, Jan Zima, Jiri Sadek (2.19.1)
+
+  * rdap - fix - return timestamps in UTC
+
+  * domainbrowser - fix - canceling multiple object state requests
+
+  * mojeid/verification - fix sms text
+
+  * adifd - fix resending public request messages (PIN3)
+
+2014-08-01 Jan Korous, Jan Zima, Michal Strnad, Jiri Sadek (2.19.0)
+
+  * domain browser
+     - new backend
+     - manual contact duplicate merge feature
+     - object blocking/unblocking fixes
+
+  * fix object blocking/unblocking compatibility between domainbrowser and public requests
+
+  * contact duplicate merge (procedure)
+     - rules fixes (user/admin blocking, mojeid)
+     - speed-up
+
+  * message forwarding service mapping and configuration
+     - new sender for OPTYS service (CZ.NIC only)
+
+  * whois backend rewrite prototype (now used only for rdap)
+
+  * epp
+     - admin. contact verification (add check when updating contact is now configurable)
+     - fix saving request_id for contact check
+
+2014-06-12 Jan Korous, Jan Zima, Michal Strnad, Jiri Sadek (2.18.0)
+
+  * admin. contact verification implementation
+
+  * fredlib - fixes, operation interface changes, impl. refactoring, new operations added
+
+  * admin. domain block fix - creating poll update messages
+
+  * corba utils - common type (un)wrappers
+
+  * nullable/optional types enhancements
+
+  * doxygen code documentation started!
+
+2014-03-26 Jiri Sadek (2.17.1)
+
+  * fix mojeid identification validator (country, postal code checks removed)
+
+2014-02-19 Michal Strnad, Jan Zima, Jiri Sadek (2.17.0)
+
+  * fix input xml escaping for pdf document generator
+
+  * document generator external command is now called by 'ShellCmd' instead of
+    'system' call to get better error logging
+
+  * adifd - methods for resend messages (only contact verification PIN2/PIN3)
+    associated with public request
+
+  * mojeid - allow contact update before PIN3 (in conditionally identification status)
+           - birthday format check (contact.ssn) in mojeid transfer is now
+             more clever and support several notations; fix saving to db (iso format)
+
+  * contact verification - birthday is excluded from checks
+
+  * mojeid/contact verification - 30 days registration "protection" period for
+    'e-mail' and 'telephone' values is now disabled for identical contact (by id)
+
+2014-05-12 Jan Korous (2.16.3)
+
+  * fix idn fqdn check
+
 2014-02-17 Jaromir Talir (2.16.2)
 
   * fix rpm dependencies

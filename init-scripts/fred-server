@@ -23,6 +23,7 @@ ADIFD_PORT=41005
 LOGD_PORT=41012
 MIFD_PORT=41013
 MSGD_PORT=41014
+DBIFD_PORT=41016
 OPTIONS="-ORBnativeCharCodeSet UTF-8 -ORBendPoint giop:tcp::"
 
 MSG_START="Starting FRED central registry CORBA servers..."
@@ -85,50 +86,58 @@ fred_start() {
 	fi
     fi
     if check_pidfile ${VARRUN_PATH}/fred-rifd.pid; then NUM=$(($NUM+1)); else
-        ${FRED_PATH}/fred-rifd ${OPTIONS}${RIFD_PORT} 2>/dev/null &
+        ${FRED_PATH}/fred-rifd ${OPTIONS}${RIFD_PORT} >/dev/null 2>&1 &
         if store_pid "${FRED_PATH}/fred-rifd" ${VARRUN_PATH}/fred-rifd.pid
 	then
 	    NUM=$(($NUM+1))
         fi
     fi
     if check_pidfile ${VARRUN_PATH}/fred-pifd.pid; then NUM=$(($NUM+1)); else
-        ${FRED_PATH}/fred-pifd ${OPTIONS}${PIFD_PORT} 2>/dev/null &
+        ${FRED_PATH}/fred-pifd ${OPTIONS}${PIFD_PORT} >/dev/null 2>&1 &
         if store_pid "${FRED_PATH}/fred-pifd" ${VARRUN_PATH}/fred-pifd.pid
 	then
 	    NUM=$(($NUM+1))
         fi
     fi
     if check_pidfile ${VARRUN_PATH}/fred-adifd.pid; then NUM=$(($NUM+1)); else
-        ${FRED_PATH}/fred-adifd ${OPTIONS}${ADIFD_PORT} 2>/dev/null &
+        ${FRED_PATH}/fred-adifd ${OPTIONS}${ADIFD_PORT} >/dev/null 2>&1 &
         if store_pid "${FRED_PATH}/fred-adifd" ${VARRUN_PATH}/fred-adifd.pid
 	then
 	    NUM=$(($NUM+1))
         fi
     fi
     if check_pidfile ${VARRUN_PATH}/fred-logd.pid; then NUM=$(($NUM+1)); else
-        ${FRED_PATH}/fred-logd ${OPTIONS}${LOGD_PORT} 2>/dev/null &
+        ${FRED_PATH}/fred-logd ${OPTIONS}${LOGD_PORT} >/dev/null 2>&1 &
         if store_pid "${FRED_PATH}/fred-logd" ${VARRUN_PATH}/fred-logd.pid
 	then
 	    NUM=$(($NUM+1))
         fi
     fi
     if check_pidfile ${VARRUN_PATH}/fred-mifd.pid; then NUM=$(($NUM+1)); else
-        ${FRED_PATH}/fred-mifd ${OPTIONS}${MIFD_PORT} 2>/dev/null &
+        ${FRED_PATH}/fred-mifd ${OPTIONS}${MIFD_PORT} >/dev/null 2>&1 &
         if store_pid "${FRED_PATH}/fred-mifd" ${VARRUN_PATH}/fred-mifd.pid
 	then
 	    NUM=$(($NUM+1))
         fi
     fi
     if check_pidfile ${VARRUN_PATH}/fred-msgd.pid; then NUM=$(($NUM+1)); else
-        ${FRED_PATH}/fred-msgd ${OPTIONS}${MSGD_PORT} 2>/dev/null &
+        ${FRED_PATH}/fred-msgd ${OPTIONS}${MSGD_PORT} >/dev/null 2>&1 &
         if store_pid "${FRED_PATH}/fred-msgd" ${VARRUN_PATH}/fred-msgd.pid
+	then
+	    NUM=$(($NUM+1))
+        fi
+    fi
+    if check_pidfile ${VARRUN_PATH}/fred-dbifd.pid; then NUM=$(($NUM+1)); else
+        ${FRED_PATH}/fred-dbifd ${OPTIONS}${DBIFD_PORT} 2>/dev/null &
+        if store_pid "${FRED_PATH}/fred-dbifd" ${VARRUN_PATH}/fred-dbifd.pid
 	then
 	    NUM=$(($NUM+1))
         fi
     fi
 
 
-    if [ $NUM -eq 7 ]; then
+
+    if [ $NUM -eq 8 ]; then
         log_success_msg "${MSG_START}"
     else
 	log_failure_msg "${MSG_START}"
@@ -153,6 +162,7 @@ fred_status() {
     check_server_status "fred-logd" "${VARRUN_PATH}/fred-logd.pid"
     check_server_status "fred-mifd" "${VARRUN_PATH}/fred-mifd.pid"
     check_server_status "fred-msgd" "${VARRUN_PATH}/fred-msgd.pid"
+    check_server_status "fred-dbifd" "${VARRUN_PATH}/fred-dbifd.pid"
 }
 
 fred_stop() {
@@ -193,7 +203,12 @@ fred_stop() {
         STOP_SUCCEDED=$(($STOP_SUCCEDED * $?))
 	rm -f ${VARRUN_PATH}/fred-msgd.pid
     fi
-
+    if [ -f ${VARRUN_PATH}/fred-dbifd.pid ]
+    then
+    kill -TERM `cat ${VARRUN_PATH}/fred-dbifd.pid` 2>/dev/null
+        STOP_SUCCEDED=$(($STOP_SUCCEDED * $?))
+    rm -f ${VARRUN_PATH}/fred-dbifd.pid
+    fi
 
     /home/jara/fred/trunk//root/bin/pyfredctl stop > /dev/null
     STOP_SUCCEDED=$(($STOP_SUCCEDED * $?))

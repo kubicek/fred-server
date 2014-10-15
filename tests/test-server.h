@@ -38,8 +38,8 @@
 #include <boost/assign/list_of.hpp>
 #include <boost/lexical_cast.hpp>
 
-#include "db_settings.h"
-#include "corba_wrapper.h"
+#include "src/fredlib/db_settings.h"
+#include "util/corba_wrapper.h"
 #include "log/logger.h"
 #include "log/context.h"
 #include "random_data_generator.h"
@@ -57,6 +57,7 @@
 #include "cfg/handle_rifd_args.h"
 #include "cfg/handle_contactverification_args.h"
 #include "cfg/handle_mojeid_args.h"
+#include "cfg/handle_domainbrowser_args.h"
 
 
 #endif // TESTSERVER_H_
